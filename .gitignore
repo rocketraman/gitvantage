@@ -1,0 +1,65 @@
+# Gradle
+.gradle/
+build/
+!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# VS Code
+.vscode/
+
+# Kotlin
+.kotlin/
+
+# Python (HA integration)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets / overrides
+*.local.conf
+local.properties
+.env
+.env.local
+secrets.local.toml
+
+# mise per-machine overrides (commit mise.toml; tweak locally in mise.local.toml)
+mise.local.toml
+.mise.local.toml
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Fly
+.fly/
+
+# Claude
+.claude/settings.local.json
+.claude/worktrees/
+
+# TLS client-auth material — private keys / keystores / CSRs must NEVER be committed.
+# The keystore is delivered to prod as a base64 Fly secret (OPENGB_CLIENTAUTH_KEYSTOREBASE64),
+# not a repo file. The Root CA key (ogb-ca.key) is the trust anchor — keep it offline.
+*.key
+*.p12
+*.pfx
+*.jks
+*.csr
+*.srl

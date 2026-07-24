@@ -1,0 +1,31 @@
+name: CI
+
+# Build and run tests for every branch push and pull request. Tag pushes (v*) don't
+# match the branch filter, so releases are handled by release.yml instead.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nucleus's own setup action: installs the JetBrains Runtime and Gradle. We pin the
+      # JBR to 21 because Gradle 8.14's Kotlin DSL compiler can't run on JDK 25. No packaging
+      # tools or Node needed for a plain build + test.
+      # Pin @main to a released Nucleus tag once you've settled on a version.
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
+        with:
+          java-version: '21'
+          packaging-tools: 'false'
+          setup-node: 'false'
+
+      - name: Build + test
+        run: ./gradlew build --stacktrace --no-daemon

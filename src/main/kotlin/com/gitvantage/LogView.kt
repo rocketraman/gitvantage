@@ -1,0 +1,151 @@
+// SPDX-FileCopyrightText: 2026 Raman Gupta
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package com.gitvantage
+
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/**
+ * Commit-list overlay for an arbitrary revision range (see [AppState.openRangeLog]). Each row
+ * shows the short hash, subject, author · relative date, and any additional message body.
+ * Closes on Escape (the root re-grabs focus after every click, like [DiffView]).
+ */
+@Composable
+fun LogView(state: AppState) {
+    val listState = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    // Re-grab focus whenever the diff overlay (which layers on top for a commit's diff) closes, so
+    // Escape keeps closing the log afterward — not just on first open.
+    LaunchedEffect(state.diffOpen) { if (!state.diffOpen) runCatching { focus.requestFocus() } }
+    val shape = RoundedCornerShape(12.dp)
+    Box(
+        Modifier.fillMaxSize().background(Color(0x55000000)).onTap { }
+            .focusRequester(focus).focusable()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val e = awaitPointerEvent(PointerEventPass.Final)
+                        if (e.type == PointerEventType.Release) runCatching { focus.requestFocus() }
+                    }
+                }
+            }
+            .onPreviewKeyEvent {
+                if (it.key == Key.Escape && it.type == KeyEventType.KeyDown) { state.closeLog(); true } else false
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxWidth(0.66f).fillMaxHeight().padding(24.dp)
+                .clip(shape).background(Color.White, shape).border(1.dp, Tokens.borderDc, shape),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().background(Tokens.panelFb).drawBottomBorder(Tokens.borderEd)
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Txt(state.logTitle, 14.sp, Tokens.text, FontWeight.Bold)
+                Txt("— ${state.logRepoName}", 13.sp, Tokens.muted2)
+                Spacer(Modifier.weight(1f))
+                if (!state.logLoading && state.logCommits.isNotEmpty()) {
+                    val n = state.logCommits.size
+                    Txt("$n ${if (n == 1) "commit" else "commits"}", 12.sp, Tokens.muted2)
+                }
+                Txt("Esc", 11.sp, Tokens.muted2)
+                Box(
+                    Modifier.size(26.dp).clip(RoundedCornerShape(50)).background(Tokens.segTrack).onTap { state.closeLog() },
+                    contentAlignment = Alignment.Center,
+                ) { Txt("×", 14.sp, Tokens.secondary) }
+            }
+            when {
+                state.logLoading -> CenteredLogMessage("Loading log…")
+                state.logCommits.isEmpty() -> CenteredLogMessage("No commits to show.")
+                else -> Box(Modifier.fillMaxWidth().weight(1f)) {
+                    LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                        items(state.logCommits.size) { i -> CommitRow(state, state.logCommits[i]) }
+                    }
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(listState),
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommitRow(state: AppState, c: LogOps.Commit) {
+    val accent = state.accent
+    val webBase = state.logWebBase
+    Column(
+        Modifier.fillMaxWidth().drawBottomBorder(Tokens.rowBorder).padding(horizontal = 18.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Txt(c.shortHash, 12.sp, accent, FontWeight.SemiBold, font = MonoFont)
+            Txt(c.subject, 13.sp, Tokens.text, FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 2)
+            // Per-commit actions: view its diff, and (GitHub remotes) open the commit on the web.
+            LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
+            if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
+        }
+        Txt("${c.author} · ${c.relDate}", 11.5.sp, Tokens.muted2)
+        if (c.body.isNotBlank()) {
+            Txt(c.body, 11.5.sp, Tokens.muted, font = MonoFont, modifier = Modifier.padding(top = 2.dp), maxLines = 8)
+        }
+    }
+}
+
+@Composable
+private fun LogPill(label: String, accent: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
+            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
+            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) { Txt(label, 10.5.sp, accent, FontWeight.SemiBold) }
+}
+
+@Composable
+private fun CenteredLogMessage(text: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Txt(text, 13.sp, Tokens.muted2) }
+}

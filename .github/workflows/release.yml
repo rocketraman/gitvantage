@@ -1,0 +1,85 @@
+name: Release
+
+# On a version tag (v1.2.3), build the native installers on each OS/arch in parallel
+# and attach them to a GitHub Release. workflow_dispatch lets you dry-run the build
+# (without publishing) before cutting a real tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+          - { os: windows-latest,   arch: amd64 }
+          - { os: macos-latest,     arch: arm64 }   # Apple Silicon
+          - { os: macos-15-intel,   arch: amd64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90   # GraalVM native-image builds are slow
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nucleus setup: JBR 21 (Gradle can't run on 25), Linux packaging tools, and the
+      # GraalVM native-image build prerequisites (build.gradle enables graalvm { }). The
+      # GraalVM JDK itself is auto-provisioned by the Nucleus Gradle plugin.
+      # Pin @main to a released Nucleus tag once you've settled on a version.
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
+        with:
+          java-version: '21'
+          packaging-tools: 'true'
+          graalvm: 'true'
+
+      - name: Build release distribution
+        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ runner.os }}-${{ matrix.arch }}
+          # packageReleaseDistributionForCurrentOS writes the RELEASE variant, which lands in
+          # main-release/ (main/ is only produced by the non-release packageDistribution* tasks).
+          # Each target format gets its own subdirectory; naming them explicitly (rather than a
+          # recursive glob) keeps the unpacked main-release/app/ image out — otherwise the raw
+          # launcher executable inside it would be uploaded as a release asset too.
+          path: |
+            build/compose/binaries/main-release/deb/*.deb
+            build/compose/binaries/main-release/rpm/*.rpm
+            build/compose/binaries/main-release/dmg/*.dmg
+            build/compose/binaries/main-release/msi/*.msi
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')   # only publish for real tag pushes
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist   # keeps each job's `release-assets-*` as its own subdirectory
+
+      # Nucleus's publish action: creates the GitHub Release and uploads every installer.
+      # It shells out to `gh` but declares no token input and sets no GH_TOKEN itself, so the
+      # calling workflow has to provide one or every gh call fails with "set the GH_TOKEN
+      # environment variable". The job's `contents: write` permission covers what it needs.
+      - uses: NucleusFramework/Nucleus/.github/actions/publish-release@main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # This job never checks the repo out (it only downloads artifacts), so `gh` has no git
+          # remote to infer the repository from — without GH_REPO it fails with
+          # "not a git repository".
+          GH_REPO: ${{ github.repository }}
+        with:
+          artifacts-path: dist
+          tag: ${{ github.ref_name }}
+          release-type: release

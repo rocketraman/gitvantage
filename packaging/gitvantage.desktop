@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=GitVantage
+Comment=Git-status dashboard for your local repositories
+Icon=gitvantage
+Categories=Development;RevisionControl;
+Terminal=false
+# The Wayland compositor matches a running window to this entry by app_id.
+# The Nucleus/Tao (GTK) backend derives the Wayland app_id from the program
+# name, so it differs by how you launch:
+#   - packaged .deb        -> app_id "GitVantage" (the launcher binary)
+#   - ./gradlew run / JVM  -> app_id "java"
+# StartupWMClass below is what KDE/GNOME matches against; set it to whatever
+# `qdbus org.kde.KWin /KWin ...` or KWin's window-info overlay reports for the
+# running window. Default targets the packaged launcher.
+StartupWMClass=GitVantage
+Exec=env GDK_BACKEND=wayland GitVantage
