@@ -7,16 +7,34 @@ A desktop dashboard that keeps every git repository you care about on one screen
 Most developers no longer have *one* repo.
 They have dozens, and keeping track of the state of all of them — what's dirty, what's unpushed, what's behind its remote, what's been sitting untouched — is a real, growing burden.
 
-- **AI makes it bigger.**
+- **AI tooling lets us work on many things at once.**
   With coding agents you can now have work in flight across many repositories *simultaneously*.
   Branches, uncommitted changes, and pending pushes pile up faster than you can hold in your head.
-- **Multi-repo systems make it bigger.**
+- **Multi-repo microservice systems become hard to coordinate.**
   A single organization often spreads one product across many related-but-separate repositories (services, libraries, infra, submodules).
   Their states are coupled in your mind but scattered on disk.
-- **Working across orgs and open source makes it bigger.**
+- **Working across orgs and open source proliferate more repositories.**
   People contribute across multiple employers, clients, and open-source projects at once — each with its own repos, remotes, and rhythms.
 
 GitVantage exists to make that whole surface visible and actionable at a glance.
+
+## A look at it
+
+Every tracked repo on one screen, sorted by how much it wants your attention — red is broken (detached HEAD, no upstream), yellow is work sitting on your machine (uncommitted or unpushed), blue is informational (behind the remote, or gone quiet), green is clean and in sync.
+
+![The GitVantage dashboard: eight repositories in a table, sorted by attention, each with its branch, status badges and tags](docs/screenshots/overview.png)
+
+Select a repo and everything about it is one pane away — actions, stashes, branches with their tracking status, and how it decides this repo is stale.
+
+![The detail panel for a repository, showing tags, actions, a stash, and the branch list with tracking status](docs/screenshots/detail-panel.png)
+
+Uncommitted work opens into a side-by-side diff with character-level highlighting, so you can see what you were in the middle of.
+
+![A side-by-side diff of a modified TypeScript file, with changed regions highlighted within the lines](docs/screenshots/diff.png)
+
+Prefer cards? The same information, laid out for scanning — with your working notes on the face of each one.
+
+![The same repositories in card view, each card showing its change bar, status, tags and working note](docs/screenshots/cards.png)
 
 ## What GitVantage does
 
