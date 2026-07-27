@@ -4,6 +4,8 @@ import java.io.File
 // script, so fully-qualified java.net.* / java.util.* references don't resolve here.
 import java.net.URLClassLoader
 import java.util.jar.JarFile
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.tree.ClassNode
 import org.objectweb.asm.tree.analysis.Analyzer
@@ -345,6 +347,96 @@ val verifyReleaseBytecode = tasks.register("verifyReleaseBytecode") {
 // Packaging always drags the verifier along, so a release can't be produced without it running.
 listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
     tasks.matching { it.name == name }.configureEach { finalizedBy(verifyReleaseBytecode) }
+}
+
+
+// --- Pathing jar: keep the launcher's classpath short ---------------------------------------
+//
+// jpackage's generated launcher builds its JVM argument block from the `app.classpath` entries in
+// <name>.cfg, expanded to *absolute* paths. With 71 jars under a deep directory that string runs
+// past 10K characters and overruns a fixed buffer in the launcher: the classpath is truncated
+// mid-filename, every argument after it is wiped, and the launcher segfaults in setenv() before
+// the JVM ever starts. Nothing is logged; the app image simply dies.
+//
+// It is purely path-length dependent, which is why an installed package (/opt/GitVantage, a
+// 24-character prefix) ran fine while the same image under build/compose/binaries/... did not.
+// Reproduced on Temurin 21.0.10 *and* 25.0.2, so moving the packaging JDK does not fix it.
+//
+// Rejected alternatives, both tested:
+//   * @argfiles - the launcher hands JLI a fully-assembled argv, so @-file expansion never runs
+//     (JDK_JAVA_OPTIONS is ignored for the same reason). jpackage's own @argfile support applies
+//     to its build-time CLI, not to the generated launcher.
+//   * `app.classpath=$APPDIR/*` - works, but wildcard expansion order is unspecified, and this
+//     image ships four artifacts at two versions each (lifecycle-runtime-compose-desktop 2.9.4
+//     and 2.9.6 among them). Which one wins would become filesystem-dependent.
+//
+// So the entry list moves into a pathing jar's Class-Path manifest: order is preserved exactly,
+// and it stays relocatable because entries resolve relative to the jar's own location. This is
+// the shape jpackage expects anyway - `--main-jar` plus a manifest referencing its siblings.
+fun shortenLauncherClasspath(imageDir: File) {
+    val cfg = File(imageDir, "lib/app/${imageDir.name}.cfg")
+    check(cfg.isFile) { "Launcher config not found at $cfg - did the app image layout change?" }
+    val lines = cfg.readLines()
+    val entries = lines.filter { it.startsWith("app.classpath=") }.map { it.substringAfter('=').trim() }
+    // Idempotent: a freshly generated image is rewritten, an already-rewritten one is left alone.
+    if (entries.size <= 1) return
+
+    // Class-Path holds space-separated *URIs*, so URI-significant characters must be escaped or an
+    // entry silently resolves to the wrong file (or to nothing at all).
+    val classPath = entries.joinToString(" ") {
+        it.substringAfterLast('/').replace("%", "%25").replace(" ", "%20")
+    }
+
+    // Manifest lines are capped at 72 bytes; continuation lines begin with a single space.
+    val folded = StringBuilder()
+    var rest = "Class-Path: " + classPath
+    var first = true
+    while (rest.isNotEmpty()) {
+        val take = minOf(if (first) 72 else 71, rest.length)
+        folded.append(if (first) "" else " ").append(rest.substring(0, take)).append("\r\n")
+        rest = rest.substring(take)
+        first = false
+    }
+
+    val jar = File(imageDir, "lib/app/classpath.jar")
+    ZipOutputStream(jar.outputStream().buffered()).use { zip ->
+        zip.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
+        zip.write(("Manifest-Version: 1.0\r\n" + folded + "\r\n").toByteArray())
+        zip.closeEntry()
+    }
+
+    var injected = false
+    val rewritten = buildList {
+        for (line in lines) {
+            if (line.startsWith("app.classpath=")) {
+                if (!injected) { add("app.classpath=\$APPDIR/classpath.jar"); injected = true }
+                continue
+            }
+            add(line)
+        }
+    }
+    cfg.writeText(rewritten.joinToString("\n", postfix = "\n"))
+
+    // The invariant this whole task exists to hold. Observed failure threshold is ~10K expanded
+    // characters; 8K leaves headroom without being tight enough to trip on a normal image.
+    val appDir = File(imageDir, "lib/app").absolutePath
+    val before = entries.joinToString(":") { it.replace("\$APPDIR", appDir) }.length
+    val after = "$appDir/classpath.jar".length
+    logger.lifecycle(
+        "shortenLauncherClasspath: ${entries.size} entries -> classpath.jar " +
+            "(launcher classpath $before -> $after chars)",
+    )
+    check(after < 8000) {
+        "Launcher classpath is still $after chars - jpackage's launcher will overflow and segfault."
+    }
+}
+
+tasks.matching { it.name == "createReleaseDistributable" }.configureEach {
+    doLast {
+        shortenLauncherClasspath(
+            layout.buildDirectory.dir("compose/binaries/main-release/app/GitVantage").get().asFile,
+        )
+    }
 }
 
 // --- Smoke test of the packaged image ------------------------------------------------------
