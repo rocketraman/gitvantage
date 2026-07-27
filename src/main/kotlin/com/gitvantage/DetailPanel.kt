@@ -867,8 +867,12 @@ private fun StaleThresholdRow(state: AppState, rv: RepoView) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            val never = rv.repo.staleDays == Meta.STALE_NEVER
             Txt("Flags stale after", 12.5.sp, Tokens.text, FontWeight.Bold)
-            Txt("${rv.repo.staleDays} days", 12.5.sp, state.accent, FontWeight.Bold, font = MonoFont)
+            Txt(
+                if (never) "never" else "${rv.repo.staleDays} days",
+                12.5.sp, state.accent, FontWeight.Bold, font = MonoFont,
+            )
             if (override == null) Txt("· default", 11.sp, Tokens.muted2)
         }
         androidx.compose.foundation.layout.FlowRow(
@@ -878,30 +882,38 @@ private fun StaleThresholdRow(state: AppState, rv: RepoView) {
             listOf(7, 14, 30, 60, 90, 180).forEach { d ->
                 PresetPill("${d}d", override == d, state.accent) { state.setStaleThresholdDays(rv.id, d) }
             }
+            // For repos that are meant to sit untouched (archived mirrors, vendored deps), where a
+            // stale flag is noise rather than a signal.
+            PresetPill("Never", override == Meta.STALE_NEVER, state.accent) {
+                state.setStaleThresholdDays(rv.id, Meta.STALE_NEVER)
+            }
             PresetPill("Default", override == null, state.accent) { state.setStaleThresholdDays(rv.id, null) }
         }
-        // How loud staleness should be for this repo. Default is informational (amber) because
-        // stable code legitimately sits untouched; "Important" escalates it to red for repos where
-        // going quiet actually means something is wrong.
-        val important = state.staleImportant(rv.id)
-        Row(
-            Modifier.padding(top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Txt("Treat staleness as", 12.5.sp, Tokens.text, FontWeight.Bold)
-            InfoTip(
-                "Informational shows stale in blue — a heads-up, alongside repos that are simply " +
-                    "behind. Important shows it in yellow, next to uncommitted and unpushed work, " +
-                    "and sorts the repo higher under the Attention ordering.",
-            )
-        }
-        Row(
-            Modifier.padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            PresetPill("Informational", !important, state.accent) { state.setStaleImportant(rv.id, false) }
-            PresetPill("Important", important, state.accent) { state.setStaleImportant(rv.id, true) }
+        // How loud staleness should be for this repo. Default is informational (blue) because
+        // stable code legitimately sits untouched; "Important" escalates it to yellow for repos
+        // where going quiet actually means something is wrong. Hidden when the repo never goes
+        // stale — there'd be nothing for the choice to apply to.
+        if (rv.repo.staleDays != Meta.STALE_NEVER) {
+            val important = state.staleImportant(rv.id)
+            Row(
+                Modifier.padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Txt("Treat staleness as", 12.5.sp, Tokens.text, FontWeight.Bold)
+                InfoTip(
+                    "Informational shows stale in blue — a heads-up, alongside repos that are simply " +
+                        "behind. Important shows it in yellow, next to uncommitted and unpushed work, " +
+                        "and sorts the repo higher under the Attention ordering.",
+                )
+            }
+            Row(
+                Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                PresetPill("Informational", !important, state.accent) { state.setStaleImportant(rv.id, false) }
+                PresetPill("Important", important, state.accent) { state.setStaleImportant(rv.id, true) }
+            }
         }
     }
 }
@@ -967,7 +979,7 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
         }
         // Stale — a one-shot alert when the repo crosses the no-commit threshold. Only shown while
         // it's still pending; once stale, the "stale" badge carries it (no further notification).
-        if (!repo.stale && repo.lastCommitEpoch != null) {
+        if (!repo.stale && repo.staleDays != Meta.STALE_NEVER && repo.lastCommitEpoch != null) {
             val toStale = (repo.lastCommitEpoch + repo.staleDays * 86_400L) * 1000 - now
             if (toStale > 0) {
                 // The projection is formatted by Human-Readable (it marks rounding with "about"),

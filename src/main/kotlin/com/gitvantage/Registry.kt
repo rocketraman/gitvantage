@@ -32,7 +32,9 @@ data class RegistryEntry(
     val path: String,
     val tags: List<String> = emptyList(),
     val note: String = "",
-    val staleThresholdDays: Int? = null, // per-repo "stale after N days"; null = use the global default
+    // Per-repo "stale after N days": null = use the global default, Meta.STALE_NEVER = never flag
+    // this repo as stale, N = after N days.
+    val staleThresholdDays: Int? = null,
     // Escalate staleness from the default informational (amber) signal to an important (red) one,
     // for repos where going quiet really does mean something is wrong.
     val staleImportant: Boolean = false,

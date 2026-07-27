@@ -118,8 +118,10 @@ object RepoScanner {
         val commitEpoch = logParts.getOrNull(2)?.trim()?.toLongOrNull()
         // Repo is "stale" when it hasn't been committed to in a long time. The threshold is the
         // per-repo override (staleThresholdDays) or the global default (Meta.STALE_DAYS).
+        // Meta.STALE_NEVER opts the repo out entirely, however old its last commit is.
         val staleDays = entry.staleThresholdDays ?: Meta.STALE_DAYS.toInt()
-        val isStale = commitEpoch != null && (now / 1000 - commitEpoch) > staleDays.toLong() * 86_400
+        val isStale = staleDays != Meta.STALE_NEVER &&
+            commitEpoch != null && (now / 1000 - commitEpoch) > staleDays.toLong() * 86_400
 
         Repo(
             id = id, name = name, branch = branch, tags = baseTags,

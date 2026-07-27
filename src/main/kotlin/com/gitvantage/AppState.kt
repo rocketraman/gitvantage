@@ -398,7 +398,9 @@ class AppState(private val scope: CoroutineScope) {
      *  the stale flag and "flags as Stale in …" outlook update immediately. Clamped to a sane range. */
     fun setStaleThresholdDays(id: String, days: Int?) {
         val e = entries[id] ?: return
-        entries[id] = e.copy(staleThresholdDays = days?.coerceIn(1, 3650))
+        // Meta.STALE_NEVER passes through the clamp untouched — it's a sentinel, not a duration.
+        val stored = days?.let { if (it == Meta.STALE_NEVER) it else it.coerceIn(1, 3650) }
+        entries[id] = e.copy(staleThresholdDays = stored)
         persist()
         scope.launch { rescanRepos(listOf(id), fetch = false) }
     }

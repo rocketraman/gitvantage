@@ -21,6 +21,15 @@ object Meta {
     /** A repo/branch is "not worked on in a long time" once its last commit is older than this. */
     const val STALE_DAYS = 30L
 
+    /**
+     * Per-repo stale threshold meaning "never flag this repo as stale" — for archived mirrors,
+     * vendored deps and anything else that is *supposed* to sit untouched. Kept as a sentinel in
+     * the same field as the day count so a repo has exactly one source of truth for how it decides
+     * staleness (null = global default, [STALE_NEVER] = never, N = N days) — there is no way to
+     * store "never" and "after 30 days" at the same time.
+     */
+    const val STALE_NEVER = 0
+
     /** A branch counts as "very behind" its mainline past this many commits (for stale). */
     const val VERY_BEHIND = 40
 
