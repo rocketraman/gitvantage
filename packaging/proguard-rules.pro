@@ -24,6 +24,27 @@
 # FileKit's portal implementation declares the D-Bus interfaces it proxies.
 -keep class io.github.vinceglb.filekit.dialogs.platform.xdg.** { *; }
 
+# --- Native filesystem watcher: JNA callbacks and structs ----------------------------------
+# The watcher is a native library that calls *back* into Java. Those callback interfaces and the
+# structs mapped onto native memory are never referenced from Java code the shrinker can see, so
+# it removed 19 classes here — NativeFsWatcherCallbackObserver, the NativeFsWatch*Payload structs,
+# the bridge, and every FsWatchEvent subclass.
+#
+# The failure is entirely silent: isSupported() still returns true, create() succeeds, watch()
+# returns a registration — and then no event ever arrives, because nothing can deliver one. Which
+# is exactly how it reached a release.
+-keep class dev.nucleusframework.fswatcher.** { *; }
+
+# JNA maps Structure subclasses field-by-field via reflection, and implements Callback interfaces
+# with dynamic proxies. Field names and signatures must survive verbatim or the mapping silently
+# reads the wrong memory.
+-keep class com.sun.jna.** { *; }
+-keep class * extends com.sun.jna.Structure { *; }
+-keep class * implements com.sun.jna.Callback { *; }
+-keepclassmembers class * extends com.sun.jna.Structure {
+    <fields>;
+}
+
 # --- SLF4J binding: also ServiceLoader ------------------------------------------------------
 # slf4j-simple is discovered via META-INF/services/org.slf4j.spi.SLF4JServiceProvider and is
 # referenced from nowhere else. Without it the app prints "No SLF4J providers were found" and
