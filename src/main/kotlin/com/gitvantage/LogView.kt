@@ -123,15 +123,82 @@ private fun CommitRow(state: AppState, c: LogOps.Commit) {
     ) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Txt(c.shortHash, 12.sp, accent, FontWeight.SemiBold, font = MonoFont)
+            // Refs first, so the eye lands on "where am I / what's tagged" before the message.
+            // FlowRow because a commit can carry several (HEAD + branch + remote + tags).
+            if (c.refs.isNotEmpty()) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) { c.refs.forEach { RefChip(it, accent) } }
+            }
             Txt(c.subject, 13.sp, Tokens.text, FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 2)
             // Per-commit actions: view its diff, and (GitHub remotes) open the commit on the web.
             LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
             if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
         }
+        // Merge commits are where history actually branches, and a flat list hides that entirely.
+        // Surfacing the parents (and diffing against each) covers what you'd normally go to a
+        // commit-graph view for: "what did this merge bring in, and from where".
+        //
+        // Only merges get this treatment — on an ordinary commit the sole parent is just the next
+        // row down, so showing it would be noise on every line.
+        if (c.isMerge) {
+            Row(
+                Modifier.padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(4.dp)).background(Tokens.tintPurple, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                ) { Txt("⑃ merge of ${c.parents.size}", 10.sp, Tokens.purple, FontWeight.Bold) }
+                c.parents.forEachIndexed { i, parent ->
+                    // Diffing the merge against parent N is what shows the side that came in:
+                    // against parent 1 (the branch you were on) you see everything merged in.
+                    HoverTip(
+                        "What ${c.shortHash} changed relative to parent ${i + 1} (${parent.shortHash}) — " +
+                            "for a merge, that's the work the other side brought in.",
+                    ) {
+                        LogPill("p${i + 1} ${parent.shortHash}", accent) {
+                            state.openRangeDiff(
+                                state.logRepoId, parent.fullHash, c.fullHash,
+                                "Merge ${c.shortHash} vs parent ${i + 1} (${parent.shortHash})",
+                                "${parent.shortHash} → ${c.shortHash}",
+                            )
+                        }
+                    }
+                }
+            }
+        }
         Txt("${c.author} · ${c.relDate}", 11.5.sp, Tokens.muted2)
         if (c.body.isNotBlank()) {
             Txt(c.body, 11.5.sp, Tokens.muted, font = MonoFont, modifier = Modifier.padding(top = 2.dp), maxLines = 8)
         }
+    }
+}
+
+/**
+ * A branch/tag pointing at this commit. Colour carries the kind so the list is scannable without
+ * reading every label: green = where HEAD is, blue = local branch, grey = remote, amber = tag.
+ */
+@Composable
+private fun RefChip(ref: LogOps.Ref, accent: Color) {
+    val shape = RoundedCornerShape(4.dp)
+    val (fg, bg) = when (ref.kind) {
+        LogOps.RefKind.HEAD -> Tokens.cleanText to Tokens.cleanBg
+        LogOps.RefKind.LOCAL_BRANCH -> accent to Tokens.tintBlue
+        LogOps.RefKind.REMOTE_BRANCH -> Tokens.muted to Tokens.segTrack
+        LogOps.RefKind.TAG -> Tokens.amber to Tokens.tintAmber
+    }
+    // The glyph distinguishes tags from branches even in a screenshot or for a colour-blind reader.
+    val glyph = if (ref.kind == LogOps.RefKind.TAG) "⌂ " else "⎇ "
+    Box(
+        Modifier.clip(shape).background(bg, shape).padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        Txt(
+            if (ref.kind == LogOps.RefKind.HEAD) ref.label else "$glyph${ref.label}",
+            10.sp, fg, FontWeight.Bold, font = MonoFont, maxLines = 1,
+        )
     }
 }
 
