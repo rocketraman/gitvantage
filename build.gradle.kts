@@ -42,13 +42,22 @@ repositories {
  * untagged checkout still builds, as a plain 0.0.0 — deliberately numeric rather than something
  * like "0.0.0-dev", because .msi/.rpm versions have to stay numeric to be packageable at all.
  */
+// Only ever accept something the packagers will actually take: digits and dots. Anything else —
+// a stray non-release tag like "foo", a describe string, a branch name — is ignored rather than
+// failing the build at configuration time with "Illegal version for 'Deb'".
+fun releaseVersionOrNull(raw: String?): String? =
+    raw?.trim()?.removePrefix("v")?.takeIf { it.matches(Regex("""\d+(\.\d+)*""")) }
+
 val appVersion: String =
-    (findProperty("appVersion") as String?)?.takeIf { it.isNotBlank() }
-        ?: System.getenv("GITHUB_REF_NAME")?.takeIf { it.startsWith("v") }?.removePrefix("v")
+    releaseVersionOrNull(findProperty("appVersion") as String?)
+        ?: releaseVersionOrNull(System.getenv("GITHUB_REF_NAME"))
         ?: runCatching {
-            providers.exec { commandLine("git", "describe", "--tags", "--abbrev=0") }
-                .standardOutput.asText.get().trim().removePrefix("v")
-        }.getOrNull()?.takeIf { it.isNotBlank() }
+            providers.exec {
+                // --match keeps non-release tags out of the answer; --abbrev=0 keeps it a plain
+                // x.y.z rather than a v1.2.3-4-gabc123 describe string.
+                commandLine("git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
+            }.standardOutput.asText.get()
+        }.getOrNull().let { releaseVersionOrNull(it) }
         ?: "0.0.0"
 
 version = appVersion
@@ -336,4 +345,39 @@ val verifyReleaseBytecode = tasks.register("verifyReleaseBytecode") {
 // Packaging always drags the verifier along, so a release can't be produced without it running.
 listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
     tasks.matching { it.name == name }.configureEach { finalizedBy(verifyReleaseBytecode) }
+}
+
+// --- Smoke test of the packaged image ------------------------------------------------------
+// Compiled against the normal dependencies, but executed with the *packaged* jars on its
+// classpath, so it runs the ProGuard-minified code that actually ships. See
+// src/smokeTest/kotlin — and verifyReleaseBytecode above for the static half of the gate.
+sourceSets.create("smokeTest")
+
+// Compile against the full runtime classpath, not just the declared dependencies: the smoke test
+// pokes at integrations that arrive transitively (dbus-java comes in via filekit), and those are
+// runtime-only for us, so they're absent from a normal compile classpath.
+sourceSets.named("smokeTest") {
+    compileClasspath += configurations.runtimeClasspath.get()
+}
+
+val smokeTestReleaseImage = tasks.register<JavaExec>("smokeTestReleaseImage") {
+    group = "verification"
+    description = "Run the packaged release image's subsystems (fs-watcher, portal, notifications)."
+    dependsOn("createReleaseDistributable", "smokeTestClasses")
+    mustRunAfter(verifyReleaseBytecode)
+    outputs.upToDateWhen { false }
+
+    mainClass.set("com.gitvantage.smoke.SmokeTestKt")
+    // Deliberately NOT the smokeTest runtime classpath: only the compiled checks plus the jars
+    // from inside the release image. Adding the development dependencies would resolve classes
+    // ProGuard removed and the test would pass against code that isn't what ships.
+    val appJars = layout.buildDirectory.dir("compose/binaries/main-release/app/GitVantage/lib/app")
+    classpath = files(
+        sourceSets["smokeTest"].output,
+        provider { appJars.get().asFile.listFiles()?.filter { it.extension == "jar" } ?: emptyList<File>() },
+    )
+}
+
+listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
+    tasks.matching { it.name == name }.configureEach { finalizedBy(smokeTestReleaseImage) }
 }

@@ -37,11 +37,16 @@ jobs:
           packaging-tools: 'true'
           graalvm: 'true'
 
-      # packageRelease* is finalizedBy verifyReleaseBytecode, so the packaged image is checked for
-      # ProGuard-corrupted bytecode before it can be uploaded. That gate is the only thing standing
-      # between a miscompiled dependency and a release: neither `build` nor `run` uses ProGuard, so
-      # a VerifyError of that kind is invisible until a user launches an installer.
-      - name: Build release distribution (incl. bytecode verification)
+      # packageRelease* is finalizedBy two gates, so no extra step is needed here:
+      #   verifyReleaseBytecode  — static: unverifiable bytecode, dangling ServiceLoader
+      #                            registrations, JDK modules missing from the jlink'd runtime.
+      #   smokeTestReleaseImage  — functional: actually runs the packaged jars' fs-watcher, XDG
+      #                            portal and notifications.
+      # Both exist because neither `build` nor `run` uses ProGuard, so this whole class of defect
+      # is invisible until a user launches an installer. Several already shipped that way.
+      # D-Bus-dependent checks skip themselves when a runner has no session bus; the fs-watcher
+      # check always runs.
+      - name: Build release distribution (incl. verification + smoke test)
         run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
 
       - name: Upload build artifacts
