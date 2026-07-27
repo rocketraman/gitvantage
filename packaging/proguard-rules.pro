@@ -6,6 +6,16 @@
 #
 # verifyReleaseBytecode (see build.gradle.kts) checks both of those failure modes on every
 # release build: dangling META-INF/services registrations, and bytecode that won't verify.
+#
+# Every rule below is one the release gates cannot prove unnecessary, so each stays until it can
+# be retired against evidence rather than a changelog. The filesystem-watcher and JNA rules that
+# used to live here were removed on the Nucleus 2.1.9 upgrade ("obfuscation safety with JNI
+# bridges"): all 49 dev.nucleusframework.fswatcher classes — including the FsWatchEvent subclasses
+# that the shrinker previously deleted — now survive without them, and smokeTestReleaseImage
+# exercises the watcher for real (it fails if no event is delivered).
+#
+# Nucleus ships exactly one consumer rule of its own, for Tao's MainDispatcherFactory
+# (META-INF/proguard/ inside nucleus.decorated-window-tao). It covers none of the below.
 
 # --- D-Bus: ServiceLoader, dynamic proxies, and reflective signal construction -------------
 # The transport is found only through META-INF/services, so nothing references
@@ -22,28 +32,13 @@
 -keep class org.freedesktop.dbus.** { *; }
 
 # FileKit's portal implementation declares the D-Bus interfaces it proxies.
--keep class io.github.vinceglb.filekit.dialogs.platform.xdg.** { *; }
-
-# --- Native filesystem watcher: JNA callbacks and structs ----------------------------------
-# The watcher is a native library that calls *back* into Java. Those callback interfaces and the
-# structs mapped onto native memory are never referenced from Java code the shrinker can see, so
-# it removed 19 classes here — NativeFsWatcherCallbackObserver, the NativeFsWatch*Payload structs,
-# the bridge, and every FsWatchEvent subclass.
 #
-# The failure is entirely silent: isSupported() still returns true, create() succeeds, watch()
-# returns a registration — and then no event ever arrives, because nothing can deliver one. Which
-# is exactly how it reached a release.
--keep class dev.nucleusframework.fswatcher.** { *; }
-
-# JNA maps Structure subclasses field-by-field via reflection, and implements Callback interfaces
-# with dynamic proxies. Field names and signatures must survive verbatim or the mapping silently
-# reads the wrong memory.
--keep class com.sun.jna.** { *; }
--keep class * extends com.sun.jna.Structure { *; }
--keep class * implements com.sun.jna.Callback { *; }
--keepclassmembers class * extends com.sun.jna.Structure {
-    <fields>;
-}
+# Keep this one even though the smoke test's portal check passes without it: that check opens its
+# own D-Bus connection, so it verifies dbus-java, not FileKit. If these classes go, FileKit simply
+# falls back to the Swing chooser — no exception, no dangling service file, nothing any gate can
+# see. That silent fallback is the exact bug that shipped, so this rule stays until the chooser
+# itself can be driven end to end.
+-keep class io.github.vinceglb.filekit.dialogs.platform.xdg.** { *; }
 
 # --- SLF4J binding: also ServiceLoader ------------------------------------------------------
 # slf4j-simple is discovered via META-INF/services/org.slf4j.spi.SLF4JServiceProvider and is
