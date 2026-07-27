@@ -37,7 +37,11 @@ jobs:
           packaging-tools: 'true'
           graalvm: 'true'
 
-      - name: Build release distribution
+      # packageRelease* is finalizedBy verifyReleaseBytecode, so the packaged image is checked for
+      # ProGuard-corrupted bytecode before it can be uploaded. That gate is the only thing standing
+      # between a miscompiled dependency and a release: neither `build` nor `run` uses ProGuard, so
+      # a VerifyError of that kind is invisible until a user launches an installer.
+      - name: Build release distribution (incl. bytecode verification)
         run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
 
       - name: Upload build artifacts
