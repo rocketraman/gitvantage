@@ -121,10 +121,12 @@ fun Toolbar(state: AppState) {
                 "commit" to "Most recently committed first; repos with no commits last.",
                 // Tiers here mirror the status-dot colours in deriveView() — keep the two in step.
                 "attention" to "Most in need of attention first, in status-dot order: " +
-                    "red (something's wrong — detached HEAD, no upstream), " +
-                    "yellow (work sitting here — uncommitted changes or unpushed commits — or stale " +
-                    "on a repo you marked stale-important), " +
-                    "blue (nothing to do locally — behind the upstream, or simply gone quiet/stale), " +
+                    "red (something's wrong — detached HEAD, no upstream — or an issue awaiting you " +
+                    "on a repo you marked issues-important), " +
+                    "yellow (work sitting here — uncommitted changes or unpushed commits — stale " +
+                    "on a repo you marked stale-important, or a GitHub issue/PR awaiting your reply), " +
+                    "blue (nothing to do locally — behind the upstream, gone quiet/stale, or just " +
+                    "open issues nobody's waiting on you for), " +
                     "green (clean and in sync).",
             ),
         )
@@ -232,7 +234,9 @@ fun StatusBar(state: AppState) {
         Triple("unpushed", "Unpushed", "Repos with local commits that haven't been pushed to their upstream yet."),
         Triple("behind", "Behind", "Repos whose branch is behind its upstream — there are commits to pull in."),
         Triple("stale", "Stale", "Repos with no new commit for longer than the stale threshold (30 days by default, overridable per repo). A heads-up, not a problem — stable code often sits untouched."),
-        Triple("issues", "Issues", "Repos in a state that needs attention: detached HEAD, no upstream, or not a git repo."),
+        Triple("problems", "Problems", "Repos in a state that needs fixing: detached HEAD, no upstream, or not a git repo."),
+        Triple("ghopen", "Open Issues", "Repos with open issues or pull requests on GitHub. Informational — every healthy project has some."),
+        Triple("ghawaiting", "Awaiting You", "Repos with an open issue or PR waiting on your response: your review is requested, you're assigned, the last comment mentions you, or someone replied on a thread you opened."),
         Triple("stashes", "Stashes", "Repos holding at least one stash."),
         Triple("reminders", "Reminders", "Repos with a reminder set."),
         Triple("notes", "Notes", "Repos with a non-empty working note."),

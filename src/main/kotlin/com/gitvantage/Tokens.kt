@@ -134,7 +134,12 @@ val statusPalette: Map<String, NsPalette> = mapOf(
     // repos marked stale-important render amber instead. Slate blue keeps it distinct from the
     // accent blue used by Unpushed.
     "stale" to NsPalette(hex("#3a6ea5"), hex("#e8eff7"), hex("#bcd3e8")),
-    "issues" to NsPalette(hex("#813d9c"), hex("#f3e9f6"), hex("#ddc9ef")),
+    "problems" to NsPalette(hex("#813d9c"), hex("#f3e9f6"), hex("#ddc9ef")),
+    // GitHub issue tracker. Open issues are informational, so a blue — but a teal-leaning one, to
+    // stay distinguishable from Unpushed's accent blue and Stale's slate blue at chip size.
+    "ghopen" to NsPalette(hex("#1a6f8b"), hex("#e4f1f6"), hex("#b3d8e5")),
+    // Awaiting you is a call to action, so it sits in the amber family with Dirty and Aging.
+    "ghawaiting" to NsPalette(hex("#a06f08"), hex("#fbf1d9"), hex("#ecd58a")),
     "stashes" to NsPalette(hex("#7a4f01"), hex("#f6eede"), hex("#e6d3a8")),
     "reminders" to NsPalette(hex("#0e7490"), hex("#e0f2f5"), hex("#a8dbe4")),
     "notes" to NsPalette(hex("#556080"), hex("#eef0f5"), hex("#cdd3e0")),

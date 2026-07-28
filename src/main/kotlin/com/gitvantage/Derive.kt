@@ -32,6 +32,49 @@ fun tagStyle(t: String): TagChip {
 data class Badge(val txt: String, val color: Color, val bg: Color)
 data class Segment(val fraction: Float, val color: Color)
 
+/**
+ * How loudly a repo's open GitHub issues/PRs should signal, after the per-repo escalation
+ * toggle. Deliberately named for the *tier* rather than the color, because the same tier is
+ * consumed by three places that must stay in step: the accent cascade and badge in
+ * [deriveView], and `AppState.attentionRank`.
+ */
+enum class IssueLevel { NONE, INFO, IMPORTANT, CRITICAL }
+
+/**
+ * A repo's open-issue picture, already filtered by the "only mine" setting and already
+ * resolved against the per-repo tracking/escalation toggles. Assembled by `AppState` (which
+ * owns both the fetched [GitHub.RepoState] and the registry flags) and handed to [deriveView],
+ * rather than living on [Repo] — [Repo] is rebuilt from scratch by [RepoScanner] on every
+ * filesystem event, which would throw away network data several times a minute.
+ */
+data class GhSummary(
+    val openIssues: Int,
+    val openPrs: Int,
+    /** Of the counted items, those awaiting a response from you. */
+    val awaiting: Int,
+    /** The counted items, newest-updated first — the detail panel's list. */
+    val items: List<GitHub.Item>,
+    /** True when more were open than one fetch inspects, so [awaiting] is a floor, not a count. */
+    val truncated: Boolean = false,
+    /**
+     * True when [openIssues]/[openPrs] are themselves floors rather than exact. Only happens
+     * under "only mine": that count can't come from GitHub's `totalCount` (which can't be
+     * filtered server-side), so it's the size of the fetched-then-filtered list — and the fetch
+     * is capped. Without "only mine" the counts are GitHub's own totals and always exact.
+     */
+    val countIsFloor: Boolean = false,
+    val important: Boolean = false,
+    val error: String? = null,
+) {
+    val open get() = openIssues + openPrs
+
+    val level: IssueLevel get() = when {
+        awaiting > 0 -> if (important) IssueLevel.CRITICAL else IssueLevel.IMPORTANT
+        open > 0 -> if (important) IssueLevel.IMPORTANT else IssueLevel.INFO
+        else -> IssueLevel.NONE
+    }
+}
+
 /** Emphasis for "needs attention" rows: subtle → thin bar, medium → bar, loud → tinted row. */
 enum class Emphasis { SUBTLE, MEDIUM, LOUD }
 enum class ViewMode { TABLE, CARDS }
@@ -57,15 +100,26 @@ data class RepoView(
     val aging: Boolean,
     val snoozed: Boolean,
     val primary: Primary?,   // contextual Commit / Push
+    val gh: GhSummary? = null,        // open GitHub issues/PRs, null when not tracked
+    val issueLevel: IssueLevel = IssueLevel.NONE,   // gh's level, forced to NONE while snoozed
 ) {
     val id get() = repo.id
     val changed get() = repo.staged + repo.unstaged + repo.untracked
+    /** Open issues/PRs awaiting a response from you (0 while snoozed). */
+    val awaitingYou get() = if (issueLevel == IssueLevel.NONE) 0 else (gh?.awaiting ?: 0)
+
+    /**
+     * Open issues/PRs for the status filter and its count — 0 while snoozed, mirroring how
+     * [isStale] and [aging] drop a snoozed repo out of their filters. Use [gh] directly (not
+     * this) wherever the real number should still be shown, e.g. the detail panel.
+     */
+    val openIssues get() = if (snoozed) 0 else (gh?.open ?: 0)
 }
 
 /** Contextual primary action pill. */
 data class Primary(val label: String, val bg: Color, val color: Color, val border: Color)
 
-fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
+fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = null): RepoView {
     val C = Tokens
     val staged = repo.staged; val unstaged = repo.unstaged; val untracked = repo.untracked; val stash = repo.stash
     val changed = staged + unstaged + untracked
@@ -76,6 +130,9 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
         (System.currentTimeMillis() - repo.dirtySince) >= Meta.AGING_MS && !snoozed
     // Stale, on a repo the user marked "important" — escalates the signal from amber to red.
     val staleImportant = repo.stale && repo.staleImportant
+    // Open issues/PRs contribute to the row's color, but a snooze silences them like every other
+    // signal — the counts stay visible in the detail panel, they just stop shouting from the list.
+    val issueLevel = if (snoozed) IssueLevel.NONE else (gh?.level ?: IssueLevel.NONE)
 
     val badges = buildList {
         if (staged > 0) add(Badge("$staged staged", C.green, C.tintGreen))
@@ -92,6 +149,42 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
             else add(Badge("stale", accent, C.tintBlue))
         }
         if (aging) add(Badge("aging ${repo.dirtyFor ?: ""}".trim(), C.amber, C.tintAmber))
+        // Open issues/PRs. Two badges at most: the count (always, when tracked) and — when some
+        // are waiting on you — a separate louder one, because "12 open" and "1 of them needs you"
+        // are different facts and collapsing them into one number hides the actionable half.
+        if (gh != null && gh.open > 0) {
+            // Each badge carries its own tier, escalated once on "important" repos: the count is
+            // blue → amber, and "awaiting you" is amber → red. The count badge deliberately does
+            // NOT turn amber just because something is awaiting — that's the other badge's job,
+            // and doubling the color would say the same thing twice.
+            //
+            // A snooze drops both back to the quiet end. Without this the row's dot went green
+            // (issueLevel is NONE while snoozed) but a red "awaiting you" chip stayed on it —
+            // the loudest thing on a row that is supposed to have been silenced.
+            val loud = gh.important && !snoozed
+            val (col, bg) = if (loud) C.amber to C.tintAmber else accent to C.tintBlue
+            // "45+" under "only mine", where the count is the filtered fetch and the fetch is
+            // capped; without it the badge states a number it can't actually stand behind.
+            val more = if (gh.countIsFloor) "+" else ""
+            val parts = buildList {
+                if (gh.openIssues > 0) add("${gh.openIssues}$more open")
+                if (gh.openPrs > 0) add("${gh.openPrs}$more PR${if (gh.openPrs > 1) "s" else ""}")
+            }
+            add(Badge("◎ ${parts.joinToString(" · ")}", col, bg))
+            // Suppressed entirely while snoozed, the same way the "aging" badge is — this one is
+            // a call to action, and a snooze is the user saying "not now".
+            if (gh.awaiting > 0 && !snoozed) {
+                add(
+                    Badge(
+                        // "3+" when more were open than one fetch inspects: "awaiting you" is only
+                        // known for the items actually examined, so it's a floor, not a count.
+                        "↩ ${gh.awaiting}${if (gh.truncated) "+" else ""} awaiting you",
+                        if (loud) C.redText else C.amber,
+                        if (loud) C.tintRed else C.tintAmber,
+                    ),
+                )
+            }
+        }
         repo.reminder?.let { rem ->
             val col = if (rem.overdue) C.remOverdue else C.remTeal
             val bg = if (rem.overdue) C.remOverdueBg else C.remTealBg
@@ -101,14 +194,18 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
 
     val acc: Color; val accBg: Color
     when {
-        // Red is reserved for things that are actually wrong: detached HEAD, no upstream, not a repo.
+        // Red is reserved for things that are actually wrong: detached HEAD, no upstream, not a repo
+        // — plus, on repos where issues are marked important, an issue or PR waiting on your reply.
         // Amber is work sitting on this machine — uncommitted changes or unpushed commits — plus
-        // staleness on repos explicitly marked "important", where going quiet is a real signal.
+        // staleness on repos explicitly marked "important", where going quiet is a real signal, and
+        // anything on GitHub that's waiting on a response from you.
         // Blue is "nothing to do locally, just so you know": the remote moved on and there are
-        // commits to pull, or the repo has simply been quiet (stable code sits untouched).
-        repo.warning != null -> { acc = C.red; accBg = C.tintRed }
-        isDirty || repo.ahead > 0 || staleImportant -> { acc = C.amber; accBg = C.tintAmber }
-        repo.behind > 0 || repo.stale -> { acc = accent; accBg = C.tintBlue }
+        // commits to pull, the repo has simply been quiet (stable code sits untouched), or it has
+        // open issues nobody is waiting on you for.
+        repo.warning != null || issueLevel == IssueLevel.CRITICAL -> { acc = C.red; accBg = C.tintRed }
+        isDirty || repo.ahead > 0 || staleImportant ||
+            issueLevel == IssueLevel.IMPORTANT -> { acc = C.amber; accBg = C.tintAmber }
+        repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = C.tintBlue }
         else -> { acc = C.green; accBg = C.tintGreen }
     }
 
@@ -134,7 +231,12 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
         else -> null
     }
 
-    val attention = (repo.warning != null || repo.stale || (repo.ahead > 0 && !isDirty) || aging) && !snoozed
+    // Open issues alone aren't "attention" — a healthy repo always has some. Only the ones
+    // actually waiting on you are, which is what everything above IssueLevel.INFO means.
+    val attention = (
+        repo.warning != null || repo.stale || (repo.ahead > 0 && !isDirty) || aging ||
+            issueLevel == IssueLevel.IMPORTANT || issueLevel == IssueLevel.CRITICAL
+        ) && !snoozed
 
     return RepoView(
         repo = repo,
@@ -156,6 +258,8 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>): RepoView {
         aging = aging,
         snoozed = snoozed,
         primary = primary,
+        gh = gh,
+        issueLevel = issueLevel,
     )
 }
 

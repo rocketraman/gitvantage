@@ -169,6 +169,26 @@ class AppState(private val scope: CoroutineScope) {
     private val scanLimiter = Semaphore(8)   // cap concurrent git subprocesses
     private var toastJob: Job? = null
 
+    // Open GitHub issues/PRs, keyed by repo id. Deliberately NOT folded into [repos]: those are
+    // rebuilt from scratch by RepoScanner on every filesystem event, which would discard network
+    // data many times a minute. Kept reactive so a completed fetch recomposes the list.
+    private val githubState = mutableStateMapOf<String, GitHub.RepoState>()
+    var githubStatus by mutableStateOf<GitHub.Status>(GitHub.Status.Unknown)
+        private set
+    var githubFetching by mutableStateOf(false)
+        private set
+    private var githubRerun = false   // a refresh was asked for while one was already running
+    var githubFetchedEpoch by mutableStateOf(0L)
+        private set
+    /** Global default for polling open issues, overridable per repo. Registry-only (like the
+     *  global stale threshold): the per-repo control is the one with a UI. */
+    var githubEnabled = Registry.settings().githubIssues
+        private set
+    var githubMineOnly by mutableStateOf(Registry.settings().githubMineOnly)
+        private set
+    /** Hosts `gh` holds a working login for, from the last probe — see [issuesSupported]. */
+    private var githubHosts by mutableStateOf<Set<String>>(emptySet())
+
     // Notification bookkeeping.
     private val prevBehind = HashMap<String, Int>()    // last-seen "behind" per repo
     private var alertsPrimed = false                   // suppress upstream alerts on the first scan
@@ -416,6 +436,139 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch { rescanRepos(listOf(id), fetch = false) }
     }
 
+    // ---- GitHub issues / PRs -------------------------------------------------------------
+
+    /** This repo's own "track open issues" choice, or null when it follows the global default. */
+    fun issuesTrackedOverride(id: String): Boolean? = entries[id]?.issuesTracked
+
+    /**
+     * Whether this repo's remote is one we can read issues from at all — i.e. whether the issues
+     * UI should exist for it. True when the remote parses to an owner/repo *and* its host is
+     * GitHub: either by name (github.com, github.*) or because `gh` holds a working login for
+     * that host, which is the only way to recognise an Enterprise install at an arbitrary
+     * hostname like `git.company.com`.
+     *
+     * Anything else — GitLab, Azure DevOps, Gitea, no remote — is unsupported rather than empty,
+     * and shows no issues section at all.
+     */
+    fun issuesSupported(repo: Repo): Boolean {
+        val host = GitHub.coordOf(repo.webBase)?.host ?: return false
+        return repo.isGitHub || host.lowercase() in githubHosts
+    }
+
+    /** Whether open issues/PRs are actually polled for this repo: [issuesSupported], plus the
+     *  per-repo override if set, else the global default. */
+    fun issuesTracked(repo: Repo): Boolean =
+        issuesSupported(repo) && (entries[repo.id]?.issuesTracked ?: githubEnabled)
+
+    /** Set (or clear, with null) this repo's issue tracking; refetches so the row updates now. */
+    fun setIssuesTracked(id: String, tracked: Boolean?) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(issuesTracked = tracked)
+        // Turning it off drops the cached data too, so the counts vanish immediately rather than
+        // lingering until something else evicts them.
+        if (tracked == false) githubState.remove(id)
+        persist()
+        if (tracked != false) refreshGitHub()
+    }
+
+    /** Whether open issues escalate one attention level (blue→amber, amber→red) for this repo. */
+    fun issuesImportant(id: String): Boolean = entries[id]?.issuesImportant ?: false
+
+    /** Set how loud open issues are for this repo. Purely presentational — no refetch needed,
+     *  since the severity is applied when the summary is assembled, not when it's fetched. */
+    fun setIssuesImportant(id: String, important: Boolean) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(issuesImportant = important)
+        persist()
+    }
+
+    /** Toggle "only count issues that involve me" (global). Re-derives from cached data. */
+    fun setMineOnly(on: Boolean) {
+        githubMineOnly = on
+        Registry.saveSettings(Registry.settings().copy(githubMineOnly = on))
+    }
+
+    /**
+     * The open-issue picture for one repo, or null when issues aren't tracked for it or nothing
+     * has been fetched yet. Applies the "only mine" filter here rather than at fetch time, so
+     * flipping that toggle re-derives instantly from cached data instead of hitting the network.
+     */
+    fun ghSummary(repo: Repo): GhSummary? {
+        if (!issuesTracked(repo)) return null
+        val st = githubState[repo.id] ?: return null
+        val important = issuesImportant(repo.id)
+        if (st.error != null) {
+            return GhSummary(0, 0, 0, emptyList(), important = important, error = st.error)
+        }
+        val mine = githubMineOnly
+        val issues = st.issues.filter { !mine || it.involvesYou }
+        val prs = st.prs.filter { !mine || it.involvesYou }
+        // GitHub's totalCount is authoritative for "how many are open", but it can't be filtered
+        // client-side — so with "only mine" on, the fetched-and-filtered list *is* the count.
+        val openIssues = if (mine) issues.size else st.issueTotal
+        val openPrs = if (mine) prs.size else st.prTotal
+        // More were open than one fetch inspects. Independent of `mine`: the cap is applied by
+        // the fetch, before any filtering, so an unexamined item could have involved you either
+        // way — which also makes the filtered "only mine" counts floors rather than totals.
+        val capped = st.issueTotal > st.issues.size || st.prTotal > st.prs.size
+        return GhSummary(
+            openIssues = openIssues,
+            openPrs = openPrs,
+            awaiting = (issues + prs).count { it.awaitingYou },
+            items = (issues + prs).sortedByDescending { it.updatedAt },
+            truncated = capped,
+            countIsFloor = mine && capped,
+            important = important,
+        )
+    }
+
+    /**
+     * Re-probe `gh` and refetch every tracked repo's open issues/PRs. Safe to call at any time;
+     * overlapping calls are dropped rather than queued (the next tick will pick up anything
+     * missed). Failures are surfaced through [githubStatus] and never disturb the git dashboard.
+     */
+    fun refreshGitHub() {
+        if (githubFetching) {
+            // Don't just drop it: "Check now" and the Track toggle both promise a refresh, and a
+            // background poll happening to be in flight would silently turn them into no-ops for
+            // up to five minutes. Remember that someone asked, and run once more on the way out.
+            githubRerun = true
+            return
+        }
+        // Claimed here, not inside the coroutine: the guard and the launch would otherwise
+        // straddle a suspension point, so a refreshAll and a "Check now" click in the same frame
+        // would both see false and fire duplicate fetches.
+        githubFetching = true
+        githubRerun = false
+        scope.launch {
+            try {
+                val status = GitHub.status()
+                githubStatus = status
+                if (status !is GitHub.Status.Ok) return@launch
+                // Before building the coordinate list, not after: issuesTracked() consults these
+                // to recognise Enterprise hosts, so setting them later would skip every such repo
+                // on the first pass and only pick them up a refresh cycle later.
+                githubHosts = status.hosts
+                val coords = repos.filter { issuesTracked(it) }
+                    .mapNotNull { r -> GitHub.coordOf(r.webBase)?.let { r.id to it } }
+                    .toMap()
+                if (coords.isEmpty()) { githubState.clear(); return@launch }
+                val fetched = GitHub.fetch(coords)
+                // Replace wholesale rather than merge: a repo that dropped out of `coords`
+                // (untracked, turned off, remote changed) must not keep stale counts on screen.
+                githubState.keys.retainAll(fetched.keys)
+                githubState.putAll(fetched)
+                githubFetchedEpoch = System.currentTimeMillis()
+            } finally {
+                githubFetching = false
+                // Someone asked while this one was in flight (see the guard above). Re-run once
+                // — the flag is cleared on entry, so this can't spin.
+                if (githubRerun) refreshGitHub()
+            }
+        }
+    }
+
     fun addTag(id: String, raw: String) {
         var v = raw.trim()
         if (v.isEmpty()) return
@@ -467,6 +620,14 @@ class AppState(private val scope: CoroutineScope) {
                 notifyStaleCrossings(ordered)
                 reconcileDirtySince(ordered)
                 lastFetchedEpoch = System.currentTimeMillis()
+                // Piggyback the GitHub poll on the full refresh rather than giving it its own
+                // timer. This is exactly the right cadence — startup, the manual refresh button,
+                // and the 5-minute auto-refresh — while the *frequent* rescans (fs-watcher
+                // events, several a minute while you type) go through rescanRepos and correctly
+                // don't touch the network. It also runs after `repos` is populated, which is
+                // what tells it which repos have GitHub remotes. Fire-and-forget: it has its own
+                // in-flight guard and must never hold up the git dashboard.
+                refreshGitHub()
             } finally {
                 scanning = false
             }
@@ -1193,7 +1354,7 @@ class AppState(private val scope: CoroutineScope) {
 
     // ---- derived views / filtering / grouping ----
 
-    private fun views(): List<RepoView> = repos.map { deriveView(it, accent, tagsOf(it.id)) }
+    private fun views(): List<RepoView> = repos.map { deriveView(it, accent, tagsOf(it.id), ghSummary(it)) }
 
     /** Namespaces in first-seen order across all repo tags. */
     fun namespaces(): List<String> {
@@ -1212,7 +1373,12 @@ class AppState(private val scope: CoroutineScope) {
             "unpushed" to vms.count { it.ahead > 0 },
             "behind" to vms.count { it.repo.behind > 0 },
             "stale" to vms.count { it.isStale },
-            "issues" to vms.count { it.hasIssue },
+            // "problems" is the local git state that needs fixing (detached HEAD, no upstream, not
+            // a repo) — distinct from "ghopen", which is the GitHub issue tracker. They were both
+            // called "issues" until the GitHub integration landed and the collision became real.
+            "problems" to vms.count { it.hasIssue },
+            "ghopen" to vms.count { it.openIssues > 0 },
+            "ghawaiting" to vms.count { it.awaitingYou > 0 },
             "stashes" to vms.count { it.repo.stash > 0 },
             "reminders" to vms.count { it.hasReminder },
             "notes" to vms.count { noteOf(it.id).isNotBlank() },
@@ -1236,7 +1402,9 @@ class AppState(private val scope: CoroutineScope) {
         "unpushed" -> v.ahead > 0
         "behind" -> v.repo.behind > 0
         "stale" -> v.isStale
-        "issues" -> v.hasIssue
+        "problems" -> v.hasIssue
+        "ghopen" -> v.openIssues > 0
+        "ghawaiting" -> v.awaitingYou > 0
         "stashes" -> v.repo.stash > 0
         "reminders" -> v.hasReminder
         "notes" -> noteOf(v.id).isNotBlank()
@@ -1265,12 +1433,14 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /** Sort rank for "attention" order — mirrors the status-dot colours in [deriveView]:
-     *  red (issue) → amber (dirty, unpushed, or important-stale) → blue (behind, or stale) →
+     *  red (problem, or an important repo's issue awaiting you) → amber (dirty, unpushed,
+     *  important-stale, or an issue awaiting you) → blue (behind, stale, or open issues) →
      *  green (clean). Keep the two in step. */
     private fun attentionRank(v: RepoView): Int = when {
-        v.repo.warning != null -> 0
-        v.isDirty || v.repo.ahead > 0 || (v.repo.stale && v.repo.staleImportant) -> 1
-        v.repo.behind > 0 || v.repo.stale -> 2
+        v.repo.warning != null || v.issueLevel == IssueLevel.CRITICAL -> 0
+        v.isDirty || v.repo.ahead > 0 || (v.repo.stale && v.repo.staleImportant) ||
+            v.issueLevel == IssueLevel.IMPORTANT -> 1
+        v.repo.behind > 0 || v.repo.stale || v.issueLevel == IssueLevel.INFO -> 2
         else -> 3
     }
 

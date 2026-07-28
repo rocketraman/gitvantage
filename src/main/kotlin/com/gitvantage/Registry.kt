@@ -38,6 +38,13 @@ data class RegistryEntry(
     // Escalate staleness from the default informational (amber) signal to an important (red) one,
     // for repos where going quiet really does mean something is wrong.
     val staleImportant: Boolean = false,
+    // Whether to poll GitHub for this repo's open issues/PRs: null = follow the global default,
+    // false = never (forks you don't triage, mirrors, repos whose issue tracker isn't used),
+    // true = always, even if the global default is off.
+    val issuesTracked: Boolean? = null,
+    // Escalate open issues one level — informational (blue) becomes important (amber), and
+    // "awaiting you" (amber) becomes critical (red). For the repos you're actually on the hook for.
+    val issuesImportant: Boolean = false,
     val snoozeUntilEpoch: Long? = null,
     val reminderText: String = "",
     val reminderDueEpoch: Long? = null,
@@ -55,6 +62,12 @@ data class Settings(
     val windowHeight: Int = 860,
     val detailPaneWidth: Int = 466,
     val sortBy: String = "name",   // name | commit | attention
+    // Poll GitHub for open issues/PRs by default (per-repo overrides in RegistryEntry win).
+    // Only ever applies to repos with a github.com remote, and only when `gh` is authenticated.
+    val githubIssues: Boolean = true,
+    // Count only issues/PRs you're involved in — you opened it, you're assigned, your review is
+    // requested, or the last comment mentions you. Off = every open issue in the repo counts.
+    val githubMineOnly: Boolean = false,
 )
 
 @Serializable

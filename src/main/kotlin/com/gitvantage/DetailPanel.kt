@@ -207,6 +207,13 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         // Branches (local), with status vs mainline + delete
         if (repo.isGitRepo) BranchesSection(state, rv)
 
+        // Open GitHub issues / pull requests, and how loudly they should signal. Only for remotes
+        // we can actually query: a non-GitHub forge (Azure DevOps, GitLab, …) or a GitHub URL
+        // that isn't a plain owner/repo gets no section at all, rather than a permanently empty
+        // one — GitHub is the only forge supported so far, and an empty "Issues & pull requests"
+        // heading on a GitLab repo reads as "no open issues", which is a different claim entirely.
+        if (state.issuesSupported(repo)) IssuesSection(state, rv)
+
         // Per-repo "stale after N days" threshold (override the global default)
         if (repo.isGitRepo) StaleThresholdRow(state, rv)
 
@@ -853,6 +860,195 @@ private fun BranchActionPill(label: String, onClick: () -> Unit) {
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 9.dp, vertical = 2.dp),
     ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
+}
+
+/**
+ * Open issues and pull requests from GitHub, and the controls governing them.
+ *
+ * Only mounted for a remote that can actually be queried (see the call site). Within that, it
+ * still renders when tracking is off or `gh` isn't usable — that's exactly when the user needs
+ * telling *why* there are no counts, and each of those states is fixable. The distinction that
+ * matters: "we can't read this" is worth saying, "this forge isn't supported" is not.
+ *
+ * The list is capped: this is a triage dashboard, and the "Issues"/"Pull Requests" buttons in
+ * OPEN IN are one click away for the full picture.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun IssuesSection(state: AppState, rv: RepoView) {
+    val tracked = state.issuesTracked(rv.repo)
+    val gh = rv.gh
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt("Issues & pull requests", 12.5.sp, Tokens.text, FontWeight.Bold)
+            if (gh != null && gh.error == null && gh.open > 0) {
+                Txt("— ${gh.open}${if (gh.countIsFloor) "+" else ""} open", 11.sp, Tokens.muted2)
+            }
+            Spacer(Modifier.weight(1f))
+            if (tracked && !state.githubFetching && state.githubFetchedEpoch > 0L) {
+                Txt(
+                    "checked ${Meta.compactDuration(System.currentTimeMillis() - state.githubFetchedEpoch)} ago",
+                    10.5.sp, Tokens.muted2,
+                )
+            }
+            if (tracked) {
+                Txt(
+                    if (state.githubFetching) "Checking…" else "Check now",
+                    12.sp, state.accent, FontWeight.SemiBold,
+                    modifier = if (state.githubFetching) Modifier else Modifier.onTap { state.refreshGitHub() },
+                )
+            }
+        }
+
+        // Why there's nothing to show. Each of these is actionable, so say what to do — a silent
+        // empty section would read as "no open issues", which is a different and wrong fact.
+        val blocker: String? = when {
+            !tracked && state.issuesTrackedOverride(rv.id) == false ->
+                "Not tracked for this repo. Turn it on below to count open issues here."
+            !tracked -> "Issue tracking is off by default. Turn it on for this repo below."
+            state.githubStatus is GitHub.Status.Missing ->
+                "Needs the GitHub CLI. Install `gh` and run `gh auth login` — GitVantage reads " +
+                    "issues through it, so it never has to hold a token of your own."
+            state.githubStatus is GitHub.Status.NoAuth ->
+                "The GitHub CLI isn't logged in. Run `gh auth login` in a terminal, then Check now."
+            state.githubStatus is GitHub.Status.Failed ->
+                "GitHub CLI error: ${(state.githubStatus as GitHub.Status.Failed).message}"
+            gh?.error != null -> "Couldn't read this repo: ${gh.error}"
+            gh == null -> if (state.githubFetching) "Checking…" else "Not checked yet."
+            else -> null
+        }
+        if (blocker != null) {
+            Txt(blocker, 11.5.sp, Tokens.muted, maxLines = 4)
+        } else if (gh != null && gh.open == 0) {
+            Txt(
+                if (state.githubMineOnly) "Nothing open that involves you." else "No open issues or pull requests.",
+                11.5.sp, Tokens.muted,
+            )
+        } else if (gh != null) {
+            // Awaiting-you first: it's the reason this section exists. Within each half the fetch
+            // already ordered by most-recently-updated.
+            val ordered = gh.items.sortedByDescending { it.awaitingYou }
+            val shown = ordered.take(ISSUE_ROWS)
+            shown.forEach { IssueRow(state, it) }
+            // Counted against the header's total, not the fetched list — on a busy repo those
+            // differ by hundreds, and "+94 more" under a "980 open" header reads as a bug. When
+            // the total is itself a floor, drop the number rather than print one that's wrong.
+            val remaining = gh.open - shown.size
+            if (remaining > 0 || gh.countIsFloor) {
+                Txt(
+                    if (gh.countIsFloor) "More on GitHub →" else "+ $remaining more on GitHub →",
+                    11.5.sp, state.accent, FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 6.dp).onTap { state.openUrl("${rv.repo.webBase}/issues") },
+                )
+            }
+            if (gh.truncated) {
+                Txt(
+                    if (gh.countIsFloor) {
+                        "Too many open to check them all — these counts cover the most recently " +
+                            "updated only, so both may be higher."
+                    } else {
+                        "Too many open to check them all — the open counts are exact, but " +
+                            "“awaiting you” covers the most recently updated only, so it may be higher."
+                    },
+                    10.5.sp, Tokens.muted2, maxLines = 3,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+
+        // Tracking on/off for this repo, mirroring the stale threshold's preset/Default shape.
+        Row(
+            Modifier.padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            val override = state.issuesTrackedOverride(rv.id)
+            PresetPill("Track", override == true, state.accent) { state.setIssuesTracked(rv.id, true) }
+            PresetPill("Never", override == false, state.accent) { state.setIssuesTracked(rv.id, false) }
+            PresetPill("Default", override == null, state.accent) { state.setIssuesTracked(rv.id, null) }
+            Txt(
+                if (state.githubEnabled) "· default is on" else "· default is off",
+                11.sp, Tokens.muted2,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            )
+        }
+
+        // How loud open issues are here. Same two-way choice as staleness, and hidden for the
+        // same reason — with tracking off there is nothing for the severity to apply to.
+        if (tracked) {
+            val important = state.issuesImportant(rv.id)
+            Row(
+                Modifier.padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Txt("Treat open issues as", 12.5.sp, Tokens.text, FontWeight.Bold)
+                InfoTip(
+                    "Informational shows open issues in blue and only turns yellow when one is " +
+                        "actually waiting on you. Important escalates both a step — open issues " +
+                        "show yellow, and anything awaiting you shows red — and sorts the repo " +
+                        "higher under the Attention ordering.",
+                )
+            }
+            Row(
+                Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                PresetPill("Informational", !important, state.accent) { state.setIssuesImportant(rv.id, false) }
+                PresetPill("Important", important, state.accent) { state.setIssuesImportant(rv.id, true) }
+            }
+        }
+
+        // The "only mine" filter is app-wide, but this is the only screen where its effect is
+        // visible, so it's reachable from here rather than buried in a settings dialog.
+        Row(
+            Modifier.padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Count", 12.5.sp, Tokens.text, FontWeight.Bold)
+            PresetPill("All issues", !state.githubMineOnly, state.accent) { state.setMineOnly(false) }
+            PresetPill("Only mine", state.githubMineOnly, state.accent) { state.setMineOnly(true) }
+            InfoTip(
+                "“Only mine” counts just the issues and PRs you're involved in — you opened it, " +
+                    "you're assigned, your review is requested, or the last comment mentions you. " +
+                    "This setting applies to every repo, not only this one.",
+            )
+        }
+    }
+}
+
+/** Open issues/PRs listed per repo before collapsing into a "+ N more" link. */
+private const val ISSUE_ROWS = 6
+
+@Composable
+private fun IssueRow(state: AppState, item: GitHub.Item) {
+    // Awaiting-you rows get the amber treatment the badge uses, so the reason you opened the
+    // panel is findable without reading every title.
+    val bg = if (item.awaitingYou) Tokens.tintAmber else Tokens.panelF7
+    val border = if (item.awaitingYou) Tokens.snoozeBtnBorder else Tokens.borderE6
+    Row(
+        Modifier.fillMaxWidth().padding(top = 5.dp).clip(RoundedCornerShape(8.dp))
+            .background(bg).border(1.dp, border, RoundedCornerShape(8.dp))
+            .pointerHoverIcon(PointerIcon.Hand).onTap { state.openUrl(item.url) }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Txt(if (item.isPr) "⑂" else "◎", 12.sp, if (item.awaitingYou) Tokens.amber else Tokens.muted)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Txt(item.title, 12.sp, Tokens.text2, FontWeight.Medium, maxLines = 2)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Txt("#${item.number}", 10.5.sp, Tokens.muted2, font = MonoFont)
+                if (item.isDraft) Txt("draft", 10.5.sp, Tokens.muted2)
+                if (item.author.isNotEmpty()) Txt("by ${item.author}", 10.5.sp, Tokens.muted2, maxLines = 1)
+                item.reason?.let { Txt("· $it", 10.5.sp, Tokens.snoozeBtnText, FontWeight.SemiBold, maxLines = 1) }
+            }
+        }
+    }
 }
 
 /** Per-repo "stale after N days" control: presets set an override, "Default" clears it back to the

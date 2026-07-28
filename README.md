@@ -40,10 +40,10 @@ Prefer cards? The same information, laid out for scanning — with your working 
 
 GitVantage watches all your local repositories and gives you, in one place:
 
-- **A live status dashboard** — every repo with its branch, ahead/behind, and an at-a-glance state (clean · dirty · unpushed · behind · stale · **aging** · issues).
+- **A live status dashboard** — every repo with its branch, ahead/behind, and an at-a-glance state (clean · dirty · unpushed · behind · stale · **aging** · problems · **open issues**).
   Table or card view.
 - **Real-time updates** — a filesystem watcher re-scans a repo the moment its files change (even from the terminal or another tool), with a periodic background fetch and a manual refresh button for anything a watcher can't see (e.g. remote advances).
-- **Powerful triage** — filter by status (dirty, aging, unpushed, stale, issues, stashes, reminders, snoozed), group by tag namespace, sort by name / last commit / attention, and live-search across names, branches, and tags.
+- **Powerful triage** — filter by status (dirty, aging, unpushed, stale, problems, open issues, awaiting you, stashes, reminders, snoozed), group by tag namespace, sort by name / last commit / attention, and live-search across names, branches, and tags.
 - **Namespaced tags + notes** — organize repos with `owner:me`, `lang:kotlin`, … (with inline autocomplete), and keep per-repo working notes.
   Bulk-tag, untag, and act on many repos at once.
 - **A rich per-repo detail pane**:
@@ -56,12 +56,30 @@ GitVantage watches all your local repositories and gives you, in one place:
 - **Reminders, snooze, and a notification outlook** — set reminders, snooze a repo's alerts for a while, and see a plain-language summary of exactly what will notify you and when (reminders, aging, stale, upstream advances), accounting for any active snooze.
   Desktop notifications fire for due reminders, for aging and stale threshold crossings, and — when you opt a repo in — when its upstream advances.
 - **Aging detection** — flags repos whose uncommitted work has been sitting past a threshold, so long-forgotten changes surface instead of rotting.
+- **Open issues and PRs** — **requires [GitHub CLI](https://cli.github.com)**: repos on GitHub (or GitHub Enterprise) get a per-repo count of what's open, and — the part that matters — which of them are **waiting on you**: your review is requested, you're assigned, the last comment @-mentions you, or someone replied on a thread you opened.
+  Open issues are a blue heads-up by default (every healthy project has some) and turn yellow once one needs you; mark a repo's issues **Important** and both escalate a step, to yellow and red.
+  Per-repo opt-out, and an "only mine" mode that ignores everything you aren't involved in.
+
+  Install `gh` and run `gh auth login` to enable it. GitVantage reads issues *through* `gh`, so it never asks for, stores, or holds a token of your own — it reuses whatever that login already set up, including SSO and Enterprise hosts.
+  Without `gh`, the rest of the dashboard is unaffected and the repo's detail pane says what's missing.
+  Repos on other forges are simply left alone — see below.
 
 ## Git only — by design
 
 GitVantage is a **git** tool, and will very likely stay that way.
 Its whole vocabulary — upstreams, ahead/behind, stashes, submodule pointers, fast-forward, merged branches — is git-specific, and the UI leans into those concepts rather than abstracting them away.
 Supporting other VCSs would mean a different, blander tool; GitVantage chooses to be great at git.
+
+### Forge integration: GitHub for now
+
+Everything above works on any git remote — issues and pull requests are the one exception, because they live in a forge rather than in git.
+That integration is **GitHub-only so far** (github.com and GitHub Enterprise), and other forges aren't second-class so much as absent: on a GitLab, Azure DevOps, Gitea or remote-less repo the issues section simply doesn't appear.
+That's deliberate. An empty "Issues & pull requests" heading would read as *"this repo has none"*, which is a different and wrong claim from *"GitVantage can't see them"*.
+
+Enterprise hosts are recognised by asking `gh` which hosts it's logged into, rather than by guessing from the URL — a GitHub Enterprise install can live at any hostname, and `git.example.com` looks like nothing in particular.
+The practical consequence: run `gh auth login --hostname your.github.host` and its repos light up; until then they're treated as an unsupported forge.
+
+Other forges are a "not yet", not a "no" — unlike the VCS question above, nothing about the design rules them out.
 
 ## Building & running
 
