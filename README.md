@@ -48,8 +48,8 @@ GitVantage watches all your local repositories and gives you, in one place:
   Bulk-tag, untag, and act on many repos at once.
 - **A rich per-repo detail pane**:
   - Changed files (staged / modified / untracked) and a **GitHub-style side-by-side diff viewer** with character-level highlighting and a flattened file tree.
-  - **Branches** with their tracking status vs upstream (ahead / behind / diverged / in sync) *and* vs mainline (merged / stale), one-click **switch**, **diff**, and **delete** (mirrors `git branch -d/-D`).
-  - **Remote branches** with last author, one-click checkout into a local tracking branch.
+  - **Branches** with their tracking status vs upstream (ahead / behind / diverged / in sync) *and* vs mainline (merged / stale), one-click **switch**, **diff**, **copy the name**, and **delete** (mirrors `git branch -d/-D`).
+  - **Remote branches** with last author, one-click checkout into a local tracking branch, and copy of the full ref.
   - **Stashes** — apply, drop, and diff.
   - **Submodules** — see the target repo, how far the pointer is **behind**, uncommitted changes inside, and fetch / update-the-pointer / diff-the-pending-move / add-as-a-tracked-repo / deinit — plus a link up to the parent superproject when it's also tracked.
   - **Worktrees** — every working tree sharing the repository, with the branch each holds, its last commit, and **uncommitted work sitting in another checkout** (invisible from this one), plus locked / stale-entry flags and a one-click `git worktree prune`. Linked worktrees say which checkout they came from, and any of them can be added as a tracked repo of its own.
