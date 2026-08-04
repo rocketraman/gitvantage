@@ -10,6 +10,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.exceptions.AddressResolvingException
+import org.freedesktop.dbus.exceptions.InvalidBusAddressException
 import org.freedesktop.dbus.interfaces.Properties
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
@@ -83,7 +85,12 @@ private fun checkFsWatcher() = runBlocking {
         return@runBlocking
     }
 
-    val dir = createTempDirectory("gitvantage-smoke")
+    // Watch the *canonical* path. macOS hands out temp dirs under /var/folders, where /var is a
+    // symlink to /private/var, and this check exists to prove the native callback path delivers
+    // events in the packaged image — not to test how the watcher handles symlinks. Watching the
+    // unresolved path conflated the two: on macOS it silently delivered nothing, which reads here
+    // as a stripped callback. Keep that a separate concern, and a separate bug report.
+    val dir = createTempDirectory("gitvantage-smoke").toRealPath()
     var events = 0
     val collector = launch(Dispatchers.IO) {
         runCatching { watcher.events.collect { events++ } }
@@ -100,8 +107,11 @@ private fun checkFsWatcher() = runBlocking {
         Files.writeString(dir.resolve("smoke$i.txt"), "smoke $i")
         delay(200)
     }
-    // Native events arrive asynchronously; give them room before declaring failure.
-    repeat(20) { if (events == 0) delay(100) }
+    // Native events arrive asynchronously; give them room before declaring failure. The old 2s
+    // budget was tuned on inotify, which is effectively immediate. macOS FSEvents coalesces and
+    // can sit on a change for seconds, so a slow delivery there is indistinguishable from none —
+    // hence the wider window. It only costs wall-clock on a run that is already failing.
+    repeat(100) { if (events == 0) delay(100) }
     collector.cancel()
     runCatching { registration.close() }
     runCatching { dir.toFile().deleteRecursively() }
@@ -111,7 +121,8 @@ private fun checkFsWatcher() = runBlocking {
     } else {
         record(
             Status.FAIL, name,
-            "registered successfully but delivered NO events — the native callback path is stripped",
+            "registered successfully but delivered NO events after 10s for $dir " +
+                "— the native callback path is stripped",
         )
     }
 }
@@ -126,16 +137,31 @@ private fun checkXdgPortal() {
         record(Status.SKIP, name, "not Linux")
         return
     }
-    // XDG_RUNTIME_DIR is /run/user/<uid>, where the session bus socket lives.
-    val hasSessionBus = !System.getenv("DBUS_SESSION_BUS_ADDRESS").isNullOrBlank() ||
-        System.getenv("XDG_RUNTIME_DIR")?.let { java.io.File(it, "bus").exists() } == true
-    if (!hasSessionBus) {
-        record(Status.SKIP, name, "no session D-Bus on this machine")
+    // Whether a session bus exists is dbus-java's call, not ours. It resolves the address from the
+    // DBUS_SESSION_BUS_ADDRESS property/env and then from $HOME/.dbus/session-bus/<machine-id>-<DISPLAY>,
+    // and never consults $XDG_RUNTIME_DIR. Probing for $XDG_RUNTIME_DIR/bus therefore reported a bus on
+    // CI runners that have a systemd user session but no bus address, which turned an environmental
+    // skip into a hard failure. So don't predict the outcome — connect, and read it off the failure.
+    //
+    // Only an unresolvable/malformed *address* means "no bus here". A failure to connect to an address
+    // that did resolve is a real defect and must stay a FAIL: that is exactly how a missing
+    // jdk.security.auth presents, since dbus-java's SASL EXTERNAL handshake needs it to read the
+    // caller's uid, and losing it kills every D-Bus connection — the portal included.
+    val connection = try {
+        DBusConnectionBuilder.forSessionBus().build()
+    } catch (e: AddressResolvingException) {
+        record(Status.SKIP, name, "no session D-Bus on this machine ($e)")
+        return
+    } catch (e: InvalidBusAddressException) {
+        record(Status.SKIP, name, "session D-Bus address is unusable ($e)")
+        return
+    } catch (e: Exception) {
+        record(Status.FAIL, name, "session D-Bus resolved but would not connect: $e")
         return
     }
     val result = runCatching {
-        DBusConnectionBuilder.forSessionBus().build().use { connection ->
-            val portal = connection.getRemoteObject(
+        connection.use {
+            val portal = it.getRemoteObject(
                 "org.freedesktop.portal.Desktop",
                 "/org/freedesktop/portal/desktop",
                 Properties::class.java,

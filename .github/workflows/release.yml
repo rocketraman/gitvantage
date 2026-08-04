@@ -7,6 +7,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the dry-run build. Must be 1-3 dot-separated integers with a major of at least 1 — jpackage on macOS rejects a zero major version.'
+        default: '9.9.9'
+        required: false
 
 permissions:
   contents: write   # needed to create the Release and upload assets
@@ -46,8 +51,39 @@ jobs:
       # is invisible until a user launches an installer. Several already shipped that way.
       # D-Bus-dependent checks skip themselves when a runner has no session bus; the fs-watcher
       # check always runs.
+      # On a tag push build.gradle takes the version from GITHUB_REF_NAME. A workflow_dispatch has no
+      # version in its ref, and checkout@v4's shallow clone carries no tags for the `git describe`
+      # fallback, so it lands on the last resort of 0.0.0 — which jpackage *rejects on macOS* ("the
+      # first number in an app-version cannot be zero or negative") while Linux and Windows accept
+      # it. The dry-run was therefore structurally incapable of covering macOS, which is how a
+      # macOS-only packaging bug reached a tagged release in the first place.
+      #
+      # Passed as ORG_GRADLE_PROJECT_appVersion rather than interpolated into the run: line, so a
+      # dispatch input can't be injected into the shell. On a tag push the input is unset, the env
+      # var is empty, build.gradle's regex rejects it, and GITHUB_REF_NAME wins as before.
       - name: Build release distribution (incl. verification + smoke test)
+        env:
+          ORG_GRADLE_PROJECT_appVersion: ${{ inputs.version }}
         run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
+
+      # When jpackage fails, Gradle reports only "External tool execution failed" plus the paths of
+      # two log files on the runner — which are then thrown away with the runner, so the actual
+      # cause never reaches the CI output and the failure is undiagnosable from here. Print them.
+      - name: Dump packaging tool logs
+        if: failure()
+        shell: bash
+        run: |
+          # Use find, not a **/ glob: the macOS runners' /bin/bash is 3.2, which has no globstar,
+          # and `shopt -s globstar` there fails the step outright — on the one platform whose
+          # packaging failures need this most.
+          found=0
+          while IFS= read -r f; do
+            found=1
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done < <(find build/compose/logs -type f -name '*.txt' 2>/dev/null)
+          [ "$found" = 1 ] || echo "No packaging tool logs under build/compose/logs/."
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
