@@ -968,18 +968,33 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
         if (state.branchesLoading && state.branches.isEmpty()) {
             Txt("Loading…", 12.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
         }
-        state.branches.forEach { b -> BranchRow(state, rv.id, b, clean) }
+        state.branches.forEach { b -> BranchRow(state, rv.id, b, clean, rv.repo.hasRemote) }
         RemoteBranchesSection(state, rv.id, clean)
     }
 }
 
 @Composable
-private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: Boolean) {
+private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: Boolean, hasRemote: Boolean) {
     // git holds a branch in exactly one working tree at a time: switching to one that's checked
     // out elsewhere fails, and so does deleting it. Both actions come off the row rather than
     // being offered and then refused — the badge on line 1 says where the branch went instead.
     val canSwitch = !b.isCurrent && !b.inOtherWorktree && !state.switchingBranch
     val canDelete = !b.isCurrent && !b.isMainline && !b.inOtherWorktree
+    // Whether line 2's tracking status has something the row can actually do about it. "⚠ no
+    // upstream" was the sharpest case — a warning with no way out of it, on a branch the
+    // repo-level Push can't reach unless you happen to be standing on it — but a branch sitting
+    // ahead of its upstream is the same dead end one line down, so both get the one action.
+    //
+    // The states left out are the ones a plain push can't fix: diverged needs a force, and a
+    // hover lane a stray click can find is the last place to offer one. "upstream gone" means
+    // someone deleted the remote branch, and re-creating it silently would undo that.
+    val pushLabel = when {
+        !hasRemote || b.upstreamGone -> null
+        b.upstream == null -> "Publish"
+        b.upstreamAhead > 0 && b.upstreamBehind == 0 -> "Push"
+        else -> null
+    }
+    val pushing = state.pushingBranch == b.name
     HoverRow { hovered ->
         // Line 1: branch name · mainline-relationship badge · ahead-of-mainline
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1048,6 +1063,23 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                 if (!b.isMainline) {
                     RowAction("Diff") { state.openBranchDiff(id, b.name, b.name) }
                     RowAction("Log") { state.openBranchLog(id, b.name, b.name) }
+                }
+                // Between the read-only actions and the ones that move you: this changes the
+                // remote, not where you're standing or what's on disk.
+                if (pushLabel != null) {
+                    HoverTip(
+                        if (b.upstream == null) {
+                            "Pushes “${b.name}” to origin and sets it as the upstream. The branch " +
+                                "doesn't have to be checked out — your working tree isn't touched."
+                        } else {
+                            "Sends ${b.upstreamAhead} commit${if (b.upstreamAhead == 1) "" else "s"} " +
+                                "to ${b.upstream}. Your working tree isn't touched."
+                        },
+                    ) {
+                        RowAction(if (pushing) "Pushing…" else pushLabel) {
+                            if (!pushing) state.pushBranch(id, b)
+                        }
+                    }
                 }
                 if (canSwitch) RowAction("Switch") {
                     if (clean) state.switchBranch(id, b.name)

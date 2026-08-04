@@ -128,6 +128,9 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var switchingBranch by mutableStateOf(false)
         private set
+    /** Name of the branch currently being pushed, so its row can say so. One at a time. */
+    var pushingBranch by mutableStateOf<String?>(null)
+        private set
 
     // Submodules for the currently-open detail panel (loaded lazily on selection).
     var submodulesRepo by mutableStateOf<String?>(null)
@@ -961,6 +964,21 @@ class AppState(private val scope: CoroutineScope) {
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
             switchingBranch = false
+        }
+    }
+
+    /** Send one branch to the remote — publishing it when it has no upstream yet (see
+     *  [BranchOps.push]). Unlike a switch this isn't gated on a clean working tree: pushing a ref
+     *  doesn't touch the tree, so there's nothing to clobber. */
+    fun pushBranch(id: String, b: BranchOps.Branch) {
+        if (pushingBranch != null) return
+        pushingBranch = b.name
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.push(id, b.name, b.upstream) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            pushingBranch = null
         }
     }
 

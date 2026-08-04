@@ -161,6 +161,32 @@ object BranchOps {
             else GitOps.Result(repoPath, false, firstErr(err, "checkout failed"))
         }
 
+    /**
+     * Send a local branch to the remote. A null [upstream] means the branch isn't tracking
+     * anything yet, so this publishes it — `push -u origin <name>` — the same operation the
+     * repo-level Push does for the current branch, spelled out here for a branch that may not be
+     * checked out. That's safe: pushing a ref reads it, so the working tree is never involved and
+     * a branch held by another worktree pushes fine.
+     *
+     * With an upstream we push to exactly the ref the branch tracks, as an explicit refspec: a
+     * branch may track a remote branch of a different name, and `push <remote> <name>` would
+     * quietly create a second one beside it. Never `--force` — a diverged branch is refused by
+     * git rather than overwritten, which is why the caller doesn't offer this on one.
+     */
+    suspend fun push(repoPath: String, name: String, upstream: String?): GitOps.Result =
+        withContext(Dispatchers.IO) {
+            val dir = File(repoPath)
+            val args =
+                if (upstream == null) listOf("push", "-u", "origin", name)
+                else listOf("push", upstream.substringBefore('/'), "$name:${upstream.substringAfter('/')}")
+            val (code, _, err) = GitLog.exec(dir.name, dir, args, timeoutSeconds = 90)
+            if (code == 0) {
+                GitOps.Result(repoPath, true, if (upstream == null) "Published $name" else "Pushed $name")
+            } else {
+                GitOps.Result(repoPath, false, firstErr(err, "push failed"))
+            }
+        }
+
     /** Delete a local branch. [force] uses -D (also deletes unmerged). Never the current branch. */
     suspend fun delete(repoPath: String, name: String, force: Boolean): GitOps.Result = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
