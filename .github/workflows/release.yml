@@ -49,6 +49,25 @@ jobs:
       - name: Build release distribution (incl. verification + smoke test)
         run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
 
+      # When jpackage fails, Gradle reports only "External tool execution failed" plus the paths of
+      # two log files on the runner — which are then thrown away with the runner, so the actual
+      # cause never reaches the CI output and the failure is undiagnosable from here. Print them.
+      - name: Dump packaging tool logs
+        if: failure()
+        shell: bash
+        run: |
+          # Use find, not a **/ glob: the macOS runners' /bin/bash is 3.2, which has no globstar,
+          # and `shopt -s globstar` there fails the step outright — on the one platform whose
+          # packaging failures need this most.
+          found=0
+          while IFS= read -r f; do
+            found=1
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done < <(find build/compose/logs -type f -name '*.txt' 2>/dev/null)
+          [ "$found" = 1 ] || echo "No packaging tool logs under build/compose/logs/."
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
