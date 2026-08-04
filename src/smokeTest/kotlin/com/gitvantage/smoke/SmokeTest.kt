@@ -50,6 +50,7 @@ fun main() {
     println("Smoke-testing the packaged release image…")
 
     checkFsWatcher()
+    checkFsWatcherThroughSymlink()
     checkXdgPortal()
     checkNotifications()
 
@@ -123,6 +124,75 @@ private fun checkFsWatcher() = runBlocking {
             Status.FAIL, name,
             "registered successfully but delivered NO events after 10s for $dir " +
                 "— the native callback path is stripped",
+        )
+    }
+}
+
+/**
+ * A repo added via a symlinked path must still deliver events.
+ *
+ * The watcher matches incoming events against the root it was given, by path prefix. macOS reports
+ * events with canonical paths, so a symlinked root never matches its own events: registration
+ * succeeds and nothing is ever delivered. It is silent, and it is easy to hit — /tmp and /var are
+ * both symlinks on macOS. AppState.watchRootFor resolves the path before watching; this is the
+ * check that the technique actually holds on the platform that needs it.
+ *
+ * Linux and Windows echo back the path they were handed, so they pass either way — which is exactly
+ * why this went unnoticed until the release build could produce a macOS image.
+ */
+private fun checkFsWatcherThroughSymlink() = runBlocking {
+    val name = "filesystem watcher via symlinked path"
+    if (!runCatching { FsWatchers.isSupported() }.getOrDefault(false)) {
+        record(Status.SKIP, name, "not supported on this platform")
+        return@runBlocking
+    }
+    val base = createTempDirectory("gitvantage-smoke-link").toRealPath()
+    val target = Files.createDirectory(base.resolve("target"))
+    val link = runCatching { Files.createSymbolicLink(base.resolve("link"), target) }.getOrNull()
+    if (link == null) {
+        record(Status.SKIP, name, "cannot create symlinks on this machine")
+        runCatching { base.toFile().deleteRecursively() }
+        return@runBlocking
+    }
+
+    val watcher = runCatching { FsWatchers.create() }.getOrNull()
+    if (watcher == null) {
+        record(Status.FAIL, name, "FsWatchers.create() returned null / threw")
+        runCatching { base.toFile().deleteRecursively() }
+        return@runBlocking
+    }
+    var events = 0
+    val collector = launch(Dispatchers.IO) {
+        runCatching { watcher.events.collect { events++ } }
+    }
+    delay(300)
+    // Resolve exactly as AppState.watchRootFor does — the whole point is that this is what makes a
+    // symlinked repo work. Watching `link` unresolved is what silently fails on macOS.
+    val registration = runCatching { watcher.watch(link.toRealPath(), true, "smoke-link") }.getOrNull()
+    if (registration == null) {
+        collector.cancel()
+        record(Status.FAIL, name, "watch() returned null / threw")
+        runCatching { base.toFile().deleteRecursively() }
+        return@runBlocking
+    }
+    delay(300)
+    // Write *through the symlink*, the way a user's tooling would.
+    repeat(3) { i ->
+        Files.writeString(link.resolve("smoke$i.txt"), "smoke $i")
+        delay(200)
+    }
+    repeat(100) { if (events == 0) delay(100) }
+    collector.cancel()
+    runCatching { registration.close() }
+    runCatching { base.toFile().deleteRecursively() }
+
+    if (events > 0) {
+        record(Status.PASS, name, "$events event(s) delivered")
+    } else {
+        record(
+            Status.FAIL, name,
+            "a repo added by a symlinked path registers but delivers NO events — real-time " +
+                "refresh is silently dead for it",
         )
     }
 }
