@@ -291,39 +291,43 @@ val verifyReleaseBytecode = tasks.register("verifyReleaseBytecode") {
         // (jdk.security.auth went out in a release exactly this way: dbus-java's SASL handshake
         // calls com.sun.security.auth.module.UnixSystem, so every D-Bus connection died and the
         // native file chooser fell back to Swing.)
-        val runtimeRelease = appDir.get().asFile.resolve("GitVantage/lib/runtime/release")
-        if (runtimeRelease.isFile) {
-            val bundledModules = runtimeRelease.readLines()
-                .firstOrNull { it.startsWith("MODULES=") }
-                .orEmpty().substringAfter('=').trim('"').split(' ').filter { it.isNotBlank() }.toSet()
-            val requiredModules = providers.exec {
-                commandLine(
-                    File(System.getProperty("java.home"), "bin/jdeps").absolutePath,
-                    "--print-module-deps", "--ignore-missing-deps", "--multi-release", "21",
-                    *jars.map { it.absolutePath }.toTypedArray(),
-                )
-            }.standardOutput.asText.get()
-                // jdeps prints the comma-separated module list on its own line, but may emit
-                // "Warning: ..." lines first — take the payload line, not the diagnostics.
-                .lineSequence()
-                .map { it.trim() }
-                .lastOrNull { it.isNotBlank() && !it.startsWith("Warning:") && ' ' !in it }
-                .orEmpty()
-                .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-
-            val missingModules = requiredModules - bundledModules
-            logger.lifecycle(
-                "verifyReleaseBytecode: runtime bundles ${bundledModules.size} JDK modules, " +
-                    "jdeps requires ${requiredModules.size}",
+        // Hard-fail rather than skip when the file isn't where we expect. This previously resolved a
+        // Linux-only path guarded by `if (isFile)`, so on Windows and macOS the check quietly did
+        // nothing — the one gate that catches a missing module was a no-op on two of three platforms.
+        val runtimeRelease = File(releaseRuntimeDir, "release")
+        check(runtimeRelease.isFile) {
+            "jlink'd runtime release file not found at $runtimeRelease - did the app image layout change?"
+        }
+        val bundledModules = runtimeRelease.readLines()
+            .firstOrNull { it.startsWith("MODULES=") }
+            .orEmpty().substringAfter('=').trim('"').split(' ').filter { it.isNotBlank() }.toSet()
+        val requiredModules = providers.exec {
+            commandLine(
+                File(System.getProperty("java.home"), "bin/jdeps").absolutePath,
+                "--print-module-deps", "--ignore-missing-deps", "--multi-release", "21",
+                *jars.map { it.absolutePath }.toTypedArray(),
             )
-            if (missingModules.isNotEmpty()) {
-                throw GradleException(
-                    "The bundled runtime image is missing JDK modules the app requires — anything " +
-                        "touching them throws NoClassDefFoundError at runtime:\n  " +
-                        missingModules.sorted().joinToString("\n  ") +
-                        "\n\nAdd them to nativeDistributions { modules(...) } in build.gradle.kts.",
-                )
-            }
+        }.standardOutput.asText.get()
+            // jdeps prints the comma-separated module list on its own line, but may emit
+            // "Warning: ..." lines first — take the payload line, not the diagnostics.
+            .lineSequence()
+            .map { it.trim() }
+            .lastOrNull { it.isNotBlank() && !it.startsWith("Warning:") && ' ' !in it }
+            .orEmpty()
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+
+        val missingModules = requiredModules - bundledModules
+        logger.lifecycle(
+            "verifyReleaseBytecode: runtime bundles ${bundledModules.size} JDK modules, " +
+                "jdeps requires ${requiredModules.size}",
+        )
+        if (missingModules.isNotEmpty()) {
+            throw GradleException(
+                "The bundled runtime image is missing JDK modules the app requires — anything " +
+                    "touching them throws NoClassDefFoundError at runtime:\n  " +
+                    missingModules.sorted().joinToString("\n  ") +
+                    "\n\nAdd them to nativeDistributions { modules(...) } in build.gradle.kts.",
+            )
         }
         if (danglingServices.isNotEmpty()) {
             throw GradleException(
@@ -350,6 +354,66 @@ listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageRe
 }
 
 
+// --- Release app-image layout ----------------------------------------------------------------
+//
+// jpackage's app image is laid out differently on each OS, and both the directory holding the
+// launcher's <name>.cfg plus the application jars, and the one holding the jlink'd runtime, move
+// with it:
+//
+//            image root       app dir       runtime dir
+//   Linux    GitVantage/      lib/app/      lib/runtime/
+//   Windows  GitVantage/      app/          runtime/
+//   macOS    GitVantage.app/  Contents/app/ Contents/runtime/Contents/Home/
+//
+// Only macOS suffixes the image root, and only macOS nests the runtime inside a second JDK bundle
+// (hence the Contents/Home tail — the `release` file lives at the *bottom* of that path).
+// Verified against jdk.jpackage.internal.ApplicationLayoutUtils in the JDK 25 sources; the Compose
+// plugin adds the .app suffix in AbstractJPackageTask.
+//
+// The pathing jar, the bytecode verifier and the smoke test all address the image. Hard-coding the
+// Linux shape in each of them produced a release that built only on Linux and failed on Windows and
+// both macOS runners — and, worse, a module check that silently passed off-Linux by looking for a
+// file that could not be there. Everything goes through these so the assumption lives in one place.
+//
+// Note this is the *launcher* name — jpackage's --name, i.e. the top-level packageName. The
+// linux { packageName = "gitvantage" } override renames the .deb/.rpm package, not the app image.
+val appImageName = "GitVantage"
+
+val isMacOsHost = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
+val isWindowsHost = System.getProperty("os.name").lowercase().contains("win")
+
+val releaseImageDir: File = layout.buildDirectory
+    .dir("compose/binaries/main-release/app/" + if (isMacOsHost) "$appImageName.app" else appImageName)
+    .get().asFile
+
+/** Directory inside the release image holding `$appImageName.cfg` and the application jars. */
+val releaseAppDir: File = File(
+    releaseImageDir,
+    when {
+        isMacOsHost -> "Contents/app"
+        isWindowsHost -> "app"
+        else -> "lib/app"
+    },
+)
+
+/**
+ * JDK *home* of the jlink'd runtime inside the release image — where its `release` file lives.
+ *
+ * On macOS this is not the same directory as the runtime *bundle* root (`Contents/runtime`), which
+ * is what signing and the embedded provisioning profile want; the home is nested another
+ * `Contents/Home` down. They coincide on Linux and Windows, so anything that needs the bundle root
+ * must not reuse this or it will be silently wrong on exactly one platform.
+ */
+val releaseRuntimeDir: File = File(
+    releaseImageDir,
+    when {
+        isMacOsHost -> "Contents/runtime/Contents/Home"
+        isWindowsHost -> "runtime"
+        else -> "lib/runtime"
+    },
+)
+
+
 // --- Pathing jar: keep the launcher's classpath short ---------------------------------------
 //
 // jpackage's generated launcher builds its JVM argument block from the `app.classpath` entries in
@@ -373,8 +437,8 @@ listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageRe
 // So the entry list moves into a pathing jar's Class-Path manifest: order is preserved exactly,
 // and it stays relocatable because entries resolve relative to the jar's own location. This is
 // the shape jpackage expects anyway - `--main-jar` plus a manifest referencing its siblings.
-fun shortenLauncherClasspath(imageDir: File) {
-    val cfg = File(imageDir, "lib/app/${imageDir.name}.cfg")
+fun shortenLauncherClasspath(appDir: File, launcherName: String) {
+    val cfg = File(appDir, "$launcherName.cfg")
     check(cfg.isFile) { "Launcher config not found at $cfg - did the app image layout change?" }
     val lines = cfg.readLines()
     val entries = lines.filter { it.startsWith("app.classpath=") }.map { it.substringAfter('=').trim() }
@@ -398,7 +462,7 @@ fun shortenLauncherClasspath(imageDir: File) {
         first = false
     }
 
-    val jar = File(imageDir, "lib/app/classpath.jar")
+    val jar = File(appDir, "classpath.jar")
     ZipOutputStream(jar.outputStream().buffered()).use { zip ->
         zip.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
         zip.write(("Manifest-Version: 1.0\r\n" + folded + "\r\n").toByteArray())
@@ -419,9 +483,9 @@ fun shortenLauncherClasspath(imageDir: File) {
 
     // The invariant this whole task exists to hold. Observed failure threshold is ~10K expanded
     // characters; 8K leaves headroom without being tight enough to trip on a normal image.
-    val appDir = File(imageDir, "lib/app").absolutePath
-    val before = entries.joinToString(":") { it.replace("\$APPDIR", appDir) }.length
-    val after = "$appDir/classpath.jar".length
+    val appDirPath = appDir.absolutePath
+    val before = entries.joinToString(":") { it.replace("\$APPDIR", appDirPath) }.length
+    val after = "$appDirPath/classpath.jar".length
     logger.lifecycle(
         "shortenLauncherClasspath: ${entries.size} entries -> classpath.jar " +
             "(launcher classpath $before -> $after chars)",
@@ -433,9 +497,7 @@ fun shortenLauncherClasspath(imageDir: File) {
 
 tasks.matching { it.name == "createReleaseDistributable" }.configureEach {
     doLast {
-        shortenLauncherClasspath(
-            layout.buildDirectory.dir("compose/binaries/main-release/app/GitVantage").get().asFile,
-        )
+        shortenLauncherClasspath(releaseAppDir, appImageName)
     }
 }
 
@@ -463,10 +525,10 @@ val smokeTestReleaseImage = tasks.register<JavaExec>("smokeTestReleaseImage") {
     // Deliberately NOT the smokeTest runtime classpath: only the compiled checks plus the jars
     // from inside the release image. Adding the development dependencies would resolve classes
     // ProGuard removed and the test would pass against code that isn't what ships.
-    val appJars = layout.buildDirectory.dir("compose/binaries/main-release/app/GitVantage/lib/app")
+    val appJars = releaseAppDir
     classpath = files(
         sourceSets["smokeTest"].output,
-        provider { appJars.get().asFile.listFiles()?.filter { it.extension == "jar" } ?: emptyList<File>() },
+        provider { appJars.listFiles()?.filter { it.extension == "jar" } ?: emptyList<File>() },
     )
 }
 

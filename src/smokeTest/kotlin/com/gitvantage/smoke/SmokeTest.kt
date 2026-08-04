@@ -10,6 +10,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.exceptions.AddressResolvingException
+import org.freedesktop.dbus.exceptions.InvalidBusAddressException
 import org.freedesktop.dbus.interfaces.Properties
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
@@ -126,16 +128,31 @@ private fun checkXdgPortal() {
         record(Status.SKIP, name, "not Linux")
         return
     }
-    // XDG_RUNTIME_DIR is /run/user/<uid>, where the session bus socket lives.
-    val hasSessionBus = !System.getenv("DBUS_SESSION_BUS_ADDRESS").isNullOrBlank() ||
-        System.getenv("XDG_RUNTIME_DIR")?.let { java.io.File(it, "bus").exists() } == true
-    if (!hasSessionBus) {
-        record(Status.SKIP, name, "no session D-Bus on this machine")
+    // Whether a session bus exists is dbus-java's call, not ours. It resolves the address from the
+    // DBUS_SESSION_BUS_ADDRESS property/env and then from $HOME/.dbus/session-bus/<machine-id>-<DISPLAY>,
+    // and never consults $XDG_RUNTIME_DIR. Probing for $XDG_RUNTIME_DIR/bus therefore reported a bus on
+    // CI runners that have a systemd user session but no bus address, which turned an environmental
+    // skip into a hard failure. So don't predict the outcome — connect, and read it off the failure.
+    //
+    // Only an unresolvable/malformed *address* means "no bus here". A failure to connect to an address
+    // that did resolve is a real defect and must stay a FAIL: that is exactly how a missing
+    // jdk.security.auth presents, since dbus-java's SASL EXTERNAL handshake needs it to read the
+    // caller's uid, and losing it kills every D-Bus connection — the portal included.
+    val connection = try {
+        DBusConnectionBuilder.forSessionBus().build()
+    } catch (e: AddressResolvingException) {
+        record(Status.SKIP, name, "no session D-Bus on this machine ($e)")
+        return
+    } catch (e: InvalidBusAddressException) {
+        record(Status.SKIP, name, "session D-Bus address is unusable ($e)")
+        return
+    } catch (e: Exception) {
+        record(Status.FAIL, name, "session D-Bus resolved but would not connect: $e")
         return
     }
     val result = runCatching {
-        DBusConnectionBuilder.forSessionBus().build().use { connection ->
-            val portal = connection.getRemoteObject(
+        connection.use {
+            val portal = it.getRemoteObject(
                 "org.freedesktop.portal.Desktop",
                 "/org/freedesktop/portal/desktop",
                 Properties::class.java,
