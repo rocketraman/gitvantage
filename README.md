@@ -43,7 +43,7 @@ GitVantage watches all your local repositories and gives you, in one place:
 - **A live status dashboard** — every repo with its branch, ahead/behind, and an at-a-glance state (clean · dirty · unpushed · behind · stale · **aging** · problems · **open issues**).
   Table or card view.
 - **Real-time updates** — a filesystem watcher re-scans a repo the moment its files change (even from the terminal or another tool), with a periodic background fetch and a manual refresh button for anything a watcher can't see (e.g. remote advances).
-- **Powerful triage** — filter by status (dirty, aging, unpushed, stale, problems, open issues, awaiting you, stashes, reminders, snoozed), group by tag namespace, sort by name / last commit / attention, and live-search across names, branches, and tags.
+- **Powerful triage** — filter by status (dirty, aging, unpushed, stale, problems, open issues, awaiting you, stashes, worktrees, reminders, snoozed), group by tag namespace, sort by name / last commit / attention, and live-search across names, branches, and tags.
 - **Namespaced tags + notes** — organize repos with `owner:me`, `lang:kotlin`, … (with inline autocomplete), and keep per-repo working notes.
   Bulk-tag, untag, and act on many repos at once.
 - **A rich per-repo detail pane**:
@@ -52,6 +52,7 @@ GitVantage watches all your local repositories and gives you, in one place:
   - **Remote branches** with last author, one-click checkout into a local tracking branch.
   - **Stashes** — apply, drop, and diff.
   - **Submodules** — see the target repo, how far the pointer is **behind**, uncommitted changes inside, and fetch / update-the-pointer / diff-the-pending-move / add-as-a-tracked-repo / deinit — plus a link up to the parent superproject when it's also tracked.
+  - **Worktrees** — every working tree sharing the repository, with the branch each holds, its last commit, and **uncommitted work sitting in another checkout** (invisible from this one), plus locked / stale-entry flags and a one-click `git worktree prune`. Linked worktrees say which checkout they came from, and any of them can be added as a tracked repo of its own.
 - **Safe git actions** — commit, push, fetch, fast-forward, branch switch, stash ops; destructive ones are confirmed, and everything the app runs is recorded in a **git console** (with git's colors).
 - **Reminders, snooze, and a notification outlook** — set reminders, snooze a repo's alerts for a while, and see a plain-language summary of exactly what will notify you and when (reminders, aging, stale, upstream advances), accounting for any active snooze.
   Desktop notifications fire for due reminders, for aging and stale threshold crossings, and — when you opt a repo in — when its upstream advances.

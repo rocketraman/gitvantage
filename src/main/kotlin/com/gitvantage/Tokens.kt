@@ -141,6 +141,9 @@ val statusPalette: Map<String, NsPalette> = mapOf(
     // Awaiting you is a call to action, so it sits in the amber family with Dirty and Aging.
     "ghawaiting" to NsPalette(hex("#a06f08"), hex("#fbf1d9"), hex("#ecd58a")),
     "stashes" to NsPalette(hex("#7a4f01"), hex("#f6eede"), hex("#e6d3a8")),
+    // Extra checkouts are structural information, like Stashes — an indigo, far enough from the
+    // three blues already in this row (Unpushed, Stale, Open Issues) to read as its own thing.
+    "worktrees" to NsPalette(hex("#4c4f9c"), hex("#ecedf8"), hex("#c9cbe9")),
     "reminders" to NsPalette(hex("#0e7490"), hex("#e0f2f5"), hex("#a8dbe4")),
     "notes" to NsPalette(hex("#556080"), hex("#eef0f5"), hex("#cdd3e0")),
     "snoozed" to NsPalette(hex("#813d9c"), hex("#f1eefb"), hex("#ddc9ef")),

@@ -43,6 +43,9 @@ data class Repo(
     val hasWorkflows: Boolean = false,  // repo defines .github/workflows (enables the Actions link)
     val hasSubmodules: Boolean = false,
     val superproject: String? = null,   // parent working-tree path if this repo is itself a submodule
+    val worktreeCount: Int = 0,         // working trees sharing this repository (main + linked, excluding a bare main)
+    val isWorktree: Boolean = false,    // this checkout is a linked worktree, not the main one
+    val worktreeMain: String? = null,   // the main working tree's path, when this is a linked worktree
     val isGitRepo: Boolean = true,
     val warning: String? = null,
     val stale: Boolean = false,
@@ -57,4 +60,12 @@ data class Repo(
     val note: String? = null,
     val files: List<ChangedFile> = emptyList(),
     val stashes: List<Stash> = emptyList(),
-)
+) {
+    /**
+     * True when this checkout shares its repository with other working trees — either it *is* a
+     * linked worktree, or it's the checkout others were added from. Written this way rather than
+     * `worktreeCount > 1` so a bare main repo with a single linked worktree still counts: the
+     * bare one isn't a working tree, so the count there is 1.
+     */
+    val hasWorktrees get() = isWorktree || worktreeCount > 1
+}

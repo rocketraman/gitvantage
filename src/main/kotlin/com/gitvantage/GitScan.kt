@@ -111,6 +111,14 @@ object RepoScanner {
                 Stash(label.ifEmpty { "stash" }, rest.ifEmpty { line })
             }.toList()
 
+        // Working trees sharing this repository. One cheap call; the per-worktree detail (dirty
+        // counts, last commits) is loaded lazily by the detail panel via WorktreeOps.load.
+        val worktrees = WorktreeOps.list(id)
+        val currentTree = worktrees.firstOrNull { it.isCurrent }
+        val isWorktree = currentTree != null && !currentTree.isMain
+        // A bare main repo isn't a working tree, so it doesn't count towards "how many checkouts".
+        val worktreeCount = worktrees.count { !it.bare }
+
         val log = gitOrNull(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct")?.trim().orEmpty()
         val logParts = log.split(SEP)
         val lastRel = logParts.getOrNull(0)?.trim().orEmpty()
@@ -135,6 +143,8 @@ object RepoScanner {
             hasSubmodules = File(dir, ".gitmodules").exists(),
             superproject = gitOrNull(dir, "rev-parse", "--show-superproject-working-tree")
                 ?.trim()?.takeIf { it.isNotEmpty() },
+            worktreeCount = worktreeCount, isWorktree = isWorktree,
+            worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null,
             warning = warning, stale = isStale, staleDays = staleDays,
             staleImportant = entry.staleImportant,
             snoozed = snoozed, snoozedFor = snoozedFor, reminder = reminder, note = note,

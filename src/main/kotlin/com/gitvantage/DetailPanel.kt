@@ -134,6 +134,10 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             }
         }
 
+        // If this checkout is a linked worktree, say which working tree it was added from — and
+        // link to that one when it's tracked too, mirroring the submodule/superproject link.
+        if (repo.isWorktree) repo.worktreeMain?.let { main -> WorktreeOfLine(state, main) }
+
         // Tags
         TagEditor(state, rv)
 
@@ -203,6 +207,9 @@ fun DetailPanel(state: AppState, rv: RepoView) {
 
         // Submodules (if any) — pointer status, target, fetch + pointer update
         if (repo.hasSubmodules) SubmodulesSection(state, rv)
+
+        // Working trees sharing this repository — which branch each holds, and how to reach it
+        if (repo.hasWorktrees) WorktreesSection(state, rv)
 
         // Branches (local), with status vs mainline + delete
         if (repo.isGitRepo) BranchesSection(state, rv)
@@ -690,6 +697,195 @@ private fun SubmoduleRow(state: AppState, id: String, s: SubmoduleOps.Submodule)
     }
 }
 
+/**
+ * "Added from <main checkout>" for a linked worktree. Clickable when that checkout is tracked too;
+ * otherwise it still names it, because knowing *which* repository this worktree belongs to is the
+ * point — a worktree's own folder name says nothing about it.
+ */
+@Composable
+private fun WorktreeOfLine(state: AppState, mainPath: String) {
+    val parentId = state.trackedRepoAt(mainPath)
+    val shape = RoundedCornerShape(8.dp)
+    var m = Modifier.padding(top = 8.dp).clip(shape).background(Tokens.tintBlue)
+    if (parentId != null) m = m.pointerHoverIcon(PointerIcon.Hand).onTap { state.selectedId = parentId }
+    PathTip(mainPath) {
+        Row(
+            m.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("⑂ Worktree of", 11.5.sp, state.accent, FontWeight.SemiBold)
+            Txt(java.io.File(mainPath).name, 11.5.sp, state.accent, FontWeight.Bold, font = MonoFont)
+            if (parentId == null) Txt("· not tracked", 11.sp, Tokens.muted2)
+        }
+    }
+}
+
+/**
+ * Every working tree attached to this repository: the main checkout plus each linked worktree,
+ * with the branch it holds and whether it's clean. Worktrees are how one repository holds several
+ * branches checked out at once, so the interesting question here isn't "is it behind" (they all
+ * share one object store and one set of branches) but "what's over there, and is it dirty" —
+ * uncommitted work in another worktree is invisible from this one.
+ *
+ * States git can report that would otherwise be silent get their own badge: `locked` (someone
+ * pinned it against pruning), `prunable`/missing (its directory is gone; the entry is stale).
+ */
+@Composable
+private fun WorktreesSection(state: AppState, rv: RepoView) {
+    LaunchedEffect(rv.id) { state.loadWorktrees(rv.id) }
+    if (state.worktreesRepo != rv.id || state.worktrees.isEmpty()) return
+    val stale = state.worktrees.count { it.prunable || it.missing }
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt("Worktrees", 12.5.sp, Tokens.text, FontWeight.Bold)
+            Txt("— ${state.worktrees.size}", 11.sp, Tokens.muted2)
+            InfoTip(
+                "Working trees sharing this repository — separate folders with different branches " +
+                    "checked out, all against one set of commits, branches, and stashes. " +
+                    "Uncommitted work in another worktree doesn't show in this repo's changed files.",
+            )
+            Spacer(Modifier.weight(1f))
+            // `git worktree prune` takes no path — it drops every stale entry at once — so this is
+            // a section action rather than a per-row one.
+            if (stale > 0) {
+                Txt(
+                    if (state.worktreesBusy) "Pruning…" else "Prune $stale stale",
+                    12.sp, state.accent, FontWeight.SemiBold,
+                    modifier = if (state.worktreesBusy) Modifier else Modifier.onTap {
+                        state.popup = Popup.Confirm(
+                            "Prune stale worktree entries?",
+                            "Forgets $stale worktree${if (stale == 1) "" else "s"} whose folder is gone. " +
+                                "Nothing on disk is deleted — the branches and commits they held are untouched.",
+                            "Prune", danger = false,
+                        ) { state.pruneWorktrees(rv.id) }
+                    },
+                )
+            }
+        }
+        state.worktrees.forEach { wt -> WorktreeRow(state, rv.id, wt) }
+    }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
+    val tracked = state.trackedRepoAt(wt.path)
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        // Line 1: folder name · what it holds · badges
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Txt(
+                wt.name, 12.5.sp,
+                if (wt.isCurrent) Tokens.text else Tokens.text2,
+                if (wt.isCurrent) FontWeight.Bold else FontWeight.SemiBold,
+                font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f),
+            )
+            if (wt.head.isNotEmpty()) Txt("@${wt.head.take(7)}", 10.5.sp, Tokens.muted2, font = MonoFont)
+            // "current" and the role badge are separate: the repo you're looking at is usually also
+            // the main checkout, and collapsing the two would drop the fact that it's the main one.
+            if (wt.isCurrent) BranchBadge("current", Tokens.cleanText, Tokens.cleanBg)
+            when {
+                wt.missing -> BranchBadge("missing", Tokens.redText, Tokens.tintRed)
+                wt.prunable -> BranchBadge("prunable", Tokens.amber, Tokens.tintAmber)
+                wt.isMain -> BranchBadge("main", Tokens.secondary, Tokens.segTrack)
+                else -> BranchBadge("linked", Tokens.muted, Tokens.segTrack)
+            }
+            if (wt.locked) {
+                HoverTip(
+                    "Locked against pruning" + (wt.lockReason?.let { ": $it" } ?: "") +
+                        ". Unlock it with `git worktree unlock` if you want git to reclaim it.",
+                ) { BranchBadge("locked", Tokens.purple, Tokens.tintPurple) }
+            }
+        }
+        // Line 2: the branch it holds · last commit there
+        Row(
+            Modifier.padding(start = 2.dp, top = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            when {
+                wt.bare -> Txt("bare — no working tree", 11.sp, Tokens.muted2)
+                wt.branch != null -> Txt("⎇ ${wt.branch}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
+                else -> Txt("⚠ detached HEAD", 11.sp, Tokens.muted2)
+            }
+            if (wt.lastRelative.isNotEmpty()) Txt("· ${wt.lastRelative}", 11.sp, Tokens.muted2, maxLines = 1)
+        }
+        // Line 3: where it lives (tooltip carries the full path when it's too long to fit)
+        PathTip(wt.path, Modifier.padding(start = 2.dp, top = 2.dp)) {
+            Txt("→ ${wt.path}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
+        }
+        // Uncommitted work over there is invisible from this repo's changed-files list, so say it.
+        // Not for the current worktree: its changes are the "Changed files" section further up,
+        // and repeating the count here would state the same thing twice.
+        if (wt.dirtyCount > 0 && !wt.isCurrent) {
+            Txt(
+                "⚠ ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} in this worktree",
+                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+            )
+        }
+        if (wt.missing) {
+            Txt(
+                "⚠ folder no longer on disk" + (wt.prunableReason?.let { " — $it" } ?: ""),
+                11.sp, Tokens.redText, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+            )
+        }
+        // Actions. Adding a worktree stays in the terminal — it needs a path chosen by hand — but
+        // removing one is offered here, since a stale worktree is exactly the kind of thing this
+        // list exists to surface. git refuses to remove the main working tree, and a missing one
+        // is Prune's job, not remove's.
+        val canVisit = !wt.isCurrent && !wt.missing && !wt.bare
+        val canRemove = !wt.isMain && !wt.missing && !wt.bare
+        if (canVisit || canRemove) {
+            androidx.compose.foundation.layout.FlowRow(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (canVisit) {
+                    if (tracked != null) BranchActionPill("Goto Repo") { state.selectedId = tracked }
+                    // Tracked worktrees inherit the repo's tags plus a "worktree" marker — they're
+                    // the same project, so they belong in the same filters and groups.
+                    else BranchActionPill("+ Add Repo") { state.trackRepoAt(wt.path, state.worktreeTags(id)) }
+                    BranchActionPill(">_ Terminal") { state.openTerminal(wt.path) }
+                    BranchActionPill("Folder") { state.openFolder(wt.path) }
+                }
+                if (canRemove && !state.worktreesBusy) {
+                    BranchActionPill("Remove", danger = true) {
+                        state.popup = Popup.Confirm(
+                            "Remove worktree “${wt.name}”?", removeWorktreeDetail(wt, tracked != null),
+                            "Remove", danger = true,
+                        ) { state.removeWorktree(id, wt) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What removing this worktree actually costs, in the order it matters: the folder goes, anything
+ * uncommitted in it goes with it, and — the reassurance that stops this reading as "delete my
+ * branch" — the branch itself stays. Each clause is conditional so the dialog only ever claims
+ * what's true of *this* worktree.
+ */
+private fun removeWorktreeDetail(wt: WorktreeOps.Worktree, tracked: Boolean): String = buildString {
+    // The dialog clamps to three lines, so this names the folder rather than spelling out its
+    // path — the full path is on the row the Remove button sits in, and an absolute path here
+    // would eat two of those lines and push the consequences off the bottom.
+    append("Deletes the folder “${wt.name}” and everything in it.")
+    if (wt.dirtyCount > 0) {
+        append(" ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} there will be lost.")
+    }
+    if (wt.locked) append(" It's locked — removing overrides that.")
+    wt.branch?.let { append(" The branch “$it” is kept.") }
+    if (wt.isCurrent) append(" It's the checkout you're viewing, so this repo closes and stops being tracked.")
+    else if (tracked) append(" Its tracked entry here is removed too.")
+}
+
 @Composable
 private fun BranchesSection(state: AppState, rv: RepoView) {
     LaunchedEffect(rv.id) { state.loadBranches(rv.id) }
@@ -851,15 +1047,16 @@ private fun BranchBadge(label: String, color: Color, bg: Color) {
         padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp))
 }
 
-/** A small, explicit "Switch"/"Checkout" action button on a branch row. */
+/** A small, explicit "Switch"/"Checkout" action button on a branch row. [danger] marks the ones
+ *  that delete something, so a destructive action never wears the same blue as a navigation one. */
 @Composable
-private fun BranchActionPill(label: String, onClick: () -> Unit) {
+private fun BranchActionPill(label: String, danger: Boolean = false, onClick: () -> Unit) {
     Box(
-        Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
-            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
+        Modifier.clip(RoundedCornerShape(6.dp)).background(if (danger) Tokens.tintRed else Tokens.tintBlue)
+            .border(1.dp, if (danger) Tokens.warnBorder else hex("#c3dcf8"), RoundedCornerShape(6.dp))
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 9.dp, vertical = 2.dp),
-    ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
+    ) { Txt(label, 10.5.sp, if (danger) Tokens.redText else Tokens.accent, FontWeight.SemiBold) }
 }
 
 /**

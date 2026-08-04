@@ -42,6 +42,13 @@ sealed interface Popup {
 }
 
 /**
+ * Marks a repo that's a linked worktree of another. Stored namespaced because [AppState.addTag]
+ * normalizes a bare tag the same way, so this is byte-identical to typing "worktree" into "+ Tag"
+ * — it filters, groups, and renders as the plain chip "worktree", with no second class of tag.
+ */
+const val WORKTREE_TAG = "tag:worktree"
+
+/**
  * Observable app state (README § State Management) plus the derived filtering,
  * grouping and count logic. Repos are populated by [RepoScanner] shelling out to
  * `git` off the UI thread; tags/notes are persisted to the [Registry].
@@ -128,6 +135,14 @@ class AppState(private val scope: CoroutineScope) {
     var submodules by mutableStateOf<List<SubmoduleOps.Submodule>>(emptyList())
         private set
     var submodulesBusy by mutableStateOf(false)
+        private set
+
+    // Working trees for the currently-open detail panel (loaded lazily on selection).
+    var worktreesRepo by mutableStateOf<String?>(null)
+        private set
+    var worktrees by mutableStateOf<List<WorktreeOps.Worktree>>(emptyList())
+        private set
+    var worktreesBusy by mutableStateOf(false)
         private set
 
     // Diff viewer (GitHub-style overlay).
@@ -1053,6 +1068,68 @@ class AppState(private val scope: CoroutineScope) {
         }
     }
 
+    // ---- worktrees (detail panel) ----
+
+    fun loadWorktrees(id: String) {
+        if (worktreesRepo == id && worktrees.isNotEmpty()) return
+        worktreesRepo = id
+        worktrees = emptyList()
+        scope.launch {
+            val list = withContext(Dispatchers.IO) { WorktreeOps.load(id) }
+            if (worktreesRepo == id) worktrees = list
+        }
+    }
+
+    private fun reloadWorktrees(id: String) {
+        scope.launch {
+            val list = withContext(Dispatchers.IO) { WorktreeOps.load(id) }
+            if (worktreesRepo == id) worktrees = list
+        }
+    }
+
+    /**
+     * `git worktree remove` — delete a worktree's folder from disk. Destructive; the detail panel
+     * confirms first, spelling out any uncommitted work that goes with it.
+     *
+     * Removing the worktree you're *viewing* is allowed: the command just has to run from a
+     * different working tree, and afterwards this repo's own entry points at a folder that no
+     * longer exists, so it's untracked too (registry-only — nothing else on disk is touched).
+     */
+    fun removeWorktree(id: String, wt: WorktreeOps.Worktree) {
+        if (worktreesBusy) return
+        val runFrom = if (!wt.isCurrent) id
+        else worktrees.firstOrNull { !it.isCurrent && !it.missing }?.path
+        if (runFrom == null) { toast("No other working tree to run the removal from"); return }
+        val trackedId = trackedRepoAt(wt.path)
+        worktreesBusy = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) {
+                WorktreeOps.remove(runFrom, wt.path, force = wt.dirtyCount > 0, locked = wt.locked)
+            }
+            toast(r.message)
+            if (r.ok) trackedId?.let { removeRepo(it) }
+            // Refresh whichever tracked repo the removal ran from — its worktree count just changed.
+            trackedRepoAt(runFrom)?.let { other ->
+                reloadWorktrees(other)
+                rescanRepos(listOf(other), fetch = false)
+            }
+            worktreesBusy = false
+        }
+    }
+
+    /** `git worktree prune` — forget the entries whose directory is gone. Repo-wide, not per-path,
+     *  which is why it's a section-level action rather than a per-row one. */
+    fun pruneWorktrees(id: String) {
+        if (worktreesBusy) return
+        worktreesBusy = true
+        scope.launch {
+            toast(withContext(Dispatchers.IO) { WorktreeOps.prune(id) }.message)
+            reloadWorktrees(id)
+            rescanRepos(listOf(id), fetch = false)   // the worktree count just changed
+            worktreesBusy = false
+        }
+    }
+
     /** True if a path is already tracked (used by the submodule "Add Repo" action). */
     fun isTracked(path: String): Boolean = entries.containsKey(path)
 
@@ -1064,11 +1141,32 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /** Track a submodule's own repo as a first-class tracked entry. */
-    fun trackSubmodule(parentId: String, sub: SubmoduleOps.Submodule) {
-        val path = File(parentId, sub.path).absolutePath
+    fun trackSubmodule(parentId: String, sub: SubmoduleOps.Submodule) =
+        trackRepoAt(File(parentId, sub.path).absolutePath)
+
+    /**
+     * The tags a worktree starts life with when it's tracked as a repo of its own: everything its
+     * main checkout carries, plus a "worktree" marker.
+     *
+     * Inheriting matters because the copies are the *same project* — a worktree of a repo tagged
+     * `owner:me lang:kotlin` is still owned by you and still Kotlin, and without the tags it drops
+     * out of every filter and grouping that found the original. The marker is what keeps them
+     * separable again afterwards.
+     *
+     * Falls back to the repo it was added from when the main checkout isn't tracked; that's the
+     * same repository either way, so its tags are the right ones to copy.
+     */
+    fun worktreeTags(addedFrom: String): List<String> {
+        val source = worktrees.firstOrNull { it.isMain }?.path?.let { trackedRepoAt(it) } ?: addedFrom
+        return (tagsOf(source) + WORKTREE_TAG).distinct()
+    }
+
+    /** Register a checkout the app already knows about — a submodule, a linked worktree — as a
+     *  tracked repo of its own, then select it. */
+    fun trackRepoAt(path: String, tags: List<String> = emptyList()) {
         if (entries.containsKey(path)) { toast("Already added"); return }
         scope.launch {
-            val e = RegistryEntry(path, addedAt = java.time.Instant.now())
+            val e = RegistryEntry(path, tags = tags, addedAt = java.time.Instant.now())
             entries[path] = e; order.add(path)
             persist(); syncWatches()
             withContext(Dispatchers.Default) { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() } }
@@ -1320,11 +1418,13 @@ class AppState(private val scope: CoroutineScope) {
             prevBehind[s.id] = s.behind   // keep baseline current so auto-refresh won't false-alert
         }
         reconcileDirtySince(scanned)
-        // Keep the open detail panel's branch + submodule lists in sync — a rescan (from a git
-        // action or an fs-watcher event, including submodule updates made outside the app) can
-        // change branch tracking state and submodule pointers, so reload those too.
+        // Keep the open detail panel's branch, submodule + worktree lists in sync — a rescan (from
+        // a git action or an fs-watcher event, including submodule updates made outside the app)
+        // can change branch tracking state, submodule pointers, and which worktrees exist, so
+        // reload those too.
         branchesRepo?.let { open -> if (open in ids) reloadBranches(open) }
         submodulesRepo?.let { open -> if (open in ids) reloadSubmodules(open) }
+        worktreesRepo?.let { open -> if (open in ids) reloadWorktrees(open) }
     }
 
     /** Track when each repo's working tree first went dirty (persisted), so the "Aging" signal and
@@ -1401,6 +1501,7 @@ class AppState(private val scope: CoroutineScope) {
             "ghopen" to vms.count { it.openIssues > 0 },
             "ghawaiting" to vms.count { it.awaitingYou > 0 },
             "stashes" to vms.count { it.repo.stash > 0 },
+            "worktrees" to vms.count { it.repo.hasWorktrees },
             "reminders" to vms.count { it.hasReminder },
             "notes" to vms.count { noteOf(it.id).isNotBlank() },
             "snoozed" to vms.count { it.snoozed },
@@ -1427,6 +1528,7 @@ class AppState(private val scope: CoroutineScope) {
         "ghopen" -> v.openIssues > 0
         "ghawaiting" -> v.awaitingYou > 0
         "stashes" -> v.repo.stash > 0
+        "worktrees" -> v.repo.hasWorktrees
         "reminders" -> v.hasReminder
         "notes" -> noteOf(v.id).isNotBlank()
         "snoozed" -> v.snoozed

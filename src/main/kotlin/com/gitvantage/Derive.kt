@@ -149,6 +149,12 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
             else add(Badge("stale", accent, C.tintBlue))
         }
         if (aging) add(Badge("aging ${repo.dirtyFor ?: ""}".trim(), C.amber, C.tintAmber))
+        // Working trees. Informational (blue), never part of the accent cascade — extra checkouts
+        // are a workflow, not a problem. A linked worktree says so instead of showing the count:
+        // "you are not on the main checkout" is the fact that changes how you read the row, and
+        // the detail panel carries the full list either way.
+        if (repo.isWorktree) add(Badge("⑂ worktree", accent, C.tintBlue))
+        else if (repo.worktreeCount > 1) add(Badge("⑂ ${repo.worktreeCount} worktrees", accent, C.tintBlue))
         // Open issues/PRs. Two badges at most: the count (always, when tracked) and — when some
         // are waiting on you — a separate louder one, because "12 open" and "1 of them needs you"
         // are different facts and collapsing them into one number hides the actionable half.
