@@ -85,7 +85,12 @@ private fun checkFsWatcher() = runBlocking {
         return@runBlocking
     }
 
-    val dir = createTempDirectory("gitvantage-smoke")
+    // Watch the *canonical* path. macOS hands out temp dirs under /var/folders, where /var is a
+    // symlink to /private/var, and this check exists to prove the native callback path delivers
+    // events in the packaged image — not to test how the watcher handles symlinks. Watching the
+    // unresolved path conflated the two: on macOS it silently delivered nothing, which reads here
+    // as a stripped callback. Keep that a separate concern, and a separate bug report.
+    val dir = createTempDirectory("gitvantage-smoke").toRealPath()
     var events = 0
     val collector = launch(Dispatchers.IO) {
         runCatching { watcher.events.collect { events++ } }
@@ -102,8 +107,11 @@ private fun checkFsWatcher() = runBlocking {
         Files.writeString(dir.resolve("smoke$i.txt"), "smoke $i")
         delay(200)
     }
-    // Native events arrive asynchronously; give them room before declaring failure.
-    repeat(20) { if (events == 0) delay(100) }
+    // Native events arrive asynchronously; give them room before declaring failure. The old 2s
+    // budget was tuned on inotify, which is effectively immediate. macOS FSEvents coalesces and
+    // can sit on a change for seconds, so a slow delivery there is indistinguishable from none —
+    // hence the wider window. It only costs wall-clock on a run that is already failing.
+    repeat(100) { if (events == 0) delay(100) }
     collector.cancel()
     runCatching { registration.close() }
     runCatching { dir.toFile().deleteRecursively() }
@@ -113,7 +121,8 @@ private fun checkFsWatcher() = runBlocking {
     } else {
         record(
             Status.FAIL, name,
-            "registered successfully but delivered NO events — the native callback path is stripped",
+            "registered successfully but delivered NO events after 10s for $dir " +
+                "— the native callback path is stripped",
         )
     }
 }
