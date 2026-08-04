@@ -99,7 +99,6 @@ object Tokens {
     val cleanBg = hex("#e9f7ef"); val cleanBorder = hex("#b8e6cd"); val cleanText = hex("#1a8049")
     val warnBg = hex("#fceaea"); val warnBorder = hex("#f2b8b9")
     val snoozeBannerBg = hex("#f5f1fb"); val snoozeBannerBorder = hex("#ddc9ef"); val snoozeBannerText = hex("#6c2d8f")
-    val stashCardBg = hex("#f8f0fb"); val stashCardBorder = hex("#e6ccf0")
 
     // Window controls
     val winCtrlBg = hex("#e4e3e0")

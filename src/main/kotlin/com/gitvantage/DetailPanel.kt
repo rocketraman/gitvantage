@@ -205,7 +205,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         if (untracked.isNotEmpty()) FileSection("Untracked", Tokens.untrackedHdr, Tokens.untrackedDot, untracked, state.accent, false, openDiff)
 
         // Stashes
-        if (repo.stashes.isNotEmpty()) StashSection(state, repo.id, repo.stashes, state.accent)
+        if (repo.stashes.isNotEmpty()) StashSection(state, repo.id, repo.stashes)
 
         // Submodules (if any) — pointer status, target, fetch + pointer update
         if (repo.hasSubmodules) SubmodulesSection(state, rv)
@@ -581,33 +581,57 @@ private fun FileSection(title: String, titleColor: Color, dotColor: Color, files
     }
 }
 
+/**
+ * Work set aside on this repo. Stashes are easy to forget and expensive to forget, so the section
+ * earns its place high in the panel — but each stash used to be a bordered, purple-tinted card,
+ * which made two of them louder than everything below including the branch you're actually on.
+ * Prominence belongs to the *section*, which the ⚑ and the purple heading still carry; the rows
+ * inside it are list rows like every other list in this panel.
+ */
 @Composable
-private fun StashSection(state: AppState, id: String, stashes: List<Stash>, accent: Color) {
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Txt("⚑ Stashes", 12.5.sp, Tokens.purple, FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
+private fun StashSection(state: AppState, id: String, stashes: List<Stash>) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt("⚑ Stashes", 12.5.sp, Tokens.purple, FontWeight.Bold)
+            Txt("— ${stashes.size}", 11.sp, Tokens.muted2)
+        }
         stashes.forEach { st ->
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                    .background(Tokens.stashCardBg).border(1.dp, Tokens.stashCardBorder, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Txt(st.label, 11.sp, Tokens.purple, FontWeight.SemiBold, font = MonoFont)
-                Txt(st.msg, 12.5.sp, Tokens.text2, modifier = Modifier.weight(1f))
-                Txt("Diff", 12.sp, accent, FontWeight.Medium, modifier = Modifier.onTap { state.openStashDiff(id, st.label) })
-                Txt("Apply", 12.sp, accent, FontWeight.Medium, modifier = Modifier.onTap {
-                    state.popup = Popup.Confirm(
-                        "Apply ${st.label}?",
-                        "Restores this stash's changes into the working tree (the stash is kept).",
-                        "Apply", danger = false,
-                    ) { state.stashApply(id, st.label) }
-                })
-                Txt("Drop", 12.sp, Tokens.redText, FontWeight.Medium, modifier = Modifier.onTap {
-                    state.popup = Popup.Confirm("Drop ${st.label}?", "Permanently deletes this stash.", "Drop", danger = true) {
-                        state.stashDrop(id, st.label)
+            HoverRow { hovered ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Row(
+                        Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Txt(st.label, 11.sp, Tokens.purple, FontWeight.SemiBold, font = MonoFont)
+                        // Gives way to the actions when they arrive, rather than pushing them off —
+                        // the same bargain the branch rows make with a long upstream ref.
+                        Txt(st.msg, 12.sp, Tokens.text2, modifier = Modifier.weight(1f, fill = false))
                     }
-                })
+                    RowActions(hovered) {
+                        RowAction("Diff") { state.openStashDiff(id, st.label) }
+                        RowAction("Apply") {
+                            state.popup = Popup.Confirm(
+                                "Apply ${st.label}?",
+                                "Restores this stash's changes into the working tree (the stash is kept).",
+                                "Apply", danger = false,
+                            ) { state.stashApply(id, st.label) }
+                        }
+                        RowAction("Drop", danger = true) {
+                            state.popup = Popup.Confirm(
+                                "Drop ${st.label}?", "Permanently deletes this stash.", "Drop", danger = true,
+                            ) { state.stashDrop(id, st.label) }
+                        }
+                    }
+                }
             }
         }
     }
