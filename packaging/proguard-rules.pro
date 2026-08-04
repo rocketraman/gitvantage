@@ -8,11 +8,23 @@
 # release build: dangling META-INF/services registrations, and bytecode that won't verify.
 #
 # Every rule below is one the release gates cannot prove unnecessary, so each stays until it can
-# be retired against evidence rather than a changelog. The filesystem-watcher and JNA rules that
-# used to live here were removed on the Nucleus 2.1.9 upgrade ("obfuscation safety with JNI
-# bridges"): all 49 dev.nucleusframework.fswatcher classes — including the FsWatchEvent subclasses
-# that the shrinker previously deleted — now survive without them, and smokeTestReleaseImage
-# exercises the watcher for real (it fails if no event is delivered).
+# be retired against evidence rather than a changelog.
+#
+# The filesystem-watcher and JNA rules were removed on the Nucleus 2.1.9 upgrade ("obfuscation
+# safety with JNI bridges") on the grounds that the dev.nucleusframework.fswatcher classes now
+# survive unaided and smokeTestReleaseImage would catch it if they didn't. That was sound but, at
+# the time, checked on Linux and Windows only: the release build could not produce a macOS image at
+# all (the app-image layout was hard-coded to the Linux shape, and the dry-run had no valid version
+# to give jpackage on macOS), so the gate the removal leaned on had never run there.
+#
+# Both are fixed now, and the removal has been re-checked with macOS actually building: the watcher
+# delivers 3 events on all five matrix jobs with these rules absent. So they stay gone — this time
+# on evidence from every platform that ships.
+#
+# Worth knowing if the watcher ever looks broken on macOS again: it is not necessarily ProGuard. A
+# watch on a symlinked path (/var/folders temp dirs, and anything a user symlinks) registers fine
+# and then delivers nothing, which presents exactly like a stripped callback. That cost two round
+# trips through this file before it was pinned down.
 #
 # Nucleus ships exactly one consumer rule of its own, for Tao's MainDispatcherFactory
 # (META-INF/proguard/ inside nucleus.decorated-window-tao). It covers none of the below.
