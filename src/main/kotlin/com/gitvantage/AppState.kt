@@ -233,13 +233,34 @@ class AppState(private val scope: CoroutineScope) {
         syncWatches()
     }
 
+    /**
+     * The path to hand the watcher for a repo, with symlinks resolved.
+     *
+     * macOS delivers filesystem events with *canonical* paths (FSEvents), while the watcher matches
+     * events against the root it was given by prefix. Hand it a symlinked path and the two never
+     * line up: registration succeeds, and then no event ever arrives. Silently — the repo just
+     * stops refreshing on disk changes. Linux and Windows echo back whatever path they were given,
+     * so their prefix always matches and this only ever bites on macOS.
+     *
+     * Not exotic: /tmp and /var are symlinks on macOS, and a repo checked out under either — or
+     * under any symlink the user made themselves — hits it.
+     *
+     * Only the watch root is resolved. `name` stays the repo id, so event routing and the watchRegs
+     * keys are unaffected (see startFsWatcher, which routes on source.name alone). If the repo has
+     * since moved, fall back to the raw path and let watch() fail the way it always did.
+     */
+    private fun watchRootFor(id: String): Path {
+        val raw = Path.of(id)
+        return runCatching { raw.toRealPath() }.getOrDefault(raw)
+    }
+
     /** Register/unregister repo watches so they match the tracked set. */
     private fun syncWatches() {
         val w = fsWatcher ?: return
         val want = order.toSet()
         want.forEach { id ->
             if (id !in watchRegs) {
-                runCatching { watchRegs[id] = w.watch(Path.of(id), true, id) }  // name = id, for event mapping
+                runCatching { watchRegs[id] = w.watch(watchRootFor(id), true, id) }  // name = id, for event mapping
             }
         }
         (watchRegs.keys - want).forEach { id ->
