@@ -111,6 +111,8 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont)
+            // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
+            if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
             if (rv.ahead > 0) Txt("↑${rv.ahead} ahead", 12.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
             if (rv.behind > 0) Txt("↓${rv.behind} behind", 12.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
         }
@@ -822,6 +824,9 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
                 else -> Txt("⚠ detached HEAD", 11.sp, Tokens.muted2)
             }
             if (wt.lastRelative.isNotEmpty()) Txt("· ${wt.lastRelative}", 11.sp, Tokens.muted2, maxLines = 1)
+            // The branch a worktree holds is one you can't reach from here (git refuses to check it
+            // out twice), so its name is exactly what you'd want to paste elsewhere.
+            wt.branch?.let { CopyPill(it, modifier = Modifier.padding(start = 2.dp)) }
         }
         // Line 3: where it lives (tooltip carries the full path when it's too long to fit)
         PathTip(wt.path, Modifier.padding(start = 2.dp, top = 2.dp)) {
@@ -1024,6 +1029,7 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                 }
             }
             Spacer(Modifier.weight(1f))
+            CopyPill(b.name)
             if (!b.isMainline) {
                 BranchActionPill("Diff") { state.openBranchDiff(id, b.name, b.name) }
                 BranchActionPill("Log") { state.openBranchLog(id, b.name, b.name) }
@@ -1097,6 +1103,9 @@ private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBra
         ) {
             Txt("${rb.author} · ${rb.lastRelative}", 10.5.sp, Tokens.muted2, maxLines = 1)
             Spacer(Modifier.weight(1f))
+            // The full ref, as the row above shows it — copying something other than what's on
+            // screen would be a surprise. Checkout is the button for wanting the short name.
+            CopyPill(rb.name)
             if (!isMainline) {
                 BranchActionPill("Diff") { state.openBranchDiff(id, rb.name, rb.name) }
                 BranchActionPill("Log") { state.openBranchLog(id, rb.name, rb.name) }

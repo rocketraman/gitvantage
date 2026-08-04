@@ -59,7 +59,7 @@ object RepoScanner {
         // Branch (empty/null when detached)
         val symbolic = gitOrNull(dir, "symbolic-ref", "--short", "-q", "HEAD")?.trim().orEmpty()
         val detached = symbolic.isEmpty()
-        val branch = if (detached) "(detached)" else symbolic
+        val branch = if (detached) DETACHED_BRANCH else symbolic
 
         // Upstream + ahead/behind. Prefer a configured @{upstream}; else fall back to
         // origin/<branch> if it exists (a branch that was pushed but never `-u`-tracked).

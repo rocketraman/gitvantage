@@ -28,12 +28,8 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,7 +43,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -210,7 +205,7 @@ private fun DiffItemRow(item: DiffOps.Item) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Txt(item.path, 12.5.sp, Tokens.text, FontWeight.Bold, font = MonoFont, modifier = Modifier.weight(1f))
-            CopyPill(item.path)
+            CopyPill(item.path, "Copy path")
             if (item.added > 0) Txt("+${item.added}", 11.sp, hex("#1a7f37"), FontWeight.SemiBold, font = MonoFont)
             if (item.removed > 0) Txt("-${item.removed}", 11.sp, hex("#b0181f"), FontWeight.SemiBold, font = MonoFont)
         }
@@ -222,26 +217,6 @@ private fun DiffItemRow(item: DiffOps.Item) {
             Box(Modifier.width(1.dp).fillMaxHeight().background(Tokens.borderEd))
             SideCell(item.right, Modifier.weight(1f))
         }
-    }
-}
-
-/** A small pill next to a diff file header that copies the full path+filename to the clipboard. */
-@Composable
-private fun CopyPill(path: String) {
-    val clipboard = LocalClipboardManager.current
-    var copied by remember(path) { mutableStateOf(false) }
-    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1200); copied = false } }
-    val shape = RoundedCornerShape(6.dp)
-    Row(
-        Modifier.clip(shape)
-            .background(if (copied) Tokens.tintGreen else Tokens.groupHeaderBg)
-            .border(1.dp, if (copied) hex("#9fd8b0") else Tokens.groupHeaderBorder, shape)
-            .onTap { clipboard.setText(AnnotatedString(path)); copied = true }
-            .padding(horizontal = 7.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Txt(if (copied) "✓ Copied" else "⧉ Copy path", 10.5.sp,
-            if (copied) hex("#1a7f37") else Tokens.muted, FontWeight.SemiBold)
     }
 }
 

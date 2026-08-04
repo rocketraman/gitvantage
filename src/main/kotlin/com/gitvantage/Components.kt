@@ -22,7 +22,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,12 +37,15 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 /** A 1px bottom hairline, like CSS `border-bottom`. */
 fun Modifier.drawBottomBorder(color: Color): Modifier = this.drawBehind {
@@ -243,6 +250,36 @@ fun HoverTip(text: String, modifier: Modifier = Modifier, content: @Composable (
 fun InfoTip(text: String, modifier: Modifier = Modifier) {
     HoverTip(text, modifier) {
         Txt("ⓘ", 12.sp, Tokens.muted2, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand))
+    }
+}
+
+/**
+ * A pill that puts [value] on the clipboard and confirms it in place — the label swaps to
+ * "✓ Copied" for a moment. The confirmation is local rather than a toast because the toast
+ * reports git operations, and copying isn't one; it also keeps the answer next to the thing
+ * that was copied, which matters when a list has many of these.
+ *
+ * Deliberately one look everywhere, in the blue of the action pills it sits among: copying is
+ * the same act whether the thing is a branch, a remote ref or a file path, and a pill that
+ * changed colour by neighbourhood read as a different control each time.
+ */
+@Composable
+fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(value) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        modifier.clip(shape)
+            .background(if (copied) Tokens.tintGreen else Tokens.tintBlue, shape)
+            .border(1.dp, if (copied) hex("#9fd8b0") else hex("#c3dcf8"), shape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onTap { clipboard.setText(AnnotatedString(value)); copied = true }
+            .padding(horizontal = 9.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Txt(if (copied) "✓ Copied" else "⧉ $label", 10.5.sp,
+            if (copied) hex("#1a7f37") else Tokens.accent, FontWeight.SemiBold)
     }
 }
 

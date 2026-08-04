@@ -22,6 +22,9 @@ data class RepoCandidate(val path: String, val name: String, val alreadyTracked:
 
 data class Reminder(val text: String, val due: String, val overdue: Boolean = false)
 
+/** What [Repo.branch] reads when HEAD isn't on a branch — a label for the UI, not a branch name. */
+const val DETACHED_BRANCH = "(detached)"
+
 data class Repo(
     val id: String,
     val name: String,
@@ -69,4 +72,11 @@ data class Repo(
      * bare one isn't a working tree, so the count there is 1.
      */
     val hasWorktrees get() = isWorktree || worktreeCount > 1
+
+    /**
+     * True when [branch] is an actual branch name rather than a stand-in — "(detached)" for a
+     * detached HEAD, "—" for a folder that isn't a git repo. Those read fine as labels but are
+     * meaningless to copy or hand back to git.
+     */
+    val hasNamedBranch get() = isGitRepo && branch != DETACHED_BRANCH
 }
