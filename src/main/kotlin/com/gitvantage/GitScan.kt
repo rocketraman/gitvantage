@@ -111,13 +111,16 @@ object RepoScanner {
                 Stash(label.ifEmpty { "stash" }, rest.ifEmpty { line })
             }.toList()
 
-        // Working trees sharing this repository. One cheap call; the per-worktree detail (dirty
-        // counts, last commits) is loaded lazily by the detail panel via WorktreeOps.load.
-        val worktrees = WorktreeOps.list(id)
+        // Working trees sharing this repository. One cheap call when there are none but this one;
+        // when there are others it also looks inside them, because work sitting in another
+        // checkout is invisible from here and the row has no other way to learn of it. The rest of
+        // the per-worktree detail (last commits, merged-ness) stays lazy — see WorktreeOps.load.
+        val worktrees = WorktreeOps.listWithWork(id)
         val currentTree = worktrees.firstOrNull { it.isCurrent }
         val isWorktree = currentTree != null && !currentTree.isMain
         // A bare main repo isn't a working tree, so it doesn't count towards "how many checkouts".
         val worktreeCount = worktrees.count { !it.bare }
+        val worktreesUnlanded = worktrees.count { !it.isCurrent && !it.bare && !it.missing && it.unlanded }
 
         val log = gitOrNull(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct")?.trim().orEmpty()
         val logParts = log.split(SEP)
@@ -145,6 +148,7 @@ object RepoScanner {
                 ?.trim()?.takeIf { it.isNotEmpty() },
             worktreeCount = worktreeCount, isWorktree = isWorktree,
             worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null,
+            worktreesUnlanded = worktreesUnlanded,
             warning = warning, stale = isStale, staleDays = staleDays,
             staleImportant = entry.staleImportant,
             snoozed = snoozed, snoozedFor = snoozedFor, reminder = reminder, note = note,

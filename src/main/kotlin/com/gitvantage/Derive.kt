@@ -155,6 +155,15 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
         // the detail panel carries the full list either way.
         if (repo.isWorktree) add(Badge("⑂ worktree", accent, C.tintBlue))
         else if (repo.worktreeCount > 1) add(Badge("⑂ ${repo.worktreeCount} worktrees", accent, C.tintBlue))
+        // The exception to "worktrees are workflow, not a problem": another checkout holding
+        // uncommitted or unmerged work. That work is invisible from this row's changed-file counts
+        // and a `worktree remove` would take it with it, so it gets its own amber badge rather than
+        // recolouring the blue count — "2 worktrees" and "1 of them has work in it" are different
+        // facts, the same way the issue count and "awaiting you" are kept apart above. It stays
+        // visible while snoozed; only its pull on the row's colour is silenced.
+        if (repo.worktreesUnlanded > 0) {
+            add(Badge("⑂ ${repo.worktreesUnlanded} unlanded", C.amber, C.tintAmber))
+        }
         // Open issues/PRs. Two badges at most: the count (always, when tracked) and — when some
         // are waiting on you — a separate louder one, because "12 open" and "1 of them needs you"
         // are different facts and collapsing them into one number hides the actionable half.
@@ -209,7 +218,11 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
         // commits to pull, the repo has simply been quiet (stable code sits untouched), or it has
         // open issues nobody is waiting on you for.
         repo.warning != null || issueLevel == IssueLevel.CRITICAL -> { acc = C.red; accBg = C.tintRed }
+        // Unlanded work in another checkout is amber for the reason the tier exists — it is work
+        // sitting on this machine — even though it isn't sitting in *this* folder. Snoozing drops
+        // it out, like every other call to action.
         isDirty || repo.ahead > 0 || staleImportant ||
+            (repo.worktreesUnlanded > 0 && !snoozed) ||
             issueLevel == IssueLevel.IMPORTANT -> { acc = C.amber; accBg = C.tintAmber }
         repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = C.tintBlue }
         else -> { acc = C.green; accBg = C.tintGreen }

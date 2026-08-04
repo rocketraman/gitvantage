@@ -46,6 +46,7 @@ data class Repo(
     val worktreeCount: Int = 0,         // working trees sharing this repository (main + linked, excluding a bare main)
     val isWorktree: Boolean = false,    // this checkout is a linked worktree, not the main one
     val worktreeMain: String? = null,   // the main working tree's path, when this is a linked worktree
+    val worktreesUnlanded: Int = 0,     // *other* working trees holding uncommitted or unmerged work
     val isGitRepo: Boolean = true,
     val warning: String? = null,
     val stale: Boolean = false,

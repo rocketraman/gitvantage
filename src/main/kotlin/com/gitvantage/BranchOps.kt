@@ -31,7 +31,18 @@ object BranchOps {
         val upstreamAhead: Int,       // local commits the upstream doesn't have
         val upstreamBehind: Int,      // upstream commits the local branch doesn't have
         val upstreamGone: Boolean,    // upstream was configured but no longer exists on the remote
-    )
+        /**
+         * The working tree that has this branch checked out, when it isn't this one. git allows a
+         * branch in exactly one tree at a time and refuses to switch to a branch held elsewhere,
+         * so this is what makes "Switch" unavailable rather than merely failing.
+         */
+        val worktreePath: String? = null,
+    ) {
+        /** Held by another working tree — see [worktreePath]. */
+        val inOtherWorktree get() = worktreePath != null
+        /** Just the folder name of [worktreePath], which is how the worktree list names it too. */
+        val worktreeName get() = worktreePath?.let { File(it).name }
+    }
 
     data class RemoteBranch(
         val name: String,        // full short ref, e.g. "origin/feature/login"
@@ -46,10 +57,14 @@ object BranchOps {
         val dir = File(repoPath)
         if (!File(dir, ".git").exists()) return@withContext emptyList()
 
-        // name, unix date, "*" for HEAD, relative date, upstream short, upstream track ("[ahead N, behind M]")
+        // name, unix date, "*" for HEAD, relative date, upstream short, upstream track
+        // ("[ahead N, behind M]"), and the working tree holding the branch (empty unless one does).
+        // %(worktreepath) needs git 2.23 — older git fails the whole command and the branch list
+        // comes back empty, which is the same way this file already treats a git too old to ask.
         val raw = git(dir, "for-each-ref", "--sort=-committerdate",
-            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)",
+            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)",
             "refs/heads")
+        val here = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
         val rows = raw.lineSequence().filter { it.isNotBlank() }.map { line ->
             val p = line.split(SEP)
             Row(
@@ -59,6 +74,11 @@ object BranchOps {
                 relative = p.getOrElse(3) { "" },
                 upstream = p.getOrNull(4)?.takeIf { it.isNotBlank() },
                 track = p.getOrElse(5) { "" },
+                // git names the current tree here too; only *another* tree blocks a switch, so
+                // this repo's own path is dropped rather than reported back at the user.
+                worktree = p.getOrNull(6)?.trim()?.takeIf {
+                    it.isNotEmpty() && runCatching { File(it).canonicalPath }.getOrDefault(it) != here
+                },
             )
         }.filter { it.name.isNotEmpty() && !it.name.startsWith("gitbutler/") }.toList()   // ignore GitButler's virtual branches
         if (rows.isEmpty()) return@withContext emptyList()
@@ -80,6 +100,7 @@ object BranchOps {
             Branch(
                 r.name, r.isCurrent, isMainline, behind, ahead, merged, stale, r.relative,
                 upstream = r.upstream, upstreamAhead = uAhead, upstreamBehind = uBehind, upstreamGone = gone,
+                worktreePath = r.worktree,
             )
         }
     }
@@ -159,7 +180,7 @@ object BranchOps {
 
     private data class Row(
         val name: String, val epoch: Long, val isCurrent: Boolean, val relative: String,
-        val upstream: String?, val track: String,
+        val upstream: String?, val track: String, val worktree: String? = null,
     )
 
     private fun count(dir: File, range: String): Int =

@@ -800,6 +800,15 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
                         ". Unlock it with `git worktree unlock` if you want git to reclaim it.",
                 ) { BranchBadge("locked", Tokens.purple, Tokens.tintPurple) }
             }
+            // Which of these you made and which a coding session made, since the folder name —
+            // a generated slug like "copy-branch-names-clipboard-84cbcf" — can't tell you.
+            if (wt.agent) {
+                HoverTip(
+                    "Created by a Claude Code session, under the repo's .claude/worktrees/. " +
+                        "Sessions offer to remove theirs on exit; the ones kept stay here, " +
+                        "holding whatever was left in them.",
+                ) { BranchBadge("agent", state.accent, Tokens.tintBlue) }
+            }
         }
         // Line 2: the branch it holds · last commit there
         Row(
@@ -824,6 +833,16 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
         if (wt.dirtyCount > 0 && !wt.isCurrent) {
             Txt(
                 "⚠ ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} in this worktree",
+                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+            )
+        }
+        // Committed here and nowhere else. The other half of "what would removing this cost" — and
+        // the half that's easy to miss, since committed work *looks* safe. Suppressed for the
+        // current worktree on the same grounds as the dirty count above: the Branches section
+        // right below already carries this checkout's distance from mainline as "↑N".
+        if (wt.unmerged > 0 && !wt.branchMerged && !wt.isCurrent) {
+            Txt(
+                "⚠ ${wt.unmerged} commit${if (wt.unmerged == 1) "" else "s"} not in ${wt.mainline ?: "mainline"}",
                 11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
             )
         }
@@ -860,6 +879,21 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
                             "Remove", danger = true,
                         ) { state.removeWorktree(id, wt) }
                     }
+                    // `git worktree remove` deliberately keeps the branch, which is right for a
+                    // worktree you made — but an agent worktree's `claude/…` branch existed only to
+                    // hold that session's work, so once it has landed the branch is residue that
+                    // "Remove" alone leaves behind forever. Offered as its own pill rather than
+                    // folded into Remove: the plain one promises the branch survives, and a button
+                    // that quietly stopped honouring that promise would be the worse design.
+                    if (wt.agent && wt.branchMerged && wt.branch != null) {
+                        BranchActionPill("Remove + branch", danger = true) {
+                            state.popup = Popup.Confirm(
+                                "Remove worktree “${wt.name}” and its branch?",
+                                removeWorktreeDetail(wt, tracked != null, alsoBranch = wt.branch),
+                                "Remove both", danger = true,
+                            ) { state.removeWorktree(id, wt, removeBranch = true) }
+                        }
+                    }
                 }
             }
         }
@@ -872,7 +906,11 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
  * branch" — the branch itself stays. Each clause is conditional so the dialog only ever claims
  * what's true of *this* worktree.
  */
-private fun removeWorktreeDetail(wt: WorktreeOps.Worktree, tracked: Boolean): String = buildString {
+private fun removeWorktreeDetail(
+    wt: WorktreeOps.Worktree,
+    tracked: Boolean,
+    alsoBranch: String? = null,
+): String = buildString {
     // The dialog clamps to three lines, so this names the folder rather than spelling out its
     // path — the full path is on the row the Remove button sits in, and an absolute path here
     // would eat two of those lines and push the consequences off the bottom.
@@ -881,7 +919,10 @@ private fun removeWorktreeDetail(wt: WorktreeOps.Worktree, tracked: Boolean): St
         append(" ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} there will be lost.")
     }
     if (wt.locked) append(" It's locked — removing overrides that.")
-    wt.branch?.let { append(" The branch “$it” is kept.") }
+    // The reassurance flips into the extra consequence when the branch goes too; naming it as
+    // already-merged is what makes that safe to agree to at a glance.
+    if (alsoBranch != null) append(" The branch “$alsoBranch” is deleted too — it's already merged.")
+    else wt.branch?.let { append(" The branch “$it” is kept.") }
     if (wt.isCurrent) append(" It's the checkout you're viewing, so this repo closes and stops being tracked.")
     else if (tracked) append(" Its tracked entry here is removed too.")
 }
@@ -911,7 +952,11 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
 
 @Composable
 private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: Boolean) {
-    val canSwitch = !b.isCurrent && !state.switchingBranch
+    // git holds a branch in exactly one working tree at a time: switching to one that's checked
+    // out elsewhere fails, and so does deleting it. Both actions come off the row rather than
+    // being offered and then refused — the badge on line 1 says where the branch went instead.
+    val canSwitch = !b.isCurrent && !b.inOtherWorktree && !state.switchingBranch
+    val canDelete = !b.isCurrent && !b.isMainline && !b.inOtherWorktree
     Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         // Line 1: branch name · mainline-relationship badge · ahead-of-mainline · delete
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -930,8 +975,18 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                 b.behind > 0 -> BranchBadge("behind ${b.behind}", Tokens.snoozeBtnText, Tokens.snoozeBtnBg)
                 else -> BranchBadge("up to date", Tokens.muted, Tokens.segTrack)
             }
+            // Separate from the relationship badge above, not folded into it: "merged" and "checked
+            // out in another tree" are independent facts, and this is the one that explains why the
+            // row's actions are missing.
+            if (b.inOtherWorktree) {
+                HoverTip(
+                    "Checked out in the “${b.worktreeName}” worktree (${b.worktreePath}). " +
+                        "A branch can only live in one working tree, so it can't be switched to or " +
+                        "deleted from here — open that worktree instead.",
+                ) { BranchBadge("in ⑂ ${b.worktreeName}", state.accent, Tokens.tintBlue) }
+            }
             if (b.ahead > 0 && !b.isMainline) Txt("↑${b.ahead}", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
-            if (!b.isCurrent && !b.isMainline) {
+            if (canDelete) {
                 Txt("✕", 13.sp, Tokens.redText, modifier = Modifier.onTap {
                     // Mirror `git branch -d/-D`: a merged branch deletes with no prompt (nothing is
                     // lost). We use -D because "merged" is measured against mainline — `git branch -d`
@@ -981,6 +1036,14 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                     "Switch anyway", danger = false,
                 ) { state.switchBranch(id, b.name) }
             }
+            // Where "Switch" would have been: the branch is already checked out somewhere, so the
+            // useful move is to go there. Only when that worktree is tracked — offering to open an
+            // untracked one is the "+ Add Repo" flow, and it belongs on the worktree list, not here.
+            if (b.inOtherWorktree) {
+                b.worktreePath?.let { p ->
+                    state.trackedRepoAt(p)?.let { t -> BranchActionPill("Goto Repo") { state.selectedId = t } }
+                }
+            }
         }
     }
 }
@@ -1008,7 +1071,10 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean) {
 
 @Composable
 private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBranch, clean: Boolean) {
-    val canSwitch = !state.switchingBranch
+    // Checking out a remote branch lands on its local counterpart, so it hits the same wall when
+    // that local branch is held by another working tree. The local list is already loaded above.
+    val heldBy = state.branches.firstOrNull { it.name == rb.shortName }?.takeIf { it.inOtherWorktree }
+    val canSwitch = !state.switchingBranch && heldBy == null
     val isMainline = rb.shortName == "main" || rb.shortName == "master"
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         // Line 1: remote ref · merged · tracked
@@ -1016,6 +1082,12 @@ private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBra
             Txt(rb.name, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
             if (rb.merged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
             if (rb.hasLocal) BranchBadge("tracked", Tokens.muted, Tokens.segTrack)
+            heldBy?.let { h ->
+                HoverTip(
+                    "Its local branch “${rb.shortName}” is checked out in the “${h.worktreeName}” " +
+                        "worktree (${h.worktreePath}), so it can't be checked out here.",
+                ) { BranchBadge("in ⑂ ${h.worktreeName}", state.accent, Tokens.tintBlue) }
+            }
         }
         // Line 2: author · time · Diff / Switch / Checkout
         Row(

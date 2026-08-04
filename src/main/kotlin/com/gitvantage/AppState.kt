@@ -1094,8 +1094,11 @@ class AppState(private val scope: CoroutineScope) {
      * Removing the worktree you're *viewing* is allowed: the command just has to run from a
      * different working tree, and afterwards this repo's own entry points at a folder that no
      * longer exists, so it's untracked too (registry-only — nothing else on disk is touched).
+     *
+     * [removeBranch] also deletes the branch it held — offered only for an agent worktree whose
+     * branch has already landed, where the branch is leftover bookkeeping rather than work.
      */
-    fun removeWorktree(id: String, wt: WorktreeOps.Worktree) {
+    fun removeWorktree(id: String, wt: WorktreeOps.Worktree, removeBranch: Boolean = false) {
         if (worktreesBusy) return
         val runFrom = if (!wt.isCurrent) id
         else worktrees.firstOrNull { !it.isCurrent && !it.missing }?.path
@@ -1104,7 +1107,10 @@ class AppState(private val scope: CoroutineScope) {
         worktreesBusy = true
         scope.launch {
             val r = withContext(Dispatchers.IO) {
-                WorktreeOps.remove(runFrom, wt.path, force = wt.dirtyCount > 0, locked = wt.locked)
+                WorktreeOps.remove(
+                    runFrom, wt.path, force = wt.dirtyCount > 0, locked = wt.locked,
+                    alsoBranch = wt.branch?.takeIf { removeBranch },
+                )
             }
             toast(r.message)
             if (r.ok) trackedId?.let { removeRepo(it) }
