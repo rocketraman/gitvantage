@@ -10,10 +10,14 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.PointerMatcher
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.onClick
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -281,6 +285,86 @@ fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifie
         Txt(if (copied) "✓ Copied" else "⧉ $label", 10.5.sp,
             if (copied) hex("#1a7f37") else Tokens.accent, FontWeight.SemiBold)
     }
+}
+
+/**
+ * A list row in the detail panel whose actions are held back until the pointer is over it.
+ *
+ * The panel's lists — branches, remote branches, worktrees, submodules — carry the same three or
+ * four actions on every single row. Drawn permanently they stack into a column of identical
+ * buttons down the right margin that says nothing about any particular row, and the badges that
+ * *do* differ get lost in it. Held behind hover, the eye reads names and states first, and the
+ * actions arrive on the one row being asked about.
+ *
+ * The hover tint is what teaches this: rows visibly respond to the pointer, so the actions are
+ * found by the same move that reaches for them. [content] gets the flag so each row decides which
+ * of its parts are hover-only — line 1's badges are information and stay put.
+ */
+@Composable
+fun HoverRow(
+    vertical: Int = 5,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.(hovered: Boolean) -> Unit,
+) {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(6.dp)
+    androidx.compose.foundation.layout.Column(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(if (hovered) Tokens.rowHoverBg else Color.Transparent, shape)
+            .hoverable(source)
+            .padding(horizontal = 6.dp, vertical = vertical.dp),
+    ) { content(hovered) }
+}
+
+/**
+ * The lane a [HoverRow]'s actions live in. Always laid out, filled only when [visible] — the
+ * height is reserved either way, because a row that grew under the pointer would shove the rows
+ * below it out from under a cursor already on its way to one of them.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun RowActions(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.FlowRowScope.() -> Unit,
+) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier.heightIn(min = 17.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(11.dp),
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(3.dp),
+    ) { if (visible) content() }
+}
+
+/**
+ * One action inside a [RowActions] lane: a plain text label in the accent, the same shape the
+ * stash rows have always used. Bordered pills were doing the work of standing out from a row they
+ * were permanently part of; once a row only shows its actions when asked, the border is just
+ * weight. [danger] keeps anything destructive out of the blue reserved for navigation.
+ */
+@Composable
+fun RowAction(label: String, danger: Boolean = false, onClick: () -> Unit) {
+    Txt(
+        label, 11.5.sp, if (danger) Tokens.redText else Tokens.accent, FontWeight.Medium,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap(onClick),
+    )
+}
+
+/**
+ * [CopyPill]'s behaviour — clipboard, then "✓ Copied" in place for a moment — as a [RowAction],
+ * for the lists where a bordered pill on every row was the problem. The pill form stays for the
+ * places it appears alone, like the diff header.
+ */
+@Composable
+fun CopyAction(value: String, label: String = "Copy") {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(value) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    Txt(
+        if (copied) "✓ Copied" else label, 11.5.sp,
+        if (copied) hex("#1a7f37") else Tokens.accent, FontWeight.Medium,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
+            .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
+    )
 }
 
 /** A small filled circle of the given diameter. */

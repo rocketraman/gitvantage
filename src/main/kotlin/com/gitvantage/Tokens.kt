@@ -45,6 +45,10 @@ object Tokens {
     val borderDc = hex("#dcdbd7")
     val borderD8 = hex("#d8d7d3")
     val rowBorder = hex("#f2f1ee")
+    // The tint a detail-panel list row wears while the pointer is on it. Deliberately faint: its
+    // job is to say "this row is the one you're asking about" as the hover-only actions appear,
+    // not to compete with the badges sitting on the row.
+    val rowHoverBg = hex("#f2f1ee")
     val groupHeaderBg = hex("#f1f0ed")
     val groupHeaderBorder = hex("#e4e3e0")
 

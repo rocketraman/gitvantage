@@ -509,10 +509,10 @@ private fun BehindBanner(state: AppState, rv: RepoView) {
         Txt("↓ $commits behind $upstream", 14.sp, Tokens.cleanText, FontWeight.Bold)
         Txt(how.replaceFirstChar { it.uppercase() } + ".", 12.5.sp, Tokens.secondary, maxLines = 2)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BranchActionPill("⑃ Diff") {
+            BannerActionPill("⑃ Diff") {
                 state.openRangeDiff(repo.id, "HEAD", upstream, "Incoming — $upstream ($commits)", "HEAD → $upstream")
             }
-            BranchActionPill("☰ Log") {
+            BannerActionPill("☰ Log") {
                 state.openRangeLog(repo.id, "HEAD..$upstream", "Incoming — $upstream ($commits)")
             }
         }
@@ -641,49 +641,45 @@ private fun SubmoduleRow(state: AppState, id: String, s: SubmoduleOps.Submodule)
     val subFullPath = java.io.File(id, s.path).absolutePath
     val tracked = state.isTracked(subFullPath)
     val busy = state.submodulesBusy
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+    HoverRow(vertical = 6) { hovered ->
         // Line 1: path · recorded pointer · status badge
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(s.path, 12.5.sp, Tokens.text2, FontWeight.SemiBold, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
             if (s.initialized && s.recorded.isNotEmpty()) Txt("@${s.recorded.take(7)}", 10.5.sp, Tokens.muted2, font = MonoFont)
             when {
-                !s.initialized -> BranchBadge("not initialized", Tokens.muted, Tokens.segTrack)
+                !s.initialized -> QuietBadge("not initialized")
                 s.statusChar == 'U' -> BranchBadge("conflict", Tokens.redText, Tokens.tintRed)
                 s.behind > 0 -> BranchBadge("behind ${s.behind}", Tokens.snoozeBtnText, Tokens.snoozeBtnBg)
                 s.statusChar == '+' -> BranchBadge("moved", state.accent, Tokens.tintBlue)
-                else -> BranchBadge("up to date", Tokens.cleanText, Tokens.cleanBg)
+                else -> QuietBadge("up to date")
             }
         }
         // Line 2: → target url (tooltip)
-        PathTip(s.url, Modifier.padding(start = 2.dp, top = 2.dp)) {
+        PathTip(s.url, Modifier.padding(top = 2.dp)) {
             Txt("→ ${s.url}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
         }
         // Uncommitted changes inside the submodule — surfaced prominently.
         if (s.dirtyCount > 0) {
             Txt(
                 "⚠ ${s.dirtyCount} uncommitted change${if (s.dirtyCount == 1) "" else "s"} inside — commit or stash them",
-                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
             )
         }
         // Actions (wrap as the pane narrows)
-        androidx.compose.foundation.layout.FlowRow(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
+        RowActions(hovered, Modifier.fillMaxWidth().padding(top = 4.dp)) {
             if (!s.initialized) {
-                if (!busy) BranchActionPill("Init") { state.initSubmodule(id, s.path) }
+                if (!busy) RowAction("Init") { state.initSubmodule(id, s.path) }
             } else {
-                if (!busy) BranchActionPill("Fetch") { state.fetchSubmodule(id, s.path) }
-                if (s.behind > 0 && !busy) BranchActionPill("Update") { state.updateSubmodulePointer(id, s.path) }
+                if (!busy) RowAction("Fetch") { state.fetchSubmodule(id, s.path) }
+                if (s.behind > 0 && !busy) RowAction("Update") { state.updateSubmodulePointer(id, s.path) }
                 // Diff against whatever branch this submodule tracks (main, or a configured
                 // submodule.<name>.branch like develop) — not necessarily mainline.
                 if (s.behind > 0 && s.remoteRef != null) {
                     val shortRef = s.remoteRef.substringAfterLast('/')
-                    BranchActionPill("Diff $shortRef") { state.openSubmoduleDiff(id, s) }
-                    BranchActionPill("Log $shortRef") { state.openSubmoduleLog(id, s) }
+                    RowAction("Diff $shortRef") { state.openSubmoduleDiff(id, s) }
+                    RowAction("Log $shortRef") { state.openSubmoduleLog(id, s) }
                 }
-                if (!busy) BranchActionPill("Deinit") {
+                if (!busy) RowAction("Deinit", danger = true) {
                     state.popup = Popup.Confirm(
                         "Deinitialize ${s.path}?",
                         "Removes the submodule's working tree (its files). You can re-init later; the pointer in the parent is untouched.",
@@ -691,10 +687,10 @@ private fun SubmoduleRow(state: AppState, id: String, s: SubmoduleOps.Submodule)
                     ) { state.deinitSubmodule(id, s.path) }
                 }
             }
-            if (tracked) BranchActionPill("Goto Repo") {
+            if (tracked) RowAction("Goto Repo") {
                 state.trackedRepoAt(subFullPath)?.let { state.selectedId = it }
             }
-            else if (s.initialized && !busy) BranchActionPill("+ Add Repo") { state.trackSubmodule(id, s) }
+            else if (s.initialized && !busy) RowAction("Add Repo") { state.trackSubmodule(id, s) }
         }
     }
 }
@@ -777,7 +773,7 @@ private fun WorktreesSection(state: AppState, rv: RepoView) {
 @Composable
 private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
     val tracked = state.trackedRepoAt(wt.path)
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+    HoverRow(vertical = 6) { hovered ->
         // Line 1: folder name · what it holds · badges
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(
@@ -793,8 +789,10 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
             when {
                 wt.missing -> BranchBadge("missing", Tokens.redText, Tokens.tintRed)
                 wt.prunable -> BranchBadge("prunable", Tokens.amber, Tokens.tintAmber)
-                wt.isMain -> BranchBadge("main", Tokens.secondary, Tokens.segTrack)
-                else -> BranchBadge("linked", Tokens.muted, Tokens.segTrack)
+                // Every entry in this list is one or the other, so neither is news; the states
+                // above it — the ones that mean something has gone wrong — keep the tint.
+                wt.isMain -> QuietBadge("main")
+                else -> QuietBadge("linked")
             }
             if (wt.locked) {
                 HoverTip(
@@ -814,7 +812,7 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
         }
         // Line 2: the branch it holds · last commit there
         Row(
-            Modifier.padding(start = 2.dp, top = 2.dp),
+            Modifier.padding(top = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -824,12 +822,9 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
                 else -> Txt("⚠ detached HEAD", 11.sp, Tokens.muted2)
             }
             if (wt.lastRelative.isNotEmpty()) Txt("· ${wt.lastRelative}", 11.sp, Tokens.muted2, maxLines = 1)
-            // The branch a worktree holds is one you can't reach from here (git refuses to check it
-            // out twice), so its name is exactly what you'd want to paste elsewhere.
-            wt.branch?.let { CopyPill(it, modifier = Modifier.padding(start = 2.dp)) }
         }
         // Line 3: where it lives (tooltip carries the full path when it's too long to fit)
-        PathTip(wt.path, Modifier.padding(start = 2.dp, top = 2.dp)) {
+        PathTip(wt.path, Modifier.padding(top = 2.dp)) {
             Txt("→ ${wt.path}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
         }
         // Uncommitted work over there is invisible from this repo's changed-files list, so say it.
@@ -838,7 +833,7 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
         if (wt.dirtyCount > 0 && !wt.isCurrent) {
             Txt(
                 "⚠ ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} in this worktree",
-                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
             )
         }
         // Committed here and nowhere else. The other half of "what would removing this cost" — and
@@ -848,13 +843,13 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
         if (wt.unmerged > 0 && !wt.branchMerged && !wt.isCurrent) {
             Txt(
                 "⚠ ${wt.unmerged} commit${if (wt.unmerged == 1) "" else "s"} not in ${wt.mainline ?: "mainline"}",
-                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
             )
         }
         if (wt.missing) {
             Txt(
                 "⚠ folder no longer on disk" + (wt.prunableReason?.let { " — $it" } ?: ""),
-                11.sp, Tokens.redText, FontWeight.SemiBold, modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+                11.sp, Tokens.redText, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
             )
         }
         // Actions. Adding a worktree stays in the terminal — it needs a path chosen by hand — but
@@ -863,22 +858,21 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
         // is Prune's job, not remove's.
         val canVisit = !wt.isCurrent && !wt.missing && !wt.bare
         val canRemove = !wt.isMain && !wt.missing && !wt.bare
-        if (canVisit || canRemove) {
-            androidx.compose.foundation.layout.FlowRow(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
+        if (canVisit || canRemove || wt.branch != null) {
+            RowActions(hovered, Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                // The branch a worktree holds is one you can't reach from here (git refuses to
+                // check it out twice), so its name is exactly what you'd want to paste elsewhere.
+                wt.branch?.let { CopyAction(it, "Copy branch") }
                 if (canVisit) {
-                    if (tracked != null) BranchActionPill("Goto Repo") { state.selectedId = tracked }
+                    if (tracked != null) RowAction("Goto Repo") { state.selectedId = tracked }
                     // Tracked worktrees inherit the repo's tags plus a "worktree" marker — they're
                     // the same project, so they belong in the same filters and groups.
-                    else BranchActionPill("+ Add Repo") { state.trackRepoAt(wt.path, state.worktreeTags(id)) }
-                    BranchActionPill(">_ Terminal") { state.openTerminal(wt.path) }
-                    BranchActionPill("Folder") { state.openFolder(wt.path) }
+                    else RowAction("Add Repo") { state.trackRepoAt(wt.path, state.worktreeTags(id)) }
+                    RowAction("Terminal") { state.openTerminal(wt.path) }
+                    RowAction("Folder") { state.openFolder(wt.path) }
                 }
                 if (canRemove && !state.worktreesBusy) {
-                    BranchActionPill("Remove", danger = true) {
+                    RowAction("Remove", danger = true) {
                         state.popup = Popup.Confirm(
                             "Remove worktree “${wt.name}”?", removeWorktreeDetail(wt, tracked != null),
                             "Remove", danger = true,
@@ -887,11 +881,11 @@ private fun WorktreeRow(state: AppState, id: String, wt: WorktreeOps.Worktree) {
                     // `git worktree remove` deliberately keeps the branch, which is right for a
                     // worktree you made — but an agent worktree's `claude/…` branch existed only to
                     // hold that session's work, so once it has landed the branch is residue that
-                    // "Remove" alone leaves behind forever. Offered as its own pill rather than
+                    // "Remove" alone leaves behind forever. Offered as its own action rather than
                     // folded into Remove: the plain one promises the branch survives, and a button
                     // that quietly stopped honouring that promise would be the worse design.
                     if (wt.agent && wt.branchMerged && wt.branch != null) {
-                        BranchActionPill("Remove + branch", danger = true) {
+                        RowAction("Remove + branch", danger = true) {
                             state.popup = Popup.Confirm(
                                 "Remove worktree “${wt.name}” and its branch?",
                                 removeWorktreeDetail(wt, tracked != null, alsoBranch = wt.branch),
@@ -962,8 +956,8 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
     // being offered and then refused — the badge on line 1 says where the branch went instead.
     val canSwitch = !b.isCurrent && !b.inOtherWorktree && !state.switchingBranch
     val canDelete = !b.isCurrent && !b.isMainline && !b.inOtherWorktree
-    Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
-        // Line 1: branch name · mainline-relationship badge · ahead-of-mainline · delete
+    HoverRow { hovered ->
+        // Line 1: branch name · mainline-relationship badge · ahead-of-mainline
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(
                 b.name, 12.5.sp,
@@ -973,12 +967,15 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
             )
             when {
                 b.isCurrent -> BranchBadge("current", Tokens.cleanText, Tokens.cleanBg)
-                b.isMainline -> BranchBadge("mainline", Tokens.secondary, Tokens.segTrack)
+                // "mainline" and "up to date" are what most rows in a healthy repo say, so they're
+                // stated rather than announced — a tinted pill on every row is a pattern the eye
+                // learns to skip, taking the ones that do mean something with it.
+                b.isMainline -> QuietBadge("mainline")
                 // Merged wins over stale: a branch already folded into mainline is "done", not neglected.
                 b.merged -> BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
                 b.stale -> BranchBadge("stale", Tokens.amber, Tokens.tintAmber)
                 b.behind > 0 -> BranchBadge("behind ${b.behind}", Tokens.snoozeBtnText, Tokens.snoozeBtnBg)
-                else -> BranchBadge("up to date", Tokens.muted, Tokens.segTrack)
+                else -> QuietBadge("up to date")
             }
             // Separate from the relationship badge above, not folded into it: "merged" and "checked
             // out in another tree" are independent facts, and this is the one that explains why the
@@ -991,8 +988,63 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                 ) { BranchBadge("in ⑂ ${b.worktreeName}", state.accent, Tokens.tintBlue) }
             }
             if (b.ahead > 0 && !b.isMainline) Txt("↑${b.ahead}", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
-            if (canDelete) {
-                Txt("✕", 13.sp, Tokens.redText, modifier = Modifier.onTap {
+        }
+        // Line 2: tracking status (left) · the row's actions (right, on hover)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            // Wider than the gap between the actions themselves, so the lane reads as its own
+            // group arriving on the row rather than as more words on the end of the status line.
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // Weighted so a long upstream ref gives way to the actions instead of pushing them off
+            // the row — the sync verdict beside it is the short part, and the part worth keeping.
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (b.upstream == null) {
+                    Txt("⚠ no upstream", 11.sp, Tokens.muted2)
+                } else {
+                    Txt("⇄ ${b.upstream}", 11.sp, Tokens.muted, font = MonoFont,
+                        modifier = Modifier.weight(1f, fill = false))
+                    when {
+                        b.upstreamGone -> Txt("· upstream gone", 11.sp, Tokens.redText, FontWeight.SemiBold)
+                        b.upstreamAhead > 0 && b.upstreamBehind > 0 ->
+                            Txt("· ↑${b.upstreamAhead} ↓${b.upstreamBehind} diverged", 11.sp, Tokens.amber, FontWeight.SemiBold, font = MonoFont)
+                        b.upstreamAhead > 0 -> Txt("· ↑${b.upstreamAhead} ahead", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
+                        b.upstreamBehind > 0 -> Txt("· ↓${b.upstreamBehind} behind", 11.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
+                        else -> Txt("· ✓ in sync", 11.sp, Tokens.cleanText, FontWeight.SemiBold)
+                    }
+                }
+            }
+            RowActions(hovered) {
+                CopyAction(b.name)
+                if (!b.isMainline) {
+                    RowAction("Diff") { state.openBranchDiff(id, b.name, b.name) }
+                    RowAction("Log") { state.openBranchLog(id, b.name, b.name) }
+                }
+                if (canSwitch) RowAction("Switch") {
+                    if (clean) state.switchBranch(id, b.name)
+                    else state.popup = Popup.Confirm(
+                        "Switch to ${b.name}?",
+                        "You have uncommitted changes — git will carry them into “${b.name}”, or refuse if they'd conflict.",
+                        "Switch anyway", danger = false,
+                    ) { state.switchBranch(id, b.name) }
+                }
+                // Where "Switch" would have been: the branch is already checked out somewhere, so the
+                // useful move is to go there. Only when that worktree is tracked — offering to open an
+                // untracked one is the "+ Add Repo" flow, and it belongs on the worktree list, not here.
+                if (b.inOtherWorktree) {
+                    b.worktreePath?.let { p ->
+                        state.trackedRepoAt(p)?.let { t -> RowAction("Goto Repo") { state.selectedId = t } }
+                    }
+                }
+                // Joined the other actions rather than keeping its own ✕ up on line 1: a delete
+                // glyph standing permanently beside every branch name is both the loudest thing in
+                // the list and the one thing you least want a stray click to find.
+                if (canDelete) RowAction("Delete", danger = true) {
                     // Mirror `git branch -d/-D`: a merged branch deletes with no prompt (nothing is
                     // lost). We use -D because "merged" is measured against mainline — `git branch -d`
                     // would refuse when you're on a different branch, even though the commits are safely
@@ -1006,48 +1058,6 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                             "Force delete", danger = true,
                         ) { state.deleteBranch(id, b.name, force = true) }
                     }
-                })
-            }
-        }
-        // Line 2: tracking status (left) · Diff / Switch actions (right)
-        Row(
-            Modifier.padding(start = 2.dp, top = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (b.upstream == null) {
-                Txt("⚠ no upstream", 11.sp, Tokens.muted2)
-            } else {
-                Txt("⇄ ${b.upstream}", 11.sp, Tokens.muted, font = MonoFont)
-                when {
-                    b.upstreamGone -> Txt("· upstream gone", 11.sp, Tokens.redText, FontWeight.SemiBold)
-                    b.upstreamAhead > 0 && b.upstreamBehind > 0 ->
-                        Txt("· ↑${b.upstreamAhead} ↓${b.upstreamBehind} diverged", 11.sp, Tokens.amber, FontWeight.SemiBold, font = MonoFont)
-                    b.upstreamAhead > 0 -> Txt("· ↑${b.upstreamAhead} ahead", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
-                    b.upstreamBehind > 0 -> Txt("· ↓${b.upstreamBehind} behind", 11.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
-                    else -> Txt("· ✓ in sync", 11.sp, Tokens.cleanText, FontWeight.SemiBold)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            CopyPill(b.name)
-            if (!b.isMainline) {
-                BranchActionPill("Diff") { state.openBranchDiff(id, b.name, b.name) }
-                BranchActionPill("Log") { state.openBranchLog(id, b.name, b.name) }
-            }
-            if (canSwitch) BranchActionPill("Switch") {
-                if (clean) state.switchBranch(id, b.name)
-                else state.popup = Popup.Confirm(
-                    "Switch to ${b.name}?",
-                    "You have uncommitted changes — git will carry them into “${b.name}”, or refuse if they'd conflict.",
-                    "Switch anyway", danger = false,
-                ) { state.switchBranch(id, b.name) }
-            }
-            // Where "Switch" would have been: the branch is already checked out somewhere, so the
-            // useful move is to go there. Only when that worktree is tracked — offering to open an
-            // untracked one is the "+ Add Repo" flow, and it belongs on the worktree list, not here.
-            if (b.inOtherWorktree) {
-                b.worktreePath?.let { p ->
-                    state.trackedRepoAt(p)?.let { t -> BranchActionPill("Goto Repo") { state.selectedId = t } }
                 }
             }
         }
@@ -1082,12 +1092,15 @@ private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBra
     val heldBy = state.branches.firstOrNull { it.name == rb.shortName }?.takeIf { it.inOtherWorktree }
     val canSwitch = !state.switchingBranch && heldBy == null
     val isMainline = rb.shortName == "main" || rb.shortName == "master"
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    HoverRow(vertical = 4) { hovered ->
         // Line 1: remote ref · merged · tracked
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(rb.name, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
             if (rb.merged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
-            if (rb.hasLocal) BranchBadge("tracked", Tokens.muted, Tokens.segTrack)
+            // Having a local counterpart is the ordinary case in a repo you work in, so it's said
+            // quietly; the notable half of the pair is the branch you *haven't* got, and that one
+            // announces itself through the "Checkout" action rather than a badge.
+            if (rb.hasLocal) QuietBadge("tracked")
             heldBy?.let { h ->
                 HoverTip(
                     "Its local branch “${rb.shortName}” is checked out in the “${h.worktreeName}” " +
@@ -1095,28 +1108,30 @@ private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBra
                 ) { BranchBadge("in ⑂ ${h.worktreeName}", state.accent, Tokens.tintBlue) }
             }
         }
-        // Line 2: author · time · Diff / Switch / Checkout
+        // Line 2: author · time · the row's actions (on hover)
         Row(
-            Modifier.padding(start = 2.dp, top = 2.dp),
+            Modifier.fillMaxWidth().padding(top = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Txt("${rb.author} · ${rb.lastRelative}", 10.5.sp, Tokens.muted2, maxLines = 1)
-            Spacer(Modifier.weight(1f))
-            // The full ref, as the row above shows it — copying something other than what's on
-            // screen would be a surprise. Checkout is the button for wanting the short name.
-            CopyPill(rb.name)
-            if (!isMainline) {
-                BranchActionPill("Diff") { state.openBranchDiff(id, rb.name, rb.name) }
-                BranchActionPill("Log") { state.openBranchLog(id, rb.name, rb.name) }
-            }
-            if (canSwitch) BranchActionPill(if (rb.hasLocal) "Switch" else "Checkout") {
-                if (clean) state.checkoutRemoteBranch(id, rb)
-                else state.popup = Popup.Confirm(
-                    if (rb.hasLocal) "Switch to ${rb.shortName}?" else "Check out ${rb.shortName}?",
-                    "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
-                    if (rb.hasLocal) "Switch anyway" else "Checkout anyway", danger = false,
-                ) { state.checkoutRemoteBranch(id, rb) }
+            Txt("${rb.author} · ${rb.lastRelative}", 10.5.sp, Tokens.muted2, maxLines = 1,
+                modifier = Modifier.weight(1f))
+            RowActions(hovered) {
+                // The full ref, as the row above shows it — copying something other than what's on
+                // screen would be a surprise. Checkout is the button for wanting the short name.
+                CopyAction(rb.name)
+                if (!isMainline) {
+                    RowAction("Diff") { state.openBranchDiff(id, rb.name, rb.name) }
+                    RowAction("Log") { state.openBranchLog(id, rb.name, rb.name) }
+                }
+                if (canSwitch) RowAction(if (rb.hasLocal) "Switch" else "Checkout") {
+                    if (clean) state.checkoutRemoteBranch(id, rb)
+                    else state.popup = Popup.Confirm(
+                        if (rb.hasLocal) "Switch to ${rb.shortName}?" else "Check out ${rb.shortName}?",
+                        "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
+                        if (rb.hasLocal) "Switch anyway" else "Checkout anyway", danger = false,
+                    ) { state.checkoutRemoteBranch(id, rb) }
+                }
             }
         }
     }
@@ -1128,16 +1143,33 @@ private fun BranchBadge(label: String, color: Color, bg: Color) {
         padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp))
 }
 
-/** A small, explicit "Switch"/"Checkout" action button on a branch row. [danger] marks the ones
- *  that delete something, so a destructive action never wears the same blue as a navigation one. */
+/**
+ * A bordered action button inside a banner. Kept in pill form where the list rows dropped theirs:
+ * a banner appears once, for one repo, and its buttons are the reason it's on screen — nothing
+ * about it repeats, so nothing about it needs quieting down.
+ */
 @Composable
-private fun BranchActionPill(label: String, danger: Boolean = false, onClick: () -> Unit) {
+private fun BannerActionPill(label: String, onClick: () -> Unit) {
     Box(
-        Modifier.clip(RoundedCornerShape(6.dp)).background(if (danger) Tokens.tintRed else Tokens.tintBlue)
-            .border(1.dp, if (danger) Tokens.warnBorder else hex("#c3dcf8"), RoundedCornerShape(6.dp))
+        Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
+            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 9.dp, vertical = 2.dp),
-    ) { Txt(label, 10.5.sp, if (danger) Tokens.redText else Tokens.accent, FontWeight.SemiBold) }
+    ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
+}
+
+/**
+ * The state a row is *expected* to be in — "up to date", "mainline", "linked", "tracked" — said in
+ * plain muted text rather than a tinted pill.
+ *
+ * These labels are true of nearly every row in their list, so as pills they were a repeating
+ * pattern rather than information, and the badges that do report something (merged, stale, behind,
+ * missing, locked, agent) had to fight them for attention. Dropping them entirely would be worse:
+ * "up to date" is an answer, and an empty space isn't. So they're kept, and de-emphasised.
+ */
+@Composable
+private fun QuietBadge(label: String) {
+    Txt(label, 10.5.sp, Tokens.muted2, FontWeight.Medium)
 }
 
 /**
