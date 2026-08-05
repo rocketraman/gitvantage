@@ -131,6 +131,10 @@ class AppState(private val scope: CoroutineScope) {
     /** Name of the branch currently being pushed, so its row can say so. One at a time. */
     var pushingBranch by mutableStateOf<String?>(null)
         private set
+    /** Full ref of the remote branch currently being deleted (e.g. "origin/foo") — a network round
+     *  trip, so the row says "Deleting…" rather than looking like the click missed. */
+    var deletingRemoteBranch by mutableStateOf<String?>(null)
+        private set
 
     // Submodules for the currently-open detail panel (loaded lazily on selection).
     var submodulesRepo by mutableStateOf<String?>(null)
@@ -473,6 +477,71 @@ class AppState(private val scope: CoroutineScope) {
         entries[id] = e.copy(staleImportant = important)
         persist()
         scope.launch { rescanRepos(listOf(id), fetch = false) }
+    }
+
+    // ---- hidden branches -----------------------------------------------------------------
+
+    /**
+     * Whether the branch lists are currently showing the branches their patterns hide — the
+     * "Show hidden" half of the dotfile bargain.
+     *
+     * Deliberately not persisted, and deliberately app-wide rather than per-repo: it's a peek, not
+     * a preference. A restart puts every repo back to the quiet list, which is the state the
+     * dashboard is for; leaving it latched on across sessions would mean rediscovering why a repo
+     * is full of bot branches weeks later.
+     */
+    var showHiddenBranches by mutableStateOf(false)
+        private set
+
+    fun toggleShowHiddenBranches() { showHiddenBranches = !showHiddenBranches }
+
+    /** This repo's own hide patterns, or null when it follows [Meta.DEFAULT_HIDE_BRANCH_PATTERNS]. */
+    fun hideBranchPatternsOverride(id: String): List<String>? = entries[id]?.hideBranchPatterns
+
+    /** The patterns actually in force for this repo: its override if it set one, else the default. */
+    fun hideBranchPatterns(id: String): List<String> =
+        hideBranchPatternsOverride(id) ?: Meta.DEFAULT_HIDE_BRANCH_PATTERNS
+
+    /**
+     * Store this repo's pattern list, collapsing one that says the same thing as the defaults back
+     * to "no override". Without that, editing a pattern and undoing the edit by hand would leave
+     * the repo permanently marked as customised — still offering "Reset to default" when it's
+     * already at the default, and no longer labelled as one.
+     *
+     * Compared as sets: the patterns are OR'd together when matching, so order carries no meaning
+     * and two lists with the same patterns in a different order are the same answer.
+     */
+    private fun setHideBranchPatterns(id: String, patterns: List<String>) {
+        val e = entries[id] ?: return
+        val default = patterns.toSet() == Meta.DEFAULT_HIDE_BRANCH_PATTERNS.toSet()
+        entries[id] = e.copy(hideBranchPatterns = if (default) null else patterns)
+        persist()
+    }
+
+    /**
+     * Add one pattern to this repo's list. Adding to a repo still on the defaults keeps them and
+     * appends — otherwise the first custom pattern would read as replacing the defaults, and the
+     * bot branches would come flooding back.
+     */
+    fun addHideBranchPattern(id: String, pattern: String) {
+        val p = pattern.trim()
+        if (p.isEmpty()) return
+        val cur = hideBranchPatterns(id)
+        if (p in cur) return
+        setHideBranchPatterns(id, cur + p)
+    }
+
+    /** Remove one pattern. Removing the last one leaves an empty list — "hide nothing in this
+     *  repo" — which is a different answer from clearing back to the defaults. */
+    fun removeHideBranchPattern(id: String, pattern: String) {
+        setHideBranchPatterns(id, hideBranchPatterns(id) - pattern)
+    }
+
+    /** Drop this repo's override so it follows [Meta.DEFAULT_HIDE_BRANCH_PATTERNS] again. */
+    fun resetHideBranchPatterns(id: String) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(hideBranchPatterns = null)
+        persist()
     }
 
     // ---- GitHub issues / PRs -------------------------------------------------------------
@@ -992,6 +1061,23 @@ class AppState(private val scope: CoroutineScope) {
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
             switchingBranch = false
+        }
+    }
+
+    /**
+     * Delete a branch on the remote (see [BranchOps.deleteRemote]). Reloads both branch lists, not
+     * just the remote one: a local branch that tracked it now reads "upstream gone", and that's the
+     * only thing left on screen saying the delete happened.
+     */
+    fun deleteRemoteBranch(id: String, rb: BranchOps.RemoteBranch) {
+        if (deletingRemoteBranch != null) return
+        deletingRemoteBranch = rb.name
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.deleteRemote(id, rb) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            deletingRemoteBranch = null
         }
     }
 

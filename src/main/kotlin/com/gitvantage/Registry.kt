@@ -45,6 +45,11 @@ data class RegistryEntry(
     // Escalate open issues one level — informational (blue) becomes important (amber), and
     // "awaiting you" (amber) becomes critical (red). For the repos you're actually on the hook for.
     val issuesImportant: Boolean = false,
+    // Regexes for branches this repo's lists hide behind the "Show hidden" toggle: null = use
+    // Meta.DEFAULT_HIDE_BRANCH_PATTERNS (bot branches), a list = this repo's own choice. An empty
+    // list is a real answer — "hide nothing here" — and is why this is nullable rather than
+    // defaulting to the list: the two need to be tellable apart.
+    val hideBranchPatterns: List<String>? = null,
     val snoozeUntilEpoch: Long? = null,
     val reminderText: String = "",
     val reminderDueEpoch: Long? = null,

@@ -226,6 +226,9 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         // Per-repo "stale after N days" threshold (override the global default)
         if (repo.isGitRepo) StaleThresholdRow(state, rv)
 
+        // Per-repo patterns for the branches the lists keep out of the way
+        if (repo.isGitRepo) HiddenBranchesRow(state, rv)
+
         // What will notify (attention / aging / reminders), and how snooze affects it
         NotificationsSection(state, rv)
 
@@ -298,6 +301,9 @@ private fun TagEditor(state: AppState, rv: RepoView) {
  * Type any part of an existing tag ([suggest] provides matches); the completion renders greyed around
  * the typed text (prefix, suffix, or mid-string). Tab cycles matches (Shift-Tab reverses) and accepts
  * the last one; → also accepts; Enter commits ([onCommit] with the resolved value); Esc cancels.
+ *
+ * A [suggest] that always returns nothing reduces this to a plain type-and-commit field — no ghost,
+ * no cycling, no hint — which is how the branch-hide pattern editor uses it.
  */
 @Composable
 fun TagAutocompleteField(
@@ -956,6 +962,12 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
     if (state.branchesRepo != rv.id) return
     // Switching branches would clobber uncommitted work, so it's only offered on a clean tree.
     val clean = with(rv.repo) { staged + unstaged + untracked == 0 }
+    // One compiled pattern list for both lists below — see Meta.compileHidePatterns for why the
+    // same patterns can serve local and remote names. Recompiled only when the patterns change.
+    val patterns = state.hideBranchPatterns(rv.id)
+    val hide = remember(patterns) { Meta.compileHidePatterns(patterns) }
+    val hidden = state.branches.filter { Meta.isBranchHidden(it.name, hide) }
+    val shown = if (state.showHiddenBranches) state.branches else state.branches - hidden.toSet()
     Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 6.dp),
@@ -963,18 +975,44 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Txt("Branches", 12.5.sp, Tokens.text, FontWeight.Bold)
-            if (state.branches.isNotEmpty()) Txt("— ${state.branches.size}", 11.sp, Tokens.muted2)
+            if (shown.isNotEmpty()) Txt("— ${shown.size}", 11.sp, Tokens.muted2)
+            HiddenBranchToggle(state, hidden.size)
         }
         if (state.branchesLoading && state.branches.isEmpty()) {
             Txt("Loading…", 12.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
         }
-        state.branches.forEach { b -> BranchRow(state, rv.id, b, clean, rv.repo.hasRemote) }
-        RemoteBranchesSection(state, rv.id, clean)
+        shown.forEach { b ->
+            BranchRow(state, rv.id, b, clean, rv.repo.hasRemote, hidden = b in hidden)
+        }
+        RemoteBranchesSection(state, rv.id, clean, hide)
     }
 }
 
+/**
+ * The "· N hidden" indicator and its Show/Hide switch, on a branch list's header row. Nothing at
+ * all when the patterns matched nothing, so a repo without bot branches never learns the feature
+ * exists — and a repo with them says so on the line where the count would otherwise look wrong.
+ */
 @Composable
-private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: Boolean, hasRemote: Boolean) {
+private fun HiddenBranchToggle(state: AppState, hiddenCount: Int) {
+    if (hiddenCount == 0) return
+    Txt("· $hiddenCount hidden", 11.sp, Tokens.muted2)
+    Txt(
+        if (state.showHiddenBranches) "Hide" else "Show",
+        11.sp, state.accent, FontWeight.SemiBold,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap { state.toggleShowHiddenBranches() },
+    )
+}
+
+@Composable
+private fun BranchRow(
+    state: AppState,
+    id: String,
+    b: BranchOps.Branch,
+    clean: Boolean,
+    hasRemote: Boolean,
+    hidden: Boolean = false,
+) {
     // git holds a branch in exactly one working tree at a time: switching to one that's checked
     // out elsewhere fails, and so does deleting it. Both actions come off the row rather than
     // being offered and then refused — the badge on line 1 says where the branch went instead.
@@ -1004,6 +1042,9 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
                 if (b.isCurrent) FontWeight.Bold else FontWeight.Normal,
                 font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f),
             )
+            // Only ever on screen while "Show hidden" is on, so it reads as "this is one of the
+            // ones you asked to see" rather than as a state the row is in.
+            if (hidden) QuietBadge("hidden")
             when {
                 b.isCurrent -> BranchBadge("current", Tokens.cleanText, Tokens.cleanBg)
                 // "mainline" and "up to date" are what most rows in a healthy repo say, so they're
@@ -1121,37 +1162,58 @@ private fun BranchRow(state: AppState, id: String, b: BranchOps.Branch, clean: B
 }
 
 @Composable
-private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean) {
+private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, hide: List<Regex>) {
+    val hidden = state.remoteBranches.filter { Meta.isBranchHidden(it.name, hide) }
+    val shown = if (state.showHiddenBranches) state.remoteBranches else state.remoteBranches - hidden.toSet()
     Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Row(
-            Modifier.onTap { state.toggleRemoteBranches(id) }.padding(vertical = 4.dp),
+            Modifier.padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Txt(if (state.showRemoteBranches) "▾" else "▸", 11.sp, Tokens.muted2)
-            Txt("Remote branches", 12.sp, Tokens.secondary, FontWeight.SemiBold)
-            if (state.remoteBranches.isNotEmpty()) Txt("— ${state.remoteBranches.size}", 11.sp, Tokens.muted2)
+            // The disclosure triangle and label expand the section; the Show/Hide beside them is
+            // its own target, so peeking at bot branches doesn't collapse the list you're in.
+            Row(
+                Modifier.onTap { state.toggleRemoteBranches(id) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Txt(if (state.showRemoteBranches) "▾" else "▸", 11.sp, Tokens.muted2)
+                Txt("Remote branches", 12.sp, Tokens.secondary, FontWeight.SemiBold)
+                if (shown.isNotEmpty()) Txt("— ${shown.size}", 11.sp, Tokens.muted2)
+            }
+            // Only once the list is open: the count is meaningless next to a collapsed section,
+            // and before the first expand the remote list hasn't been loaded to count at all.
+            if (state.showRemoteBranches) HiddenBranchToggle(state, hidden.size)
         }
         if (state.showRemoteBranches) {
             if (state.remoteBranches.isEmpty()) {
                 Txt("No remote branches", 11.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
             }
-            state.remoteBranches.forEach { rb -> RemoteBranchRow(state, id, rb, clean) }
+            shown.forEach { rb -> RemoteBranchRow(state, id, rb, clean, hidden = rb in hidden) }
         }
     }
 }
 
 @Composable
-private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBranch, clean: Boolean) {
+private fun RemoteBranchRow(
+    state: AppState,
+    id: String,
+    rb: BranchOps.RemoteBranch,
+    clean: Boolean,
+    hidden: Boolean = false,
+) {
     // Checking out a remote branch lands on its local counterpart, so it hits the same wall when
     // that local branch is held by another working tree. The local list is already loaded above.
     val heldBy = state.branches.firstOrNull { it.name == rb.shortName }?.takeIf { it.inOtherWorktree }
     val canSwitch = !state.switchingBranch && heldBy == null
     val isMainline = rb.shortName == "main" || rb.shortName == "master"
+    val deleting = state.deletingRemoteBranch == rb.name
     HoverRow(vertical = 4) { hovered ->
         // Line 1: remote ref · merged · tracked
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(rb.name, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
+            if (hidden) QuietBadge("hidden")
             if (rb.merged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
             // Having a local counterpart is the ordinary case in a repo you work in, so it's said
             // quietly; the notable half of the pair is the branch you *haven't* got, and that one
@@ -1187,6 +1249,42 @@ private fun RemoteBranchRow(state: AppState, id: String, rb: BranchOps.RemoteBra
                         "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
                         if (rb.hasLocal) "Switch anyway" else "Checkout anyway", danger = false,
                     ) { state.checkoutRemoteBranch(id, rb) }
+                }
+                // Absent on the branches a workflow shares — main, develop, next, pu and the rest of
+                // [Meta.INTEGRATION_BRANCHES]. Deleting one of those on the remote isn't a mistake
+                // you make for yourself, and no confirmation wording makes an accidental click on a
+                // hover lane worth the blast radius, so the action simply isn't there to hit.
+                if (!rb.integration) {
+                    HoverTip(
+                        if (rb.merged) {
+                            "Deletes “${rb.shortName}” from ${rb.remote}. Its commits are already in " +
+                                "mainline, so nothing is lost" +
+                                if (rb.hasLocal) " — your local branch stays." else "."
+                        } else {
+                            "Deletes “${rb.shortName}” from ${rb.remote}. It hasn't been merged into " +
+                                "mainline, so its commits survive only where they're still checked out."
+                        },
+                    ) {
+                        RowAction(if (deleting) "Deleting…" else "Delete", danger = true) {
+                            if (deleting) return@RowAction
+                            // Same rule as the local list one section up: merged means the commits
+                            // are safe in mainline, so the delete just goes. Unmerged is the case
+                            // that can lose work — and unlike a local branch this one is other
+                            // people's too, so the confirmation says where the commits went.
+                            if (rb.merged) {
+                                state.deleteRemoteBranch(id, rb)
+                            } else {
+                                state.popup = Popup.Confirm(
+                                    "Delete “${rb.name}” from ${rb.remote}?",
+                                    "It isn't merged into mainline, and deleting it on the remote " +
+                                        "removes it for everyone — git has no undo for this. Its " +
+                                        "commits are only recoverable from a clone that still has " +
+                                        (if (rb.hasLocal) "them, including your local “${rb.shortName}”." else "them."),
+                                    "Delete on ${rb.remote}", danger = true,
+                                ) { state.deleteRemoteBranch(id, rb) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1476,6 +1574,97 @@ private fun StaleThresholdRow(state: AppState, rv: RepoView) {
                 PresetPill("Informational", !important, state.accent) { state.setStaleImportant(rv.id, false) }
                 PresetPill("Important", important, state.accent) { state.setStaleImportant(rv.id, true) }
             }
+        }
+    }
+}
+
+/**
+ * Per-repo "hide these branches" patterns — the dotfile rule for branch lists. Each chip is one
+ * regex; the lists keep matching branches out of the way and offer a Show/Hide switch beside the
+ * count, so this is the *what*, and the section headers are the *whether*.
+ *
+ * Repos start on [Meta.DEFAULT_HIDE_BRANCH_PATTERNS] and say "· default" until something is
+ * changed here, matching how the stale threshold above distinguishes an override from the default.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
+    var adding by remember(rv.id) { mutableStateOf(false) }
+    val patterns = state.hideBranchPatterns(rv.id)
+    val override = state.hideBranchPatternsOverride(rv.id)
+    val invalid = remember(patterns) { Meta.invalidHidePatterns(patterns) }
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Hidden branches", 12.5.sp, Tokens.text, FontWeight.Bold)
+            if (override == null) Txt("· default", 11.sp, Tokens.muted2)
+            InfoTip(
+                "Branches matching these patterns are kept out of this repo's branch lists — bot " +
+                    "branches, by default. They aren't gone: each list shows how many it's holding " +
+                    "back and a Show switch to bring them in, the way a file manager treats dotfiles.\n\n" +
+                    "Each pattern is a regular expression matched against the whole branch name as " +
+                    "the list shows it — “origin/dependabot/.*” for remote branches, an unprefixed " +
+                    "pattern like “wip/.*” for local ones.",
+            )
+        }
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            patterns.forEach { p ->
+                val bad = p in invalid
+                val shape = RoundedCornerShape(12.dp)
+                val fg = if (bad) Tokens.redText else Tokens.secondary
+                Row(
+                    Modifier.clip(shape).background(if (bad) Tokens.tintRed else Color.White, shape)
+                        .border(1.dp, if (bad) Tokens.redText.copy(alpha = 0.35f) else Tokens.borderE2, shape)
+                        .padding(start = 9.dp, end = 5.dp, top = 3.dp, bottom = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Txt(p, 11.5.sp, fg, FontWeight.SemiBold, font = MonoFont)
+                    // A pattern that doesn't compile hides nothing. Saying so on the chip is the
+                    // only way to tell that apart from a pattern that simply matches no branch.
+                    if (bad) HoverTip("Not a valid regular expression, so it hides nothing.") {
+                        Txt("invalid", 10.5.sp, Tokens.redText, FontWeight.SemiBold)
+                    }
+                    Txt("×", 13.sp, fg.copy(alpha = 0.7f), modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .onTap { state.removeHideBranchPattern(rv.id, p) })
+                }
+            }
+            if (!adding) {
+                val shape = RoundedCornerShape(12.dp)
+                Box(
+                    Modifier.clip(shape).border(1.dp, hex("#cbc9c5"), shape)
+                        .pointerHoverIcon(PointerIcon.Hand).onTap { adding = true }
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                ) { Txt("+ Pattern", 11.5.sp, Tokens.secondary, FontWeight.SemiBold) }
+            } else {
+                // No suggestions to offer — a regex isn't drawn from a known set — so the shared
+                // field degrades to a plain type-and-Enter commit box, which is all this needs.
+                TagAutocompleteField(
+                    accent = state.accent,
+                    suggest = { emptyList() },
+                    onCommit = { state.addHideBranchPattern(rv.id, it); adding = false },
+                    onCancel = { adding = false },
+                    resetKey = rv.id,
+                    placeholder = "origin/dependabot/.*",
+                )
+            }
+        }
+        if (override != null) {
+            Txt(
+                if (patterns.isEmpty()) "Nothing hidden in this repo · Reset to default"
+                else "Reset to default",
+                11.5.sp, state.accent, FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 8.dp).pointerHoverIcon(PointerIcon.Hand)
+                    .onTap { state.resetHideBranchPatterns(rv.id) },
+            )
         }
     }
 }

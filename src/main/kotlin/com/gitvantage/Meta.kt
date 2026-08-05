@@ -33,6 +33,67 @@ object Meta {
     /** A branch counts as "very behind" its mainline past this many commits (for stale). */
     const val VERY_BEHIND = 40
 
+    /**
+     * Branch names that workflows use as shared integration points rather than as somebody's work.
+     * Deleting one on the remote breaks everyone's workflow at once and can't be undone from here,
+     * so the branch lists never offer it — the same reason mainline has no Delete.
+     *
+     * The set is the union of the workflows that name their integration branches: git-flow
+     * (`develop`), gitworkflows(7) as git.git itself runs it (`maint`, `next`, `pu`, and `seen`,
+     * which is what `pu` was renamed to), and the deploy-branch convention (`staging`,
+     * `production`, `release`). Prefixed branches — `release/1.2`, `hotfix/…` — are deliberately
+     * absent: those are meant to be deleted once they land, and a prefix match would trap them.
+     *
+     * Only the branch's own name is tested, so `origin/develop` and `upstream/develop` are both
+     * covered and a `feature/develop` is not.
+     */
+    val INTEGRATION_BRANCHES = setOf(
+        "main", "master", "trunk",
+        "develop", "development", "dev",
+        "maint", "next", "pu", "seen",
+        "release", "staging", "production",
+    )
+
+    /** True when [shortName] (a branch name with no remote prefix) is in [INTEGRATION_BRANCHES]. */
+    fun isIntegrationBranch(shortName: String) = shortName.lowercase() in INTEGRATION_BRANCHES
+
+    /**
+     * Branch-name patterns the lists hide unless "Show hidden" is on, for repos that haven't set
+     * their own (see [RegistryEntry.hideBranchPatterns]). Bot branches are the case this exists
+     * for: a repo with Dependabot enabled carries dozens of `origin/dependabot/…` refs that bury
+     * the handful of branches a person actually opened.
+     *
+     * Hidden, not filtered away — the same bargain as dotfiles. The count stays visible in the
+     * section header and one click brings them back, so nothing disappears without saying so.
+     */
+    val DEFAULT_HIDE_BRANCH_PATTERNS = listOf("origin/dependabot/.*")
+
+    /**
+     * Compile [patterns] to regexes, dropping any that don't parse.
+     *
+     * Anchored — [isBranchHidden] uses `matches`, not `find` — so a pattern describes the whole
+     * branch name. That's why the default carries its own trailing `.*`, and it's what keeps a
+     * pattern like `main` from also hiding `maintenance`.
+     *
+     * Patterns are tested against the branch name *as its list displays it*: `origin/dependabot/x`
+     * for a remote row, `feature/login` for a local one. One list therefore covers both lists —
+     * the default only ever matches remote refs, and a pattern with no remote prefix is what
+     * reaches the local ones.
+     *
+     * Invalid patterns are dropped rather than thrown: this runs inside recomposition while the
+     * user is still typing the pattern, and a half-written regex should hide nothing, not take the
+     * panel down. [invalidHidePatterns] is what tells them a pattern is inert.
+     */
+    fun compileHidePatterns(patterns: List<String>): List<Regex> =
+        patterns.mapNotNull { runCatching { Regex(it) }.getOrNull() }
+
+    /** The subset of [patterns] that aren't valid regexes, so the editor can flag them as inert. */
+    fun invalidHidePatterns(patterns: List<String>): Set<String> =
+        patterns.filterTo(mutableSetOf()) { runCatching { Regex(it) }.isFailure }
+
+    /** True when [name] — a branch name as its list shows it — matches any of [hide]. */
+    fun isBranchHidden(name: String, hide: List<Regex>) = hide.any { it.matches(name) }
+
     /** A repo counts as "Recently Added" for this long after it was first tracked. */
     const val RECENT_MS = 24L * 60 * 60 * 1000   // 24 hours
 

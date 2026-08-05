@@ -51,7 +51,16 @@ object BranchOps {
         val lastRelative: String,
         val hasLocal: Boolean,   // a local branch of the same short name already exists
         val merged: Boolean,     // fully merged into mainline
-    )
+    ) {
+        /** The remote this branch lives on, e.g. "origin" — the prefix [shortName] drops. */
+        val remote get() = name.substringBefore('/')
+
+        /**
+         * A shared integration branch (see [Meta.INTEGRATION_BRANCHES]) — no Delete is offered for
+         * one. Covers mainline too, so it's the single test the delete action asks.
+         */
+        val integration get() = Meta.isIntegrationBranch(shortName)
+    }
 
     suspend fun load(repoPath: String): List<Branch> = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
@@ -195,6 +204,28 @@ object BranchOps {
         if (code == 0) GitOps.Result(repoPath, true, "Deleted $name")
         else GitOps.Result(repoPath, false, firstErr(err, "delete failed"))
     }
+
+    /**
+     * Delete a branch *on the remote* — `git push <remote> --delete refs/heads/<branch>`. Unlike
+     * the local delete this reaches other people's clones, and git has no undo for it: the ref is
+     * gone from the server, and only whoever still holds the commits can put it back.
+     *
+     * The full `refs/heads/` form rather than the bare name: `--delete foo` asks the remote to
+     * resolve "foo", which is ambiguous when a tag of the same name is also there, and git refuses
+     * rather than guessing. Spelling out the namespace deletes the branch and never the tag.
+     *
+     * There's no force flag to mirror — deleting a ref doesn't merge anything, so git accepts it
+     * whether or not the branch landed. That's exactly why the caller confirms an unmerged one.
+     * The push also prunes the local `refs/remotes/...` copy, so the list is right after a reload.
+     */
+    suspend fun deleteRemote(repoPath: String, rb: RemoteBranch): GitOps.Result =
+        withContext(Dispatchers.IO) {
+            val dir = File(repoPath)
+            val args = listOf("push", rb.remote, "--delete", "refs/heads/${rb.shortName}")
+            val (code, _, err) = GitLog.exec(dir.name, dir, args, timeoutSeconds = 90)
+            if (code == 0) GitOps.Result(repoPath, true, "Deleted ${rb.name}")
+            else GitOps.Result(repoPath, false, firstErr(err, "remote delete failed"))
+        }
 
     /** Parse git's `%(upstream:track)` — "[ahead 2, behind 1]", "[gone]", or "". */
     private fun parseTrack(track: String): Triple<Int, Int, Boolean> {
