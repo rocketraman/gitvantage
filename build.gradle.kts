@@ -75,6 +75,22 @@ nucleus.application {
     graalvm {
         isEnabled.set(true)
         imageName.set("GitVantage")
+        toolchain {
+            // Pin the toolchain: the compiler that builds a release should not change under us.
+            //
+            // Left unset, the plugin follows its default channel, and the *plugin's* default is
+            // what floats — NucleusFramework's own setup action already defaults to 25i2 while the
+            // plugin currently resolves 25i1, so a plugin upgrade alone could silently change the
+            // compiler behind a release. This is the version the verified 1.0.0 native build used
+            // (asset graalvm-community-jdk-25i1-25.0.3, tag graal-25.1.3, "GraalVM CE 25.1.3+9.1").
+            //
+            // "25i1" still selects the newest patch within the innovation line, and resolving it
+            // needs the graalvm-ce-builds releases API (see GITHUB_TOKEN in release.yml). A
+            // patch-style version such as "25.0.2" would be fully deterministic *and* resolve
+            // offline — the provisioner builds that URL directly, no API call — but it is a
+            // different release line than the one we verified, so it is not a free swap.
+            version.set("25i1")
+        }
     }
     nativeDistributions {
         packageName = "GitVantage"

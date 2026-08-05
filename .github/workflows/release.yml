@@ -41,6 +41,10 @@ jobs:
           java-version: '21'
           packaging-tools: 'true'
           graalvm: 'true'
+          # Match the pin in build.gradle.kts. The action does not choose the toolchain — the
+          # plugin downloads it — but this value goes into its cache key, so leaving it at the
+          # action's own default (25i2) labels the cache with a version we never install.
+          graalvm-version: '25i1'
 
       # packageGraalvmDistributionForCurrentOS, NOT packageReleaseDistributionForCurrentOS: the
       # latter is the jpackage aggregate, and calling it is how v1.0.0 shipped a bundled-JVM app
