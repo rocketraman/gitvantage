@@ -218,9 +218,18 @@ val verifyGraalvmNativeImage = tasks.register("verifyGraalvmNativeImage") {
 
         // 3. The native libraries the app dlopen's at startup. Skiko is the renderer: without it
         //    the process starts and then dies on the first frame, which no static check would see.
+        //
+        //    Match on the shared-library extension rather than a "lib" prefix: that prefix is a
+        //    Unix convention, and Windows ships `skiko-windows-x64.dll` / `awt.dll` with no prefix
+        //    at all — requiring it failed the Windows leg on a bundle that was perfectly fine.
+        //    Substring rather than suffix so versioned sonames (libfoo.so.1) still match.
+        val libraryExtensions = listOf(".so", ".dylib", ".dll")
         listOf("skiko" to "renderer", "awt" to "AWT").forEach { (token, what) ->
-            if (dir.walkTopDown().none { it.isFile && it.name.contains(token) && it.name.contains("lib") }) {
-                problems += "ships no $what native library (no file matching *$token* alongside the binary)"
+            val found = dir.walkTopDown().any { f ->
+                f.isFile && f.name.contains(token) && libraryExtensions.any { it in f.name }
+            }
+            if (!found) {
+                problems += "ships no $what native library (nothing matching *$token*.{so,dylib,dll})"
             }
         }
 
