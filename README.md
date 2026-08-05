@@ -82,6 +82,46 @@ The practical consequence: run `gh auth login --hostname your.github.host` and i
 
 Other forges are a "not yet", not a "no" — unlike the VCS question above, nothing about the design rules them out.
 
+## Installation
+
+Grab the installer for your platform from the [latest release](https://github.com/rocketraman/gitvantage/releases/latest): `.deb` and `.rpm` (Linux), `.dmg` (macOS), `.msi` (Windows), each built for x86-64 and arm64.
+The commands below assume version `1.0.0` and that you downloaded into the current directory — substitute the version and architecture of the asset you actually have.
+
+Optionally, install the [GitHub CLI](https://cli.github.com) and run `gh auth login` to enable the issues and pull-request features.
+
+### Linux
+
+Debian / Ubuntu — use `apt` rather than `dpkg -i`, so dependencies are resolved:
+
+```bash
+sudo apt install ./gitvantage-1.0.0-linux-amd64.deb
+```
+
+Fedora / RHEL:
+
+```bash
+sudo dnf install ./gitvantage-1.0.0-linux-x86_64.rpm
+```
+
+### macOS
+
+Open the `.dmg` and drag GitVantage into `/Applications` as usual, or from the command line — mount the disk image, copy the app across, and unmount:
+
+```bash
+hdiutil attach gitvantage-1.0.0-mac-arm64.dmg
+sudo cp -R /Volumes/GitVantage\ 1.0.0-arm64/GitVantage.app /Applications/
+# workaround https://github.com/rocketraman/gitvantage/issues/1
+sudo xattr -dr com.apple.quarantine /Applications/GitVantage.app
+sudo hdiutil umount /Volumes/GitVantage\ 1.0.0-arm64
+```
+
+The releases aren't signed or notarized yet, so either way Gatekeeper quarantines the installed bundle and refuses to open it.
+Run the `xattr` line above to clear that flag — see [issue #1](https://github.com/rocketraman/gitvantage/issues/1).
+
+### Windows
+
+Double-click the downloaded `.msi` and follow the installer.
+
 ## Building & running
 
 It's a Kotlin + Compose Desktop app on the [Nucleus](https://nucleusframework.dev) framework.
