@@ -66,6 +66,14 @@ dependencies {
     // possible provider: slf4j-simple writes WARN and above to stderr with no configuration and no
     // plugin system. (Version tracks slf4j-api, which arrives transitively.)
     implementation("org.slf4j:slf4j-simple:2.0.17")
+    // The --smoke-test checks in com.gitvantage.smoke talk to D-Bus directly to prove the portal
+    // works in the packaged image. dbus-java is already on the runtime classpath — it arrives
+    // transitively via filekit — but transitive dependencies aren't on the *compile* classpath.
+    //
+    // compileOnly, deliberately: declaring it as an implementation dependency would pin a version
+    // alongside the one filekit resolves, and the two could then disagree at runtime. This way the
+    // runtime graph stays filekit's to decide, and we only borrow the types to compile against.
+    compileOnly("com.github.hypfvieh:dbus-java-core:5.2.0")
 }
 nucleus.application {
     mainClass = "com.gitvantage.MainKt"
@@ -313,44 +321,79 @@ val smokeTestNativeImage = tasks.register("smokeTestNativeImage") {
     }
 }
 
+/**
+ * Release gate: the packaged native binary's subsystems must actually work.
+ *
+ * Runs `GitVantage --smoke-test`, which executes the checks in com.gitvantage.smoke *inside the
+ * shipped image* and exits non-zero if any fail. This is the check that carries the retired
+ * ProGuard -keep rules forward: the filesystem watcher's native callback, D-Bus (transport found
+ * via ServiceLoader, remote objects via dynamic proxy), the XDG portal, FileKit's own chooser
+ * interface and desktop notifications are all reached indirectly, so GraalVM's closed-world
+ * analysis can drop them — and every historical instance degraded silently rather than failing.
+ *
+ * Runs on every platform, unlike smokeTestNativeImage: no window is opened, so no display is
+ * needed. Individual checks skip themselves where they do not apply (the portal is Linux-only) or
+ * where the environment lacks a session bus, so a bare runner reports SKIP rather than failing.
+ */
+val smokeTestNativeImageSubsystems = tasks.register("smokeTestNativeImageSubsystems") {
+    group = "verification"
+    description = "Run the packaged native binary's own subsystem checks (--smoke-test)."
+    dependsOn(verifyGraalvmNativeImage)
+    outputs.upToDateWhen { false }
+
+    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    val imageName = "GitVantage"
+
+    doLast {
+        val dir = outputDir.get().asFile
+        val binary = dir.walkTopDown()
+            .filter { it.isFile && (it.name == imageName || it.name == "$imageName.exe") }
+            .maxByOrNull { it.length() }
+        checkNotNull(binary) { "No $imageName executable under $dir" }
+
+        val result = providers.exec {
+            commandLine(binary.absolutePath, "--smoke-test")
+            isIgnoreExitValue = true
+        }
+        val exit = result.result.get().exitValue
+        val log = (result.standardOutput.asText.get() + result.standardError.asText.get()).trim()
+
+        if (exit != 0) {
+            throw GradleException(
+                "The packaged native binary's subsystem checks failed (exit $exit):\n\n" +
+                    log.ifEmpty { "(no output)" },
+            )
+        }
+        logger.lifecycle(log.ifEmpty { "smokeTestNativeImageSubsystems: no output" })
+    }
+}
+
 // Gate the packagers, not just the native build: the checks run between producing the bundle and
 // wrapping it in an installer, so a broken bundle can't reach a .dmg/.deb/.rpm/.msi.
 tasks.matching { it.name.startsWith("packageGraalvm") && it.name != "packageGraalvmNative" }
-    .configureEach { dependsOn(verifyGraalvmNativeImage, smokeTestNativeImage) }
+    .configureEach {
+        dependsOn(verifyGraalvmNativeImage, smokeTestNativeImage, smokeTestNativeImageSubsystems)
+    }
 
 
-// --- Subsystem checks -------------------------------------------------------------------------
+// --- Subsystem checks on the development classpath ----------------------------------------------
 //
-// src/smokeTest was written as a *release* gate: it ran against the jars inside the jpackage image
-// to prove ProGuard had not silently removed classes reachable only from native code or a
-// ServiceLoader. There is no such image any more, and no ProGuard, so it cannot be that gate — it
-// is deliberately no longer wired into the packaging path, because a check that inspects the
+// The same checks the shipped binary runs via --smoke-test, executed on the development classpath
+// and wired into `check`. This is for fast local feedback: it needs no native image, which takes
+// minutes to build.
+//
+// It is deliberately NOT part of the packaging path. On a development classpath nothing has been
+// shrunk, so it cannot see the failures it was written for — and a check that inspects the
 // development classpath while claiming to cover the shipped artifact is how 1.0.0 got out.
-//
-// It is kept, and moved onto `check`, because the subsystems it exercises still break silently on
-// a dependency upgrade and nothing else runs them at all.
-//
-// Note the gap this leaves: native-image performs its own reachability analysis and can drop the
-// very same JNI/reflection/ServiceLoader targets ProGuard used to. Closing it properly means
-// running these checks *inside* the native image — i.e. a --smoke-test mode on the app itself, so
-// smokeTestNativeImage could invoke the shipped binary rather than merely watch it stay up.
-sourceSets.create("smokeTest")
-
-// Compile against the full runtime classpath, not just the declared dependencies: the checks poke
-// at integrations that arrive transitively (dbus-java comes in via filekit), and those are
-// runtime-only for us, so they're absent from a normal compile classpath.
-sourceSets.named("smokeTest") {
-    compileClasspath += configurations.runtimeClasspath.get()
-}
-
+// smokeTestNativeImageSubsystems is the one that gates a release.
 val smokeTestSubsystems = tasks.register<JavaExec>("smokeTestSubsystems") {
     group = "verification"
-    description = "Run the app's subsystem checks (fs-watcher, XDG portal, notifications)."
-    dependsOn("smokeTestClasses")
+    description = "Run the subsystem checks on the development classpath (see --smoke-test for the real gate)."
+    dependsOn("classes")
     outputs.upToDateWhen { false }
 
-    mainClass.set("com.gitvantage.smoke.SmokeTestKt")
-    classpath = files(sourceSets["smokeTest"].output, configurations.runtimeClasspath)
+    mainClass.set("com.gitvantage.smoke.SmokeChecksKt")
+    classpath = files(sourceSets["main"].output, configurations.runtimeClasspath)
 }
 
 tasks.named("check") { dependsOn(smokeTestSubsystems) }

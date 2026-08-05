@@ -48,12 +48,20 @@ private fun record(status: Status, name: String, detail: String) {
     println("  [${status.name.padEnd(4)}] $name — $detail")
 }
 
-fun main() {
+/**
+ * Runs every check and returns a process exit code: 0 if nothing failed, 1 otherwise.
+ *
+ * Invoked two ways. `GitVantage --smoke-test` runs it inside the shipped native binary, which is
+ * the point of the whole exercise; the smokeTestSubsystems Gradle task runs it on the development
+ * classpath for fast local feedback. Only the first says anything about a release.
+ */
+fun runSmokeChecks(): Int {
     println("Smoke-testing the application's subsystems…")
 
     checkFsWatcher()
     checkFsWatcherThroughSymlink()
     checkXdgPortal()
+    checkXdgFileChooserProxy()
     checkNotifications()
 
     val failed = results.filter { it.first == Status.FAIL }
@@ -62,13 +70,18 @@ fun main() {
         "smoke test: ${results.count { it.first == Status.PASS }} passed, " +
             "${failed.size} failed, ${results.count { it.first == Status.SKIP }} skipped",
     )
-    if (failed.isNotEmpty()) {
-        println()
-        println("The packaged app is broken even though it built cleanly. Each failure below works")
-        println("in a development build — which means ProGuard removed something only reachable")
-        println("reflectively or from native code. Add a -keep rule in packaging/proguard-rules.pro.")
-        exitProcess(1)
-    }
+    if (failed.isEmpty()) return 0
+
+    println()
+    println("The app is broken even though it built cleanly. Each failure below works in a")
+    println("development build, which means the closed-world analysis dropped something reachable")
+    println("only reflectively, via a dynamic proxy, through a ServiceLoader, or from native code.")
+    println("Register it in the GraalVM reachability metadata rather than working around it here.")
+    return 1
+}
+
+fun main() {
+    exitProcess(runSmokeChecks())
 }
 
 /**
@@ -216,9 +229,14 @@ private fun checkXdgPortal() {
     // skip into a hard failure. So don't predict the outcome — connect, and read it off the failure.
     //
     // Only an unresolvable/malformed *address* means "no bus here". A failure to connect to an address
-    // that did resolve is a real defect and must stay a FAIL: that is exactly how a missing
-    // jdk.security.auth presents, since dbus-java's SASL EXTERNAL handshake needs it to read the
-    // caller's uid, and losing it kills every D-Bus connection — the portal included.
+    // that did resolve is a real defect and must stay a FAIL: dbus-java's SASL EXTERNAL handshake
+    // reads the caller's uid through com.sun.security.auth.module.UnixSystem, and if that is not
+    // reachable every D-Bus connection dies during authentication — the portal included.
+    //
+    // That used to mean a missing jdk.security.auth in the jlink'd runtime, which is why the module
+    // was named in nativeDistributions. There is no jlink runtime now; in a native image the same
+    // failure comes from UnixSystem's JNI entry points not being registered, and it presents
+    // identically here.
     val connection = try {
         DBusConnectionBuilder.forSessionBus().build()
     } catch (e: AddressResolvingException) {
@@ -248,6 +266,55 @@ private fun checkXdgPortal() {
 }
 
 /** Desktop notifications also go over D-Bus; unavailable on a headless runner is fine. */
+/**
+ * FileKit's own portal interface, as distinct from dbus-java.
+ *
+ * [checkXdgPortal] opens its *own* D-Bus connection and proxies `Properties`, so it proves
+ * dbus-java's transport and proxy machinery work — and nothing about FileKit. If FileKit's XDG
+ * classes are missing, or its interface has no dynamic-proxy registration in the native image, the
+ * "Add repo" chooser silently degrades to the Swing dialog: no exception, no dangling service
+ * registration, nothing any static gate can see. That silent fallback is a bug that actually
+ * shipped, which is why it gets its own check.
+ *
+ * Resolved by name rather than referenced statically, so this file does not drag FileKit's XDG
+ * implementation into the image by merely mentioning it. Note the honest limit: a successful proxy
+ * proves the class ships and its proxy registration is present, not that FileKit's own call path
+ * into it survived. Driving the chooser end to end is the only thing that would prove that.
+ */
+private fun checkXdgFileChooserProxy() {
+    val name = "FileKit XDG file chooser interface"
+    if (!System.getProperty("os.name").lowercase().contains("linux")) {
+        record(Status.SKIP, name, "not Linux")
+        return
+    }
+    val iface = runCatching {
+        Class.forName("io.github.vinceglb.filekit.dialogs.platform.xdg.FileChooserDbusInterface")
+    }.getOrNull()
+    if (iface == null) {
+        record(
+            Status.FAIL, name,
+            "io.github.vinceglb.filekit.dialogs.platform.xdg.FileChooserDbusInterface is not in the " +
+                "image — the file chooser will silently fall back to the Swing dialog",
+        )
+        return
+    }
+    // Creating the proxy is the part that fails in a native image without a proxy registration;
+    // it needs no session bus and opens no dialog.
+    val proxy = runCatching {
+        java.lang.reflect.Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, _, _ -> null }
+    }
+    proxy.fold(
+        onSuccess = { record(Status.PASS, name, "interface present and proxyable") },
+        onFailure = {
+            record(
+                Status.FAIL, name,
+                "present but cannot be proxied ($it) — register it under reflection/proxy in the " +
+                    "GraalVM reachability metadata",
+            )
+        },
+    )
+}
+
 private fun checkNotifications() {
     val name = "desktop notifications"
     val available = runCatching {

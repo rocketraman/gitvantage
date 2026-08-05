@@ -41,9 +41,28 @@ import dev.nucleusframework.application.NucleusBackend
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.window.NucleusDecoratedWindowTheme
 import dev.nucleusframework.window.TitleBar
+import com.gitvantage.smoke.runSmokeChecks
+import kotlin.system.exitProcess
+
+/**
+ * `--smoke-test` runs the subsystem checks in [runSmokeChecks] and exits, without opening a window.
+ *
+ * It lives in the shipped binary on purpose. The subsystems it exercises — the filesystem watcher's
+ * native callback, D-Bus, the XDG portal — are reached reflectively, through a ServiceLoader, or
+ * from native code, so GraalVM's closed-world analysis can drop them and the app then degrades in
+ * silence rather than failing. Running the checks from a development classpath cannot detect that;
+ * only running them inside the image can, which is why this is an app flag and not a test fixture.
+ */
+@OptIn(FlowPreview::class)
+fun main(args: Array<String>) {
+    if (args.contains("--smoke-test")) {
+        exitProcess(runSmokeChecks())
+    }
+    runApp()
+}
 
 @OptIn(FlowPreview::class)
-fun main() = nucleusApplication(backend = NucleusBackend.Tao) {
+private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     val saved = Registry.settings()
     val windowState = rememberWindowState(size = DpSize(saved.windowWidth.dp, saved.windowHeight.dp))
     // Keep the window hidden for one beat so it can be created and sized to the saved [windowState]
