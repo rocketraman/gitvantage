@@ -68,6 +68,16 @@ jobs:
       - name: Build native-image distribution (incl. verification)
         env:
           ORG_GRADLE_PROJECT_appVersion: ${{ inputs.version }}
+          # The plugin resolves the GraalVM CE download by listing
+          # github.com/graalvm/graalvm-ce-builds releases. Unauthenticated calls are capped at
+          # 60/hour *per runner IP*, which on shared GitHub-hosted runners is routinely already
+          # exhausted: the first dispatch of this workflow died on HTTP 403 in nativeImageCompile
+          # before native-image ever started. GraalvmToolchainProvisioner reads GITHUB_TOKEN (or
+          # GH_TOKEN) and sends it as a bearer token, which raises the limit to 1000/hour.
+          #
+          # This is the job's own scoped token — it is not a secret shared with the toolchain host;
+          # it authenticates the api.github.com request only.
+          GITHUB_TOKEN: ${{ github.token }}
         run: ./gradlew packageGraalvmDistributionForCurrentOS --stacktrace --no-daemon
 
       # When jpackage fails, Gradle reports only "External tool execution failed" plus the paths of
