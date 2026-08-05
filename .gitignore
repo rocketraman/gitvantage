@@ -1,3 +1,12 @@
+# Release artifacts downloaded into the repo. `gh run download` unpacks a build's assets into
+# directories named after the upload paths (graalvm-dmg/, graalvm-deb/, …), which is easy to
+# stage by accident — a 74 MB DMG reached master exactly that way.
+graalvm-*/
+*.dmg
+*.deb
+*.rpm
+*.msi
+
 # Gradle
 .gradle/
 build/
