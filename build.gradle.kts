@@ -159,7 +159,19 @@ nucleus.application {
 // -XstartOnFirstThread, which the generated jpackage launcher does not pass. The shipped 1.0.0 DMG
 // died at startup with an NPE inside Compose's resource loader, called on a JNI-attached thread
 // whose context class loader is null. Linux and Windows have no thread-0 requirement, which is why
-// the same defect was invisible there.
+// that particular defect was invisible there.
+//
+// Linux is not actually safe on the jpackage path either — it just fails differently, and we only
+// learned how in Aug 2026. jpackage's Linux launcher pipes a serialized JvmlLauncherData blob from
+// a forked child to the parent and reads it back with a single unlooped read(). Once the expanded
+// classpath makes that blob large enough, the read comes up short, the tail of the blob is left
+// uninitialized, and the launcher SIGSEGVs in setenv() before the JVM starts — silently, with no
+// output at all. It is a scheduling race rather than a size threshold, so it is not something a
+// build-time check can rule out. Fixed upstream in JDK mainline as JDK-8380085 but not backported
+// to 25u, which is what we package with. See NucleusFramework/Nucleus#454.
+//
+// So the gate below matters on all three platforms, not just macOS: there is no OS on which
+// silently falling back to jpackage produces a working release.
 //
 // Every format task is registered on every OS and carries `enabled = isCompatibleWithCurrentOS`,
 // so depending on all four is correct: the three that don't apply are skipped, and this single
