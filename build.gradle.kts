@@ -1,23 +1,5 @@
 import dev.nucleusframework.desktop.application.dsl.TargetFormat
 import java.io.File
-// Imported explicitly: `import java.io.File` above shadows the `java` package inside a Kotlin DSL
-// script, so fully-qualified java.net.* / java.util.* references don't resolve here.
-import java.net.URLClassLoader
-import java.util.jar.JarFile
-import org.objectweb.asm.ClassReader
-import org.objectweb.asm.tree.ClassNode
-import org.objectweb.asm.tree.analysis.Analyzer
-import org.objectweb.asm.tree.analysis.SimpleVerifier
-
-// ASM, for the verifyReleaseBytecode task below. On the buildscript classpath so the task can be
-// written inline here rather than needing a buildSrc module.
-buildscript {
-    repositories { mavenCentral() }
-    dependencies {
-        classpath("org.ow2.asm:asm-tree:9.8")
-        classpath("org.ow2.asm:asm-analysis:9.8")
-    }
-}
 
 plugins {
     kotlin("jvm") version "2.4.0"
@@ -135,288 +117,6 @@ nucleus.application {
     }
 }
 
-/**
- * Release gate: verify every class in the packaged app actually passes bytecode verification.
- *
- * This exists because a ProGuard-optimizer bug once shipped: it miscompiled
- * kotlinx-coroutines' trySendBlocking so the JVM threw VerifyError the first time the filesystem
- * watcher sent to a channel. Nothing caught it — `./gradlew run` and `./gradlew build` never run
- * ProGuard, so the defect existed *only* in the installers, the one artifact no check executed.
- *
- * Verification is done statically with ASM (no class initialisers run, no display needed, works
- * identically on every CI runner), against the exact jars inside the packaged image.
- */
-val verifyReleaseBytecode = tasks.register("verifyReleaseBytecode") {
-    group = "verification"
-    description = "Verify the packaged release image for corrupted (unverifiable) bytecode."
-    dependsOn("createReleaseDistributable")
-
-    val appDir = layout.buildDirectory.dir("compose/binaries/main-release/app")
-    outputs.upToDateWhen { false }   // cheap, and must never be skipped on a release build
-
-    doLast {
-        // Only the application's own jars. The image also contains the JDK's internal jrt-fs.jar
-        // under lib/runtime, which is not ours to verify and confuses jdeps.
-        val jars = appDir.get().asFile.walkTopDown()
-            .filter { it.extension == "jar" && "${File.separator}runtime${File.separator}" !in it.path }
-            .sorted().toList()
-        check(jars.isNotEmpty()) { "No jars under ${appDir.get().asFile} — was the release image built?" }
-
-        // Resolve types against the app's own jars (platform loader as parent for java.*), so
-        // verification sees what the shipped app sees.
-        val loader = URLClassLoader(
-            jars.map { it.toURI().toURL() }.toTypedArray(),
-            ClassLoader.getPlatformClassLoader(),
-        )
-
-        var scanned = 0
-        val corrupt = mutableListOf<String>()
-        val unresolved = sortedSetOf<String>()
-        // For the ServiceLoader check below: every class the image ships, and every service
-        // registration in it.
-        val present = mutableSetOf<String>()
-        val services = mutableListOf<Triple<String, String, List<String>>>()
-
-        jars.forEach { jarFile ->
-            JarFile(jarFile).use { jar ->
-                jar.entries().asSequence().forEach { e ->
-                    when {
-                        e.name.endsWith(".class") -> present += e.name.removeSuffix(".class").replace('/', '.')
-                        e.name.startsWith("META-INF/services/") && !e.isDirectory -> {
-                            val impls = jar.getInputStream(e).bufferedReader().readLines()
-                                .map { it.substringBefore('#').trim() }.filter { it.isNotEmpty() }
-                            services += Triple(jarFile.name, e.name.substringAfterLast('/'), impls)
-                        }
-                    }
-                }
-            }
-        }
-
-        jars.forEach { jarFile ->
-            JarFile(jarFile).use { jar ->
-                jar.entries().asSequence().filter { it.name.endsWith(".class") }.forEach { entry ->
-                    scanned++
-                    val node = ClassNode()
-                    jar.getInputStream(entry).use { ClassReader(it).accept(node, ClassReader.SKIP_DEBUG) }
-                    node.methods.forEach { method ->
-                        try {
-                            val verifier = SimpleVerifier()
-                            verifier.setClassLoader(loader)
-                            Analyzer(verifier).analyze(node.name, method)
-                        } catch (e: Throwable) {
-                            // Classify by exception *type*, not message text: a NoClassDefFoundError's
-                            // message is only the internal class name, so matching on strings
-                            // misfiled every unresolvable type as corruption.
-                            //
-                            // Unresolvable type  -> the verifier couldn't load a class that isn't
-                            //   shipped (optional integrations like log4j's LMAX Disruptor async
-                            //   appenders, compile-only annotations, dev-only tooling). Dead code in
-                            //   this image; not a defect.
-                            // Anything else      -> the bytecode itself doesn't verify.
-                            val chain = generateSequence(e) { it.cause }
-                            val missing = chain.firstOrNull {
-                                it is ClassNotFoundException || it is NoClassDefFoundError ||
-                                    it is TypeNotPresentException
-                            }
-                            if (missing != null) {
-                                unresolved += missing.message.orEmpty().trim()
-                                    .substringAfterLast(' ').replace('/', '.')
-                            } else {
-                                val msg = e.message.orEmpty().replace('\n', ' ').trim()
-                                corrupt += "${node.name}.${method.name}${method.desc}\n      $msg"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ServiceLoader registrations whose implementation the shrinker deleted. The class is only
-        // ever named in META-INF/services, so ProGuard can't see the reference and strips it; the
-        // app then degrades silently at runtime rather than failing. This has bitten twice: the
-        // D-Bus transport (native file chooser fell back to Swing) and the SLF4J binding (all
-        // logging discarded, hiding the first failure).
-        val danglingServices = services.mapNotNull { (jar, service, impls) ->
-            impls.filterNot { it in present }.takeIf { it.isNotEmpty() }?.let { missing ->
-                "$service -> ${missing.joinToString()}\n      registered by $jar"
-            }
-        }
-
-        logger.lifecycle(
-            "verifyReleaseBytecode: scanned $scanned classes in ${jars.size} jars, " +
-                "${services.size} service registrations",
-        )
-        if (unresolved.isNotEmpty()) {
-            logger.info("  unresolved (not shipped, ignored): ${unresolved.joinToString()}")
-        }
-        // JDK modules the app needs vs. what the jlink'd runtime actually bundles.
-        //
-        // The runtime image is minimal — the plugin includes only the modules it inferred — so a
-        // module it missed fails at runtime with NoClassDefFoundError and nothing before that
-        // notices. jdeps computes the requirement from the bytecode, which is the authoritative
-        // answer; comparing against the image's own module list is what catches the gap.
-        // (jdk.security.auth went out in a release exactly this way: dbus-java's SASL handshake
-        // calls com.sun.security.auth.module.UnixSystem, so every D-Bus connection died and the
-        // native file chooser fell back to Swing.)
-        // Hard-fail rather than skip when the file isn't where we expect. This previously resolved a
-        // Linux-only path guarded by `if (isFile)`, so on Windows and macOS the check quietly did
-        // nothing — the one gate that catches a missing module was a no-op on two of three platforms.
-        val runtimeRelease = File(releaseRuntimeDir, "release")
-        check(runtimeRelease.isFile) {
-            "jlink'd runtime release file not found at $runtimeRelease - did the app image layout change?"
-        }
-        val bundledModules = runtimeRelease.readLines()
-            .firstOrNull { it.startsWith("MODULES=") }
-            .orEmpty().substringAfter('=').trim('"').split(' ').filter { it.isNotBlank() }.toSet()
-        val requiredModules = providers.exec {
-            commandLine(
-                File(System.getProperty("java.home"), "bin/jdeps").absolutePath,
-                "--print-module-deps", "--ignore-missing-deps", "--multi-release", "21",
-                *jars.map { it.absolutePath }.toTypedArray(),
-            )
-        }.standardOutput.asText.get()
-            // jdeps prints the comma-separated module list on its own line, but may emit
-            // "Warning: ..." lines first — take the payload line, not the diagnostics.
-            .lineSequence()
-            .map { it.trim() }
-            .lastOrNull { it.isNotBlank() && !it.startsWith("Warning:") && ' ' !in it }
-            .orEmpty()
-            .split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
-
-        val missingModules = requiredModules - bundledModules
-        logger.lifecycle(
-            "verifyReleaseBytecode: runtime bundles ${bundledModules.size} JDK modules, " +
-                "jdeps requires ${requiredModules.size}",
-        )
-        if (missingModules.isNotEmpty()) {
-            throw GradleException(
-                "The bundled runtime image is missing JDK modules the app requires — anything " +
-                    "touching them throws NoClassDefFoundError at runtime:\n  " +
-                    missingModules.sorted().joinToString("\n  ") +
-                    "\n\nAdd them to nativeDistributions { modules(...) } in build.gradle.kts.",
-            )
-        }
-        if (danglingServices.isNotEmpty()) {
-            throw GradleException(
-                "ServiceLoader registrations point at classes that were stripped from the packaged " +
-                    "release — whatever they provide will silently not work:\n  " +
-                    danglingServices.joinToString("\n  ") +
-                    "\n\nAdd a -keep rule for them in packaging/proguard-rules.pro.",
-            )
-        }
-        if (corrupt.isNotEmpty()) {
-            throw GradleException(
-                "Corrupted bytecode in the packaged release — these methods fail verification and " +
-                    "will throw VerifyError at runtime:\n  " + corrupt.joinToString("\n  ") +
-                    "\n\nThis usually means a ProGuard optimisation miscompiled a dependency; see " +
-                    "buildTypes.release.proguard in build.gradle.kts.",
-            )
-        }
-    }
-}
-
-// Packaging always drags the verifier along, so a release can't be produced without it running.
-listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
-    tasks.matching { it.name == name }.configureEach { finalizedBy(verifyReleaseBytecode) }
-}
-
-
-// --- Release app-image layout ----------------------------------------------------------------
-//
-// jpackage's app image is laid out differently on each OS, and both the directory holding the
-// launcher's <name>.cfg plus the application jars, and the one holding the jlink'd runtime, move
-// with it:
-//
-//            image root       app dir       runtime dir
-//   Linux    GitVantage/      lib/app/      lib/runtime/
-//   Windows  GitVantage/      app/          runtime/
-//   macOS    GitVantage.app/  Contents/app/ Contents/runtime/Contents/Home/
-//
-// Only macOS suffixes the image root, and only macOS nests the runtime inside a second JDK bundle
-// (hence the Contents/Home tail — the `release` file lives at the *bottom* of that path).
-// Verified against jdk.jpackage.internal.ApplicationLayoutUtils in the JDK 25 sources; the Compose
-// plugin adds the .app suffix in AbstractJPackageTask.
-//
-// The pathing jar, the bytecode verifier and the smoke test all address the image. Hard-coding the
-// Linux shape in each of them produced a release that built only on Linux and failed on Windows and
-// both macOS runners — and, worse, a module check that silently passed off-Linux by looking for a
-// file that could not be there. Everything goes through these so the assumption lives in one place.
-//
-// Note this is the *launcher* name — jpackage's --name, i.e. the top-level packageName. The
-// linux { packageName = "gitvantage" } override renames the .deb/.rpm package, not the app image.
-val appImageName = "GitVantage"
-
-val isMacOsHost = System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
-val isWindowsHost = System.getProperty("os.name").lowercase().contains("win")
-
-val releaseImageDir: File = layout.buildDirectory
-    .dir("compose/binaries/main-release/app/" + if (isMacOsHost) "$appImageName.app" else appImageName)
-    .get().asFile
-
-/** Directory inside the release image holding `$appImageName.cfg` and the application jars. */
-val releaseAppDir: File = File(
-    releaseImageDir,
-    when {
-        isMacOsHost -> "Contents/app"
-        isWindowsHost -> "app"
-        else -> "lib/app"
-    },
-)
-
-/**
- * JDK *home* of the jlink'd runtime inside the release image — where its `release` file lives.
- *
- * On macOS this is not the same directory as the runtime *bundle* root (`Contents/runtime`), which
- * is what signing and the embedded provisioning profile want; the home is nested another
- * `Contents/Home` down. They coincide on Linux and Windows, so anything that needs the bundle root
- * must not reuse this or it will be silently wrong on exactly one platform.
- */
-val releaseRuntimeDir: File = File(
-    releaseImageDir,
-    when {
-        isMacOsHost -> "Contents/runtime/Contents/Home"
-        isWindowsHost -> "runtime"
-        else -> "lib/runtime"
-    },
-)
-
-
-
-// --- Smoke test of the packaged image ------------------------------------------------------
-// Compiled against the normal dependencies, but executed with the *packaged* jars on its
-// classpath, so it runs the ProGuard-minified code that actually ships. See
-// src/smokeTest/kotlin — and verifyReleaseBytecode above for the static half of the gate.
-sourceSets.create("smokeTest")
-
-// Compile against the full runtime classpath, not just the declared dependencies: the smoke test
-// pokes at integrations that arrive transitively (dbus-java comes in via filekit), and those are
-// runtime-only for us, so they're absent from a normal compile classpath.
-sourceSets.named("smokeTest") {
-    compileClasspath += configurations.runtimeClasspath.get()
-}
-
-val smokeTestReleaseImage = tasks.register<JavaExec>("smokeTestReleaseImage") {
-    group = "verification"
-    description = "Run the packaged release image's subsystems (fs-watcher, portal, notifications)."
-    dependsOn("createReleaseDistributable", "smokeTestClasses")
-    mustRunAfter(verifyReleaseBytecode)
-    outputs.upToDateWhen { false }
-
-    mainClass.set("com.gitvantage.smoke.SmokeTestKt")
-    // Deliberately NOT the smokeTest runtime classpath: only the compiled checks plus the jars
-    // from inside the release image. Adding the development dependencies would resolve classes
-    // ProGuard removed and the test would pass against code that isn't what ships.
-    val appJars = releaseAppDir
-    classpath = files(
-        sourceSets["smokeTest"].output,
-        provider { appJars.listFiles()?.filter { it.extension == "jar" } ?: emptyList<File>() },
-    )
-}
-
-listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
-    tasks.matching { it.name == name }.configureEach { finalizedBy(smokeTestReleaseImage) }
-}
-
 
 // --- GraalVM native packaging ------------------------------------------------------------------
 //
@@ -455,39 +155,177 @@ tasks.register("packageGraalvmDistributionForCurrentOS") {
  * directory means the jpackage image is being packaged and the native build silently did not
  * happen.
  *
- * Deliberately narrow: it asserts the one invariant that distinguishes the pipelines, rather than
- * enumerating expected bundle contents, so it cannot misfire as the plugin's layout evolves.
+ * The remaining assertions cover the ways the bundle can be structurally wrong while still looking
+ * plausible: a launcher stub instead of the compiled image, or a missing native library that only
+ * surfaces when the app tries to draw. Everything checked here is a property of the artifact that
+ * ships, not of an intermediate — that distinction is what the pipeline mix-up cost us.
  */
 val verifyGraalvmNativeImage = tasks.register("verifyGraalvmNativeImage") {
     group = "verification"
-    description = "Verify the packaged bundle is a GraalVM native image, not a bundled-JVM app image."
+    description = "Verify the packaged bundle is a well-formed GraalVM native image."
     dependsOn("packageGraalvmNative")
     outputs.upToDateWhen { false }   // cheap, and must never be skipped on a release build
 
     // appTmpDir for the default build type; the macOS bundle root is `GitVantage.app`, the Linux
     // and Windows ones a plain directory, so address the shared parent rather than the leaf.
     val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    val imageName = "GitVantage"
 
     doLast {
         val dir = outputDir.get().asFile
         check(dir.isDirectory) {
             "No GraalVM packaging output at $dir - did packageGraalvmNative run?"
         }
-        val embeddedRuntimes = dir.walkTopDown().filter { it.isDirectory && it.name == "runtime" }.toList()
-        if (embeddedRuntimes.isNotEmpty()) {
+        val problems = mutableListOf<String>()
+
+        // 1. No bundled JVM. This is the invariant that distinguishes the two pipelines: a jlink'd
+        //    runtime means we are packaging the jpackage app image and native-image never ran.
+        dir.walkTopDown().filter { it.isDirectory && it.name == "runtime" }.toList().let { runtimes ->
+            if (runtimes.isNotEmpty()) {
+                problems += "embeds a Java runtime (jpackage app image, not a native image): " +
+                    runtimes.joinToString { it.relativeTo(dir).path }
+            }
+        }
+
+        // 2. The launcher is the compiled image, not jpackage's stub. Size is the cheap, portable
+        //    discriminator: the native image is hundreds of MB, jpackage's launcher ~200 KB.
+        val minImageBytes = 20L * 1024 * 1024
+        val binary = dir.walkTopDown()
+            .filter { it.isFile && (it.name == imageName || it.name == "$imageName.exe") }
+            .maxByOrNull { it.length() }
+        when {
+            binary == null -> problems += "contains no $imageName executable"
+            binary.length() < minImageBytes ->
+                problems += "the $imageName executable is only ${binary.length() / 1024} KB — a native " +
+                    "image is far larger, so this looks like a launcher stub"
+        }
+
+        // 3. The native libraries the app dlopen's at startup. Skiko is the renderer: without it
+        //    the process starts and then dies on the first frame, which no static check would see.
+        listOf("skiko" to "renderer", "awt" to "AWT").forEach { (token, what) ->
+            if (dir.walkTopDown().none { it.isFile && it.name.contains(token) && it.name.contains("lib") }) {
+                problems += "ships no $what native library (no file matching *$token* alongside the binary)"
+            }
+        }
+
+        if (problems.isNotEmpty()) {
             throw GradleException(
-                "The bundle about to be packaged embeds a Java runtime, so it is the jpackage app " +
-                    "image rather than a GraalVM native image:\n  " +
-                    embeddedRuntimes.joinToString("\n  ") { it.relativeTo(dir).path } +
-                    "\n\nThe installers would carry a bundled JVM, and on macOS the Tao event loop " +
-                    "would not run on thread 0 (see the notes above packageGraalvmDistributionForCurrentOS).",
+                "The bundle about to be packaged is not a usable native image:\n  " +
+                    problems.joinToString("\n  ") +
+                    "\n\nBundle: $dir",
             )
         }
-        logger.lifecycle("verifyGraalvmNativeImage: no embedded Java runtime under $dir")
+        logger.lifecycle(
+            "verifyGraalvmNativeImage: native image OK " +
+                "(${binary!!.name}, ${binary.length() / 1024 / 1024} MB, no bundled JVM)",
+        )
     }
 }
 
-// Gate the packagers, not just the native build: the check runs between producing the bundle and
-// wrapping it in an installer, so a wrong bundle can't reach a .dmg/.deb/.rpm/.msi.
+/**
+ * Release gate: the packaged native binary must actually start.
+ *
+ * The static checks above describe the artifact's shape; this one runs it. That distinction is
+ * exactly what shipped 1.0.0 broken — the bundle was well-formed, and the app still died during
+ * composition before drawing a frame. A native image also changes what can fail at startup
+ * (reflection and resource reachability are decided at build time), so "it linked" is not evidence
+ * that it runs.
+ *
+ * Linux only: the runner has xvfb, whereas the macOS and Windows runners have no dependable
+ * headless display. This is a real gap — the 1.0.0 defect was macOS-only — so it is a backstop for
+ * the whole class, not proof for every platform.
+ */
+val smokeTestNativeImage = tasks.register("smokeTestNativeImage") {
+    group = "verification"
+    description = "Launch the packaged native binary and verify it stays up."
+    dependsOn(verifyGraalvmNativeImage)
+    outputs.upToDateWhen { false }
+
+    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    val imageName = "GitVantage"
+    val isLinux = System.getProperty("os.name").lowercase().contains("linux")
+    val hasXvfb = isLinux &&
+        System.getenv("PATH").orEmpty().split(File.pathSeparator).any { File(it, "xvfb-run").canExecute() }
+    // Hard-fail on CI, skip locally. On the release runner setup-nucleus installs xvfb, so its
+    // absence there means this gate has silently stopped running — the failure mode that let a
+    // broken artifact ship. On a developer machine it is just a missing optional tool.
+    val isCi = !System.getenv("CI").isNullOrBlank()
+    onlyIf { isLinux }
+
+    doLast {
+        if (!hasXvfb) {
+            check(!isCi) {
+                "xvfb-run not found, but this is CI. The Linux release runner installs it via " +
+                    "setup-nucleus (packaging-tools), so a missing xvfb means the packaged binary " +
+                    "is no longer being launched at all."
+            }
+            logger.lifecycle("smokeTestNativeImage: skipped — xvfb-run not installed (install it to run this check)")
+            return@doLast
+        }
+        val binary = outputDir.get().asFile.walkTopDown()
+            .filter { it.isFile && it.name == imageName }
+            .maxByOrNull { it.length() }
+        checkNotNull(binary) { "No $imageName executable under ${outputDir.get().asFile}" }
+
+        // `timeout` reports 124 when it had to kill a still-running process — which is the success
+        // condition here: a GUI app that is alive after the hold period started cleanly. Any other
+        // exit code means it terminated on its own, i.e. it crashed or bailed out at startup.
+        val holdSeconds = 15
+        val result = providers.exec {
+            commandLine("xvfb-run", "-a", "timeout", "-s", "TERM", "$holdSeconds", binary.absolutePath)
+            isIgnoreExitValue = true
+        }
+        val exit = result.result.get().exitValue
+        val log = result.standardOutput.asText.get() + result.standardError.asText.get()
+
+        if (exit != 124) {
+            throw GradleException(
+                "The packaged native binary exited on its own (code $exit) instead of staying up for " +
+                    "${holdSeconds}s — it failed at startup:\n\n" + log.trim().ifEmpty { "(no output)" },
+            )
+        }
+        logger.lifecycle("smokeTestNativeImage: ${binary.name} stayed up for ${holdSeconds}s under xvfb")
+    }
+}
+
+// Gate the packagers, not just the native build: the checks run between producing the bundle and
+// wrapping it in an installer, so a broken bundle can't reach a .dmg/.deb/.rpm/.msi.
 tasks.matching { it.name.startsWith("packageGraalvm") && it.name != "packageGraalvmNative" }
-    .configureEach { dependsOn(verifyGraalvmNativeImage) }
+    .configureEach { dependsOn(verifyGraalvmNativeImage, smokeTestNativeImage) }
+
+
+// --- Subsystem checks -------------------------------------------------------------------------
+//
+// src/smokeTest was written as a *release* gate: it ran against the jars inside the jpackage image
+// to prove ProGuard had not silently removed classes reachable only from native code or a
+// ServiceLoader. There is no such image any more, and no ProGuard, so it cannot be that gate — it
+// is deliberately no longer wired into the packaging path, because a check that inspects the
+// development classpath while claiming to cover the shipped artifact is how 1.0.0 got out.
+//
+// It is kept, and moved onto `check`, because the subsystems it exercises still break silently on
+// a dependency upgrade and nothing else runs them at all.
+//
+// Note the gap this leaves: native-image performs its own reachability analysis and can drop the
+// very same JNI/reflection/ServiceLoader targets ProGuard used to. Closing it properly means
+// running these checks *inside* the native image — i.e. a --smoke-test mode on the app itself, so
+// smokeTestNativeImage could invoke the shipped binary rather than merely watch it stay up.
+sourceSets.create("smokeTest")
+
+// Compile against the full runtime classpath, not just the declared dependencies: the checks poke
+// at integrations that arrive transitively (dbus-java comes in via filekit), and those are
+// runtime-only for us, so they're absent from a normal compile classpath.
+sourceSets.named("smokeTest") {
+    compileClasspath += configurations.runtimeClasspath.get()
+}
+
+val smokeTestSubsystems = tasks.register<JavaExec>("smokeTestSubsystems") {
+    group = "verification"
+    description = "Run the app's subsystem checks (fs-watcher, XDG portal, notifications)."
+    dependsOn("smokeTestClasses")
+    outputs.upToDateWhen { false }
+
+    mainClass.set("com.gitvantage.smoke.SmokeTestKt")
+    classpath = files(sourceSets["smokeTest"].output, configurations.runtimeClasspath)
+}
+
+tasks.named("check") { dependsOn(smokeTestSubsystems) }

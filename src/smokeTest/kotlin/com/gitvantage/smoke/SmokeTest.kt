@@ -18,16 +18,18 @@ import kotlin.io.path.createTempDirectory
 import kotlin.system.exitProcess
 
 /**
- * Functional smoke test for the **packaged** application.
+ * Functional checks for the subsystems that fail silently.
  *
- * Compiled against the normal dependencies but *run against the jars inside the release image*
- * (see the smokeTestReleaseImage task), so it exercises the ProGuard-minified code that actually
- * ships rather than the development classpath.
+ * Runs on the development classpath (see the smokeTestSubsystems task, wired into `check`). It was
+ * originally a release gate executed against the jars inside the jpackage image, to prove ProGuard
+ * had not stripped them; releases are now GraalVM native images built without ProGuard, so it no
+ * longer says anything about the shipped artifact — native-image does its own reachability
+ * analysis, and covering that would mean running these checks inside the image itself.
  *
- * This exists because static analysis provably cannot catch the failures that kept reaching
- * releases. Every one of them was silent — a subsystem reported success and then simply did
- * nothing, because ProGuard had removed classes only reachable from native code or a
- * ServiceLoader:
+ * It still earns its place: static analysis provably cannot catch this class of failure, and
+ * nothing else exercises these paths. Every instance that reached a release was silent — a
+ * subsystem reported success and then simply did nothing, because the shrinker had removed classes
+ * only reachable from native code or a ServiceLoader:
  *
  *  - the filesystem watcher returned a valid registration and never delivered an event;
  *  - the XDG portal failed to connect, so the native file chooser degraded to a Swing dialog.
@@ -47,7 +49,7 @@ private fun record(status: Status, name: String, detail: String) {
 }
 
 fun main() {
-    println("Smoke-testing the packaged release image…")
+    println("Smoke-testing the application's subsystems…")
 
     checkFsWatcher()
     checkFsWatcherThroughSymlink()
