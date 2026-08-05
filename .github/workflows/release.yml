@@ -42,15 +42,19 @@ jobs:
           packaging-tools: 'true'
           graalvm: 'true'
 
-      # packageRelease* is finalizedBy two gates, so no extra step is needed here:
-      #   verifyReleaseBytecode  — static: unverifiable bytecode, dangling ServiceLoader
-      #                            registrations, JDK modules missing from the jlink'd runtime.
-      #   smokeTestReleaseImage  — functional: actually runs the packaged jars' fs-watcher, XDG
-      #                            portal and notifications.
-      # Both exist because neither `build` nor `run` uses ProGuard, so this whole class of defect
-      # is invisible until a user launches an installer. Several already shipped that way.
-      # D-Bus-dependent checks skip themselves when a runner has no session bus; the fs-watcher
-      # check always runs.
+      # packageGraalvmDistributionForCurrentOS, NOT packageReleaseDistributionForCurrentOS: the
+      # latter is the jpackage aggregate, and calling it is how v1.0.0 shipped a bundled-JVM app
+      # image on every platform while native-image never ran (see the long note in build.gradle.kts).
+      # The GraalVM tasks carry no build-type classifier because the plugin binds that pipeline to
+      # the default build type.
+      #
+      # This task is gated by verifyGraalvmNativeImage, which fails the build if the bundle handed
+      # to the packagers embeds a Java runtime — i.e. if we are silently back on the jpackage path.
+      #
+      # Note the jpackage-era gates (verifyReleaseBytecode, smokeTestReleaseImage) do NOT run here
+      # any more: they are finalizers of packageRelease*, and they inspect the jlink'd image that is
+      # no longer built. Their subject was ProGuard damage, and the GraalVM pipeline does not run
+      # ProGuard at all. Replacing that coverage is still open.
       # On a tag push build.gradle takes the version from GITHUB_REF_NAME. A workflow_dispatch has no
       # version in its ref, and checkout@v4's shallow clone carries no tags for the `git describe`
       # fallback, so it lands on the last resort of 0.0.0 — which jpackage *rejects on macOS* ("the
@@ -61,10 +65,10 @@ jobs:
       # Passed as ORG_GRADLE_PROJECT_appVersion rather than interpolated into the run: line, so a
       # dispatch input can't be injected into the shell. On a tag push the input is unset, the env
       # var is empty, build.gradle's regex rejects it, and GITHUB_REF_NAME wins as before.
-      - name: Build release distribution (incl. verification + smoke test)
+      - name: Build native-image distribution (incl. verification)
         env:
           ORG_GRADLE_PROJECT_appVersion: ${{ inputs.version }}
-        run: ./gradlew packageReleaseDistributionForCurrentOS --stacktrace --no-daemon
+        run: ./gradlew packageGraalvmDistributionForCurrentOS --stacktrace --no-daemon
 
       # When jpackage fails, Gradle reports only "External tool execution failed" plus the paths of
       # two log files on the runner — which are then thrown away with the runner, so the actual
@@ -89,16 +93,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-${{ runner.os }}-${{ matrix.arch }}
-          # packageReleaseDistributionForCurrentOS writes the RELEASE variant, which lands in
-          # main-release/ (main/ is only produced by the non-release packageDistribution* tasks).
-          # Each target format gets its own subdirectory; naming them explicitly (rather than a
-          # recursive glob) keeps the unpacked main-release/app/ image out — otherwise the raw
-          # launcher executable inside it would be uploaded as a release asset too.
+          # The GraalVM pipeline is bound to the default build type, so its output lands under
+          # main/ rather than main-release/, and each format gets a graalvm- prefixed subdirectory
+          # (AbstractElectronBuilderPackageTask: "$appDirName/graalvm-${outputDirName}").
+          # Naming them explicitly rather than globbing recursively keeps the unpacked app bundle
+          # out — otherwise the raw native binary inside it would be uploaded as a release asset.
           path: |
-            build/compose/binaries/main-release/deb/*.deb
-            build/compose/binaries/main-release/rpm/*.rpm
-            build/compose/binaries/main-release/dmg/*.dmg
-            build/compose/binaries/main-release/msi/*.msi
+            build/compose/binaries/main/graalvm-deb/*.deb
+            build/compose/binaries/main/graalvm-rpm/*.rpm
+            build/compose/binaries/main/graalvm-dmg/*.dmg
+            build/compose/binaries/main/graalvm-msi/*.msi
           if-no-files-found: error
 
   publish:

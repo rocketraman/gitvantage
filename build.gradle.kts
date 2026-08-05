@@ -97,6 +97,11 @@ nucleus.application {
         imageName.set("GitVantage")
     }
     buildTypes.release.proguard {
+        // NOTE: the release installers are built from the GraalVM native image (see
+        // packageGraalvmDistributionForCurrentOS below), and the plugin binds that pipeline to the
+        // *default* build type — so none of this applies to what ships today. It still governs the
+        // jpackage `packageRelease*` tasks, which remain available as a fallback.
+        //
         // Shrink, but do NOT run ProGuard's optimizer.
         //
         // Its parameter-type specialisation miscompiles kotlinx-coroutines: in
@@ -535,3 +540,78 @@ val smokeTestReleaseImage = tasks.register<JavaExec>("smokeTestReleaseImage") {
 listOf("packageReleaseDistributionForCurrentOS", "packageReleaseDeb", "packageReleaseRpm").forEach { name ->
     tasks.matching { it.name == name }.configureEach { finalizedBy(smokeTestReleaseImage) }
 }
+
+
+// --- GraalVM native packaging ------------------------------------------------------------------
+//
+// `graalvm { isEnabled }` registers a *second, parallel* task graph rather than redirecting the
+// jpackage one, and the plugin binds that graph to the **default** build type (empty classifier).
+// So the tasks are packageGraalvmDmg/Deb/Rpm/Msi — not packageGraalvmRelease* — and, unlike the
+// jpackage side, there is no ...DistributionForCurrentOS aggregate to invoke.
+//
+// v1.0.0 shipped through exactly that gap. The release workflow called
+// packageReleaseDistributionForCurrentOS, which is the *jpackage* aggregate, so every installer on
+// every platform contained a jlink'd JVM app image and native-image never ran at all — the macOS
+// job finished in under three minutes against a 90-minute timeout, and nothing failed.
+//
+// On macOS that isn't merely "slower to start". Nucleus's Tao backend requires its event loop on
+// process thread 0: a native image provides that automatically, while a plain JVM launch needs
+// -XstartOnFirstThread, which the generated jpackage launcher does not pass. The shipped 1.0.0 DMG
+// died at startup with an NPE inside Compose's resource loader, called on a JNI-attached thread
+// whose context class loader is null. Linux and Windows have no thread-0 requirement, which is why
+// the same defect was invisible there.
+//
+// Every format task is registered on every OS and carries `enabled = isCompatibleWithCurrentOS`,
+// so depending on all four is correct: the three that don't apply are skipped, and this single
+// aggregate works unchanged across the whole release matrix.
+tasks.register("packageGraalvmDistributionForCurrentOS") {
+    group = "nucleus"
+    description = "Package the GraalVM native image for the current OS."
+    dependsOn("packageGraalvmDmg", "packageGraalvmDeb", "packageGraalvmRpm", "packageGraalvmMsi")
+}
+
+/**
+ * Release gate: the bundle handed to the installer packagers must actually be a native image.
+ *
+ * The two pipelines produce bundles of the same shape in the same place, differing mainly in
+ * whether a jlink'd JDK is embedded — which is precisely why shipping the wrong one went unnoticed
+ * through a tagged release. A native image bundles no Java runtime, so the presence of a `runtime`
+ * directory means the jpackage image is being packaged and the native build silently did not
+ * happen.
+ *
+ * Deliberately narrow: it asserts the one invariant that distinguishes the pipelines, rather than
+ * enumerating expected bundle contents, so it cannot misfire as the plugin's layout evolves.
+ */
+val verifyGraalvmNativeImage = tasks.register("verifyGraalvmNativeImage") {
+    group = "verification"
+    description = "Verify the packaged bundle is a GraalVM native image, not a bundled-JVM app image."
+    dependsOn("packageGraalvmNative")
+    outputs.upToDateWhen { false }   // cheap, and must never be skipped on a release build
+
+    // appTmpDir for the default build type; the macOS bundle root is `GitVantage.app`, the Linux
+    // and Windows ones a plain directory, so address the shared parent rather than the leaf.
+    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+
+    doLast {
+        val dir = outputDir.get().asFile
+        check(dir.isDirectory) {
+            "No GraalVM packaging output at $dir - did packageGraalvmNative run?"
+        }
+        val embeddedRuntimes = dir.walkTopDown().filter { it.isDirectory && it.name == "runtime" }.toList()
+        if (embeddedRuntimes.isNotEmpty()) {
+            throw GradleException(
+                "The bundle about to be packaged embeds a Java runtime, so it is the jpackage app " +
+                    "image rather than a GraalVM native image:\n  " +
+                    embeddedRuntimes.joinToString("\n  ") { it.relativeTo(dir).path } +
+                    "\n\nThe installers would carry a bundled JVM, and on macOS the Tao event loop " +
+                    "would not run on thread 0 (see the notes above packageGraalvmDistributionForCurrentOS).",
+            )
+        }
+        logger.lifecycle("verifyGraalvmNativeImage: no embedded Java runtime under $dir")
+    }
+}
+
+// Gate the packagers, not just the native build: the check runs between producing the bundle and
+// wrapping it in an installer, so a wrong bundle can't reach a .dmg/.deb/.rpm/.msi.
+tasks.matching { it.name.startsWith("packageGraalvm") && it.name != "packageGraalvmNative" }
+    .configureEach { dependsOn(verifyGraalvmNativeImage) }
