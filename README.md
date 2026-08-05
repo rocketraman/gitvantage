@@ -112,7 +112,7 @@ hdiutil attach gitvantage-1.0.0-mac-arm64.dmg
 sudo cp -R /Volumes/GitVantage\ 1.0.0-arm64/GitVantage.app /Applications/
 # workaround https://github.com/rocketraman/gitvantage/issues/1
 sudo xattr -dr com.apple.quarantine /Applications/GitVantage.app
-sudo hdiutil umount /Volumes/GitVantage\ 1.0.0-arm64
+hdiutil umount /Volumes/GitVantage\ 1.0.0-arm64
 ```
 
 The releases aren't signed or notarized yet, so either way Gatekeeper quarantines the installed bundle and refuses to open it.
