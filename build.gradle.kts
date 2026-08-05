@@ -4,8 +4,6 @@ import java.io.File
 // script, so fully-qualified java.net.* / java.util.* references don't resolve here.
 import java.net.URLClassLoader
 import java.util.jar.JarFile
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.tree.ClassNode
 import org.objectweb.asm.tree.analysis.Analyzer
@@ -96,46 +94,10 @@ nucleus.application {
         isEnabled.set(true)
         imageName.set("GitVantage")
     }
-    buildTypes.release.proguard {
-        // NOTE: the release installers are built from the GraalVM native image (see
-        // packageGraalvmDistributionForCurrentOS below), and the plugin binds that pipeline to the
-        // *default* build type — so none of this applies to what ships today. It still governs the
-        // jpackage `packageRelease*` tasks, which remain available as a fallback.
-        //
-        // Shrink, but do NOT run ProGuard's optimizer.
-        //
-        // Its parameter-type specialisation miscompiles kotlinx-coroutines: in
-        // ChannelsKt.trySendBlocking it narrows the runBlocking$default parameter to the concrete
-        // lambda class while leaving a `checkcast Function2` in front of the call (and then strips
-        // that lambda class out of the jar), so the JVM verifier rejects the method:
-        //
-        //   java.lang.VerifyError: Bad type on operand stack ... trySendBlocking
-        //
-        // Nothing catches this before release: `./gradlew run` doesn't run ProGuard at all, so the
-        // app is only broken in the packaged installers, and only once something touches a channel
-        // (the filesystem watcher). Keep this off unless a build verifies the packaged artifact.
-        optimize.set(false)
-        // Keep rules for ServiceLoader/reflection/proxy targets the shrinker can't see.
-        configurationFiles.from(project.file("packaging/proguard-rules.pro"))
-    }
     nativeDistributions {
         packageName = "GitVantage"
         packageVersion = appVersion
         targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
-        // JDK modules the jlink'd runtime must include. The plugin infers most of them from the
-        // bytecode, but it can't see classes that are only ever loaded reflectively — and the
-        // runtime image is otherwise minimal (9 modules), so anything missed fails at runtime with
-        // NoClassDefFoundError rather than at build time.
-        //
-        // jdk.security.auth: dbus-java's SASL EXTERNAL handshake reads the caller's uid via
-        // com.sun.security.auth.module.UnixSystem. Without it every D-Bus connection dies during
-        // authentication — i.e. the XDG portal, i.e. the native folder picker in "Add repo".
-        //
-        // jdk.net: socket options used by the D-Bus unix-socket transport.
-        //
-        // verifyReleaseBytecode cross-checks this list against `jdeps --print-module-deps`, so a
-        // future dependency that needs another module fails the build instead of a user's launch.
-        modules("jdk.security.auth", "jdk.net")
         // Package metadata. These aren't cosmetic: the Linux packager (electron-builder's fpm
         // target) hard-fails the .deb build without a homepage, an author e-mail and a deb
         // maintainer, so leaving them unset breaks the release build rather than just producing
@@ -419,92 +381,6 @@ val releaseRuntimeDir: File = File(
 )
 
 
-// --- Pathing jar: keep the launcher's classpath short ---------------------------------------
-//
-// jpackage's generated launcher builds its JVM argument block from the `app.classpath` entries in
-// <name>.cfg, expanded to *absolute* paths. With 71 jars under a deep directory that string runs
-// past 10K characters and overruns a fixed buffer in the launcher: the classpath is truncated
-// mid-filename, every argument after it is wiped, and the launcher segfaults in setenv() before
-// the JVM ever starts. Nothing is logged; the app image simply dies.
-//
-// It is purely path-length dependent, which is why an installed package (/opt/GitVantage, a
-// 24-character prefix) ran fine while the same image under build/compose/binaries/... did not.
-// Reproduced on Temurin 21.0.10 *and* 25.0.2, so moving the packaging JDK does not fix it.
-//
-// Rejected alternatives, both tested:
-//   * @argfiles - the launcher hands JLI a fully-assembled argv, so @-file expansion never runs
-//     (JDK_JAVA_OPTIONS is ignored for the same reason). jpackage's own @argfile support applies
-//     to its build-time CLI, not to the generated launcher.
-//   * `app.classpath=$APPDIR/*` - works, but wildcard expansion order is unspecified, and this
-//     image ships four artifacts at two versions each (lifecycle-runtime-compose-desktop 2.9.4
-//     and 2.9.6 among them). Which one wins would become filesystem-dependent.
-//
-// So the entry list moves into a pathing jar's Class-Path manifest: order is preserved exactly,
-// and it stays relocatable because entries resolve relative to the jar's own location. This is
-// the shape jpackage expects anyway - `--main-jar` plus a manifest referencing its siblings.
-fun shortenLauncherClasspath(appDir: File, launcherName: String) {
-    val cfg = File(appDir, "$launcherName.cfg")
-    check(cfg.isFile) { "Launcher config not found at $cfg - did the app image layout change?" }
-    val lines = cfg.readLines()
-    val entries = lines.filter { it.startsWith("app.classpath=") }.map { it.substringAfter('=').trim() }
-    // Idempotent: a freshly generated image is rewritten, an already-rewritten one is left alone.
-    if (entries.size <= 1) return
-
-    // Class-Path holds space-separated *URIs*, so URI-significant characters must be escaped or an
-    // entry silently resolves to the wrong file (or to nothing at all).
-    val classPath = entries.joinToString(" ") {
-        it.substringAfterLast('/').replace("%", "%25").replace(" ", "%20")
-    }
-
-    // Manifest lines are capped at 72 bytes; continuation lines begin with a single space.
-    val folded = StringBuilder()
-    var rest = "Class-Path: " + classPath
-    var first = true
-    while (rest.isNotEmpty()) {
-        val take = minOf(if (first) 72 else 71, rest.length)
-        folded.append(if (first) "" else " ").append(rest.substring(0, take)).append("\r\n")
-        rest = rest.substring(take)
-        first = false
-    }
-
-    val jar = File(appDir, "classpath.jar")
-    ZipOutputStream(jar.outputStream().buffered()).use { zip ->
-        zip.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
-        zip.write(("Manifest-Version: 1.0\r\n" + folded + "\r\n").toByteArray())
-        zip.closeEntry()
-    }
-
-    var injected = false
-    val rewritten = buildList {
-        for (line in lines) {
-            if (line.startsWith("app.classpath=")) {
-                if (!injected) { add("app.classpath=\$APPDIR/classpath.jar"); injected = true }
-                continue
-            }
-            add(line)
-        }
-    }
-    cfg.writeText(rewritten.joinToString("\n", postfix = "\n"))
-
-    // The invariant this whole task exists to hold. Observed failure threshold is ~10K expanded
-    // characters; 8K leaves headroom without being tight enough to trip on a normal image.
-    val appDirPath = appDir.absolutePath
-    val before = entries.joinToString(":") { it.replace("\$APPDIR", appDirPath) }.length
-    val after = "$appDirPath/classpath.jar".length
-    logger.lifecycle(
-        "shortenLauncherClasspath: ${entries.size} entries -> classpath.jar " +
-            "(launcher classpath $before -> $after chars)",
-    )
-    check(after < 8000) {
-        "Launcher classpath is still $after chars - jpackage's launcher will overflow and segfault."
-    }
-}
-
-tasks.matching { it.name == "createReleaseDistributable" }.configureEach {
-    doLast {
-        shortenLauncherClasspath(releaseAppDir, appImageName)
-    }
-}
 
 // --- Smoke test of the packaged image ------------------------------------------------------
 // Compiled against the normal dependencies, but executed with the *packaged* jars on its
