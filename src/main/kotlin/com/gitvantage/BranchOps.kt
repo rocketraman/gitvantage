@@ -6,7 +6,6 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Lists a repo's branches. For local branches we compute two independent relationships:
@@ -64,13 +63,13 @@ object BranchOps {
 
     suspend fun load(repoPath: String): List<Branch> = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext emptyList()
+        if (!Git.isRepo(dir)) return@withContext emptyList()
 
         // name, unix date, "*" for HEAD, relative date, upstream short, upstream track
         // ("[ahead N, behind M]"), and the working tree holding the branch (empty unless one does).
         // %(worktreepath) needs git 2.23 — older git fails the whole command and the branch list
         // comes back empty, which is the same way this file already treats a git too old to ask.
-        val raw = git(dir, "for-each-ref", "--sort=-committerdate",
+        val raw = Git.read(dir, "for-each-ref", "--sort=-committerdate",
             "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)",
             "refs/heads")
         val here = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
@@ -102,7 +101,7 @@ object BranchOps {
             val behind = if (isMainline) 0 else count(dir, "${r.name}..$mainline")
             val ahead = if (isMainline) 0 else count(dir, "$mainline..${r.name}")
             // merged = every commit on the branch is already in mainline (ancestor), excluding mainline itself
-            val merged = !isMainline && gitExit(dir, "merge-base", "--is-ancestor", r.name, mainline) == 0
+            val merged = !isMainline && Git.exitCode(dir, "merge-base", "--is-ancestor", r.name, mainline) == 0
             val ageDays = (nowSecs - r.epoch) / 86_400
             val stale = !r.isCurrent && !isMainline && ageDays > Meta.STALE_DAYS && behind > Meta.VERY_BEHIND
             val (uAhead, uBehind, gone) = parseTrack(r.track)
@@ -118,11 +117,11 @@ object BranchOps {
     suspend fun loadRemotes(repoPath: String, localNames: Set<String>): List<RemoteBranch> =
         withContext(Dispatchers.IO) {
             val dir = File(repoPath)
-            if (!File(dir, ".git").exists()) return@withContext emptyList()
+            if (!Git.isRepo(dir)) return@withContext emptyList()
             // Mainline to test "merged" against: prefer local main/master, else the remote's.
             val mainline = listOf("main", "master", "origin/main", "origin/master")
-                .firstOrNull { git(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
-            val raw = git(dir, "for-each-ref", "--sort=-committerdate",
+                .firstOrNull { Git.read(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
+            val raw = Git.read(dir, "for-each-ref", "--sort=-committerdate",
                 "--format=%(refname:short)$SEP%(committerdate:relative)$SEP%(authorname)", "refs/remotes")
             raw.lineSequence().filter { it.isNotBlank() }.mapNotNull { line ->
                 val p = line.split(SEP)
@@ -133,7 +132,7 @@ object BranchOps {
                 if (name.isEmpty() || name.endsWith("/HEAD") || !name.contains('/')) return@mapNotNull null
                 val short = name.substringAfter('/')   // drop the remote name prefix
                 val merged = mainline != null && mainline.substringAfter('/') != short &&
-                    gitExit(dir, "merge-base", "--is-ancestor", name, mainline) == 0
+                    Git.exitCode(dir, "merge-base", "--is-ancestor", name, mainline) == 0
                 RemoteBranch(
                     name = name,
                     shortName = short,
@@ -145,29 +144,25 @@ object BranchOps {
             }.toList()
         }
 
-    private val ANSI = Regex("\\u001B\\[[0-9;]*m")
-    private fun firstErr(err: String, fallback: String) =
-        err.lineSequence().map { ANSI.replace(it, "").trim() }.firstOrNull { it.isNotEmpty() } ?: fallback
-
     /** Check out an existing local branch. Fails (not throws) if the working tree would be clobbered. */
-    suspend fun switch(repoPath: String, name: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun switch(repoPath: String, name: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        val (code, _, err) = GitLog.exec(dir.name, dir, listOf("switch", name))
-        if (code == 0) GitOps.Result(repoPath, true, "Switched to $name")
-        else GitOps.Result(repoPath, false, firstErr(err, "switch failed"))
+        val res = Git.run(dir, listOf("switch", name))
+        if (res.ok) OpResult(repoPath, true, "Switched to $name")
+        else OpResult(repoPath, false, res.firstError("switch failed"))
     }
 
     /** Create a local branch tracking [remoteName] (e.g. "origin/feature/login") and switch to it.
      *  If a local branch of the same short name already exists, just switches to it. */
-    suspend fun checkoutRemote(repoPath: String, remoteName: String, hasLocal: Boolean): GitOps.Result =
+    suspend fun checkoutRemote(repoPath: String, remoteName: String, hasLocal: Boolean): OpResult =
         withContext(Dispatchers.IO) {
             val dir = File(repoPath)
             val short = remoteName.substringAfter('/')
-            val (code, _, err) =
-                if (hasLocal) GitLog.exec(dir.name, dir, listOf("switch", short))
-                else GitLog.exec(dir.name, dir, listOf("switch", "-c", short, "--track", remoteName))
-            if (code == 0) GitOps.Result(repoPath, true, "Checked out $short")
-            else GitOps.Result(repoPath, false, firstErr(err, "checkout failed"))
+            val res =
+                if (hasLocal) Git.run(dir, listOf("switch", short))
+                else Git.run(dir, listOf("switch", "-c", short, "--track", remoteName))
+            if (res.ok) OpResult(repoPath, true, "Checked out $short")
+            else OpResult(repoPath, false, res.firstError("checkout failed"))
         }
 
     /**
@@ -182,27 +177,27 @@ object BranchOps {
      * quietly create a second one beside it. Never `--force` — a diverged branch is refused by
      * git rather than overwritten, which is why the caller doesn't offer this on one.
      */
-    suspend fun push(repoPath: String, name: String, upstream: String?): GitOps.Result =
+    suspend fun push(repoPath: String, name: String, upstream: String?): OpResult =
         withContext(Dispatchers.IO) {
             val dir = File(repoPath)
             val args =
                 if (upstream == null) listOf("push", "-u", "origin", name)
                 else listOf("push", upstream.substringBefore('/'), "$name:${upstream.substringAfter('/')}")
-            val (code, _, err) = GitLog.exec(dir.name, dir, args, timeoutSeconds = 90)
-            if (code == 0) {
-                GitOps.Result(repoPath, true, if (upstream == null) "Published $name" else "Pushed $name")
+            val res = Git.run(dir, args, Git.NETWORK_TIMEOUT)
+            if (res.ok) {
+                OpResult(repoPath, true, if (upstream == null) "Published $name" else "Pushed $name")
             } else {
-                GitOps.Result(repoPath, false, firstErr(err, "push failed"))
+                OpResult(repoPath, false, res.firstError("push failed"))
             }
         }
 
     /** Delete a local branch. [force] uses -D (also deletes unmerged). Never the current branch. */
-    suspend fun delete(repoPath: String, name: String, force: Boolean): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun delete(repoPath: String, name: String, force: Boolean): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
         val flag = if (force) "-D" else "-d"
-        val (code, out, err) = GitLog.exec(dir.name, dir, listOf("branch", flag, name))
-        if (code == 0) GitOps.Result(repoPath, true, "Deleted $name")
-        else GitOps.Result(repoPath, false, firstErr(err, "delete failed"))
+        val res = Git.run(dir, listOf("branch", flag, name))
+        if (res.ok) OpResult(repoPath, true, "Deleted $name")
+        else OpResult(repoPath, false, res.firstError("delete failed"))
     }
 
     /**
@@ -218,13 +213,13 @@ object BranchOps {
      * whether or not the branch landed. That's exactly why the caller confirms an unmerged one.
      * The push also prunes the local `refs/remotes/...` copy, so the list is right after a reload.
      */
-    suspend fun deleteRemote(repoPath: String, rb: RemoteBranch): GitOps.Result =
+    suspend fun deleteRemote(repoPath: String, rb: RemoteBranch): OpResult =
         withContext(Dispatchers.IO) {
             val dir = File(repoPath)
             val args = listOf("push", rb.remote, "--delete", "refs/heads/${rb.shortName}")
-            val (code, _, err) = GitLog.exec(dir.name, dir, args, timeoutSeconds = 90)
-            if (code == 0) GitOps.Result(repoPath, true, "Deleted ${rb.name}")
-            else GitOps.Result(repoPath, false, firstErr(err, "remote delete failed"))
+            val res = Git.run(dir, args, Git.NETWORK_TIMEOUT)
+            if (res.ok) OpResult(repoPath, true, "Deleted ${rb.name}")
+            else OpResult(repoPath, false, res.firstError("remote delete failed"))
         }
 
     /** Parse git's `%(upstream:track)` — "[ahead 2, behind 1]", "[gone]", or "". */
@@ -241,18 +236,5 @@ object BranchOps {
     )
 
     private fun count(dir: File, range: String): Int =
-        git(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
-
-    private data class Run(val code: Int, val out: String, val err: String)
-
-    private fun run(dir: File, vararg args: String): Run = try {
-        val proc = ProcessBuilder(listOf("git", *args)).directory(dir).start()
-        val out = proc.inputStream.bufferedReader().readText()
-        val err = proc.errorStream.bufferedReader().readText()
-        if (!proc.waitFor(20, TimeUnit.SECONDS)) { proc.destroyForcibly(); Run(-1, out, "timed out") }
-        else Run(proc.exitValue(), out, err)
-    } catch (e: Exception) { Run(-1, "", e.message ?: "failed") }
-
-    private fun git(dir: File, vararg args: String): String = run(dir, *args).let { if (it.code == 0) it.out else "" }
-    private fun gitExit(dir: File, vararg args: String): Int = run(dir, *args).code
+        Git.read(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
 }

@@ -6,7 +6,6 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
 /**
@@ -37,21 +36,21 @@ object DiffOps {
 
     suspend fun load(repoPath: String): Diff = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext Diff(emptyList(), emptyList())
+        if (!Git.isRepo(dir)) return@withContext Diff(emptyList(), emptyList())
         val items = mutableListOf<Item>()
         val files = mutableListOf<FileRef>()
-        appendSection("Staged", parseUnified(git(dir, "-c", "color.ui=never", "diff", "--cached")), items, files)
-        appendSection("Modified", parseUnified(git(dir, "-c", "color.ui=never", "diff")), items, files)
+        appendSection("Staged", parseUnified(Git.read(dir, "-c", "color.ui=never", "diff", "--cached")), items, files)
+        appendSection("Modified", parseUnified(Git.read(dir, "-c", "color.ui=never", "diff")), items, files)
         appendSection("Untracked", untrackedDiff(dir), items, files)
         Diff(files, items)
     }
 
     suspend fun loadStash(repoPath: String, ref: String): Diff = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext Diff(emptyList(), emptyList())
+        if (!Git.isRepo(dir)) return@withContext Diff(emptyList(), emptyList())
         val items = mutableListOf<Item>()
         val files = mutableListOf<FileRef>()
-        appendSection("Stash", parseUnified(git(dir, "-c", "color.ui=never", "stash", "show", "-p", ref)), items, files)
+        appendSection("Stash", parseUnified(Git.read(dir, "-c", "color.ui=never", "stash", "show", "-p", ref)), items, files)
         Diff(files, items)
     }
 
@@ -59,11 +58,11 @@ object DiffOps {
      *  `git diff <mainline>...<ref>` (base = merge-base, so only the branch's own changes show). */
     suspend fun loadBranchDiff(repoPath: String, ref: String): Diff = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext Diff(emptyList(), emptyList())
+        if (!Git.isRepo(dir)) return@withContext Diff(emptyList(), emptyList())
         val base = mainlineFor(dir, ref) ?: return@withContext Diff(emptyList(), emptyList())
         val items = mutableListOf<Item>()
         val files = mutableListOf<FileRef>()
-        appendSection("$ref ← $base", parseUnified(git(dir, "-c", "color.ui=never", "diff", "$base...$ref")), items, files)
+        appendSection("$ref ← $base", parseUnified(Git.read(dir, "-c", "color.ui=never", "diff", "$base...$ref")), items, files)
         Diff(files, items)
     }
 
@@ -71,10 +70,10 @@ object DiffOps {
      *  submodule pointer move would/did advance across. */
     suspend fun loadRangeDiff(repoPath: String, base: String, target: String, label: String): Diff = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext Diff(emptyList(), emptyList())
+        if (!Git.isRepo(dir)) return@withContext Diff(emptyList(), emptyList())
         val items = mutableListOf<Item>()
         val files = mutableListOf<FileRef>()
-        appendSection(label, parseUnified(git(dir, "-c", "color.ui=never", "diff", "$base..$target")), items, files)
+        appendSection(label, parseUnified(Git.read(dir, "-c", "color.ui=never", "diff", "$base..$target")), items, files)
         Diff(files, items)
     }
 
@@ -84,7 +83,7 @@ object DiffOps {
         val refShort = ref.substringAfter('/')
         return listOf("main", "master", "origin/main", "origin/master").firstOrNull { cand ->
             cand.substringAfter('/') != refShort &&
-                git(dir, "rev-parse", "--verify", "-q", cand).isNotBlank()
+                Git.read(dir, "rev-parse", "--verify", "-q", cand).isNotBlank()
         }
     }
 
@@ -166,7 +165,7 @@ object DiffOps {
     private fun untrackedDiff(dir: File): Local {
         val items = mutableListOf<Item>()
         val files = mutableListOf<FileRef>()
-        git(dir, "ls-files", "--others", "--exclude-standard").lineSequence()
+        Git.read(dir, "ls-files", "--others", "--exclude-standard").lineSequence()
             .filter { it.isNotBlank() }
             .forEach { rel ->
                 val f = File(dir, rel)
@@ -195,15 +194,5 @@ object DiffOps {
     private fun parseHunkStarts(line: String): Pair<Int, Int>? {
         val m = Regex("""@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@""").find(line) ?: return null
         return m.groupValues[1].toInt() to m.groupValues[2].toInt()
-    }
-
-    private fun git(dir: File, vararg args: String): String = try {
-        val proc = ProcessBuilder(listOf("git", *args))
-            .directory(dir).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(30, TimeUnit.SECONDS)) { proc.destroyForcibly(); "" }
-        else if (proc.exitValue() != 0) "" else out
-    } catch (e: Exception) {
-        ""
     }
 }

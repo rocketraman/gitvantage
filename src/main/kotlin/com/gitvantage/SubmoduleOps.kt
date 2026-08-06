@@ -6,14 +6,13 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Git-submodule inspection and operations for a parent repo. Reads `.gitmodules` +
  * `git submodule status` to show, for each submodule: the upstream it points to, the
  * recorded pointer, how far behind that pointer is from the submodule's remote, and whether
- * the submodule's working tree is dirty. Fetching and pointer updates run through [GitLog]
- * so they show in the console.
+ * the submodule's working tree is dirty. Every command is spawned by [Git]; the fetches and
+ * pointer updates are the mutating ones, so those are the ones recorded in [GitLog].
  */
 object SubmoduleOps {
 
@@ -41,7 +40,7 @@ object SubmoduleOps {
         // Parse .gitmodules into name -> (path, url, branch).
         data class Cfg(var path: String? = null, var url: String? = null, var branch: String? = null)
         val byName = linkedMapOf<String, Cfg>()
-        git(dir, "config", "--file", ".gitmodules", "--list").lineSequence().forEach { line ->
+        Git.read(dir, "config", "--file", ".gitmodules", "--list").lineSequence().forEach { line ->
             val m = Regex("^submodule\\.(.+)\\.(path|url|branch)=(.*)$").find(line) ?: return@forEach
             val (name, key, value) = m.destructured
             val c = byName.getOrPut(name) { Cfg() }
@@ -50,7 +49,7 @@ object SubmoduleOps {
 
         // git submodule status → status char per path.
         val statusByPath = hashMapOf<String, Char>()
-        git(dir, "submodule", "status").lineSequence().filter { it.isNotBlank() }.forEach { raw ->
+        Git.read(dir, "submodule", "status").lineSequence().filter { it.isNotBlank() }.forEach { raw ->
             val ch = raw[0]
             val body = raw.substring(1).trim()
             val path = body.substringAfter(' ').substringBefore(" (").trim()
@@ -61,17 +60,17 @@ object SubmoduleOps {
             val path = c.path ?: return@mapNotNull null
             val statusChar = statusByPath[path] ?: '-'
             val subDir = File(dir, path)
-            val initialized = statusChar != '-' && File(subDir, ".git").exists()
-            val recordedFull = git(dir, "rev-parse", "HEAD:$path").trim()
+            val initialized = statusChar != '-' && Git.isRepo(subDir)
+            val recordedFull = Git.read(dir, "rev-parse", "HEAD:$path").trim()
             var behind = 0
             var dirtyCount = 0
             var remoteRef: String? = null
             if (initialized) {
-                dirtyCount = git(subDir, "status", "--porcelain").lineSequence().count { it.isNotBlank() }
+                dirtyCount = Git.read(subDir, "status", "--porcelain").lineSequence().count { it.isNotBlank() }
                 remoteRef = c.branch?.let { "origin/$it" }
-                    ?: git(subDir, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").trim().ifEmpty { null }
+                    ?: Git.read(subDir, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").trim().ifEmpty { null }
                 if (remoteRef != null && recordedFull.isNotEmpty()) {
-                    behind = git(subDir, "rev-list", "--count", "$recordedFull..$remoteRef").trim().toIntOrNull() ?: 0
+                    behind = Git.read(subDir, "rev-list", "--count", "$recordedFull..$remoteRef").trim().toIntOrNull() ?: 0
                 }
             }
             // Note: `git submodule sync` (URL re-point) is intentionally not surfaced — .gitmodules
@@ -82,64 +81,52 @@ object SubmoduleOps {
     }
 
     /** `git fetch` inside one submodule (logged) so its "behind" count refreshes. */
-    suspend fun fetch(repoPath: String, path: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun fetch(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
         val subDir = File(repoPath, path)
-        if (!File(subDir, ".git").exists()) return@withContext GitOps.Result(repoPath, false, "$path not initialized")
-        val (code, _, err) = GitLog.exec("${File(repoPath).name}/$path", subDir, listOf("fetch"))
-        if (code == 0) GitOps.Result(repoPath, true, "Fetched $path") else GitOps.Result(repoPath, false, firstErr(err, "fetch failed"))
+        if (!Git.isRepo(subDir)) return@withContext OpResult(repoPath, false, "$path not initialized")
+        val res = Git.run(subDir, listOf("fetch"), Git.NETWORK_TIMEOUT, repoName = "${File(repoPath).name}/$path")
+        if (res.ok) OpResult(repoPath, true, "Fetched $path") else OpResult(repoPath, false, res.firstError("fetch failed"))
     }
 
     /** Fetch every initialized submodule. */
-    suspend fun fetchAll(repoPath: String, subs: List<Submodule>): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun fetchAll(repoPath: String, subs: List<Submodule>): OpResult = withContext(Dispatchers.IO) {
         val inited = subs.filter { it.initialized }
-        if (inited.isEmpty()) return@withContext GitOps.Result(repoPath, false, "No initialized submodules")
+        if (inited.isEmpty()) return@withContext OpResult(repoPath, false, "No initialized submodules")
         var ok = 0
         inited.forEach { if (fetch(repoPath, it.path).ok) ok++ }
-        GitOps.Result(repoPath, true, "Fetched $ok/${inited.size} submodules")
+        OpResult(repoPath, true, "Fetched $ok/${inited.size} submodules")
     }
 
     /** Initialize + check out a submodule that isn't yet present. */
-    suspend fun init(repoPath: String, path: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun init(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        val (code, _, err) = GitLog.exec(dir.name, dir, listOf("submodule", "update", "--init", path))
-        if (code == 0) GitOps.Result(repoPath, true, "Initialized $path") else GitOps.Result(repoPath, false, firstErr(err, "init failed"))
+        val res = Git.run(dir, listOf("submodule", "update", "--init", path), Git.NETWORK_TIMEOUT)
+        if (res.ok) OpResult(repoPath, true, "Initialized $path") else OpResult(repoPath, false, res.firstError("init failed"))
     }
 
     /** `git submodule sync <path>` — re-point the submodule's remote at the URL in `.gitmodules`
      *  (use after the URL there changes). */
-    suspend fun sync(repoPath: String, path: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun sync(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        val (code, _, err) = GitLog.exec(dir.name, dir, listOf("submodule", "sync", "--", path))
-        if (code == 0) GitOps.Result(repoPath, true, "Synced $path URL") else GitOps.Result(repoPath, false, firstErr(err, "sync failed"))
+        val res = Git.run(dir, listOf("submodule", "sync", "--", path))
+        if (res.ok) OpResult(repoPath, true, "Synced $path URL") else OpResult(repoPath, false, res.firstError("sync failed"))
     }
 
     /** `git submodule deinit -f <path>` — remove the submodule's working tree (it can be re-inited). */
-    suspend fun deinit(repoPath: String, path: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun deinit(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        val (code, _, err) = GitLog.exec(dir.name, dir, listOf("submodule", "deinit", "-f", "--", path))
-        if (code == 0) GitOps.Result(repoPath, true, "Deinitialized $path") else GitOps.Result(repoPath, false, firstErr(err, "deinit failed"))
+        val res = Git.run(dir, listOf("submodule", "deinit", "-f", "--", path))
+        if (res.ok) OpResult(repoPath, true, "Deinitialized $path") else OpResult(repoPath, false, res.firstError("deinit failed"))
     }
 
     /** Advance a submodule to the latest commit on its remote branch and stage the new pointer
      *  in the parent — the user then commits the parent to record it. */
-    suspend fun updatePointer(repoPath: String, path: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun updatePointer(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
         val name = dir.name
-        val (code, _, err) = GitLog.exec("$name/$path", dir, listOf("submodule", "update", "--remote", path))
-        if (code != 0) return@withContext GitOps.Result(repoPath, false, firstErr(err, "update failed"))
-        GitLog.exec(name, dir, listOf("add", path))   // stage the new gitlink for committing
-        GitOps.Result(repoPath, true, "Advanced $path — commit the parent to record it")
+        val res = Git.run(dir, listOf("submodule", "update", "--remote", path), Git.NETWORK_TIMEOUT, repoName = "$name/$path")
+        if (!res.ok) return@withContext OpResult(repoPath, false, res.firstError("update failed"))
+        Git.run(dir, listOf("add", path))   // stage the new gitlink for committing
+        OpResult(repoPath, true, "Advanced $path — commit the parent to record it")
     }
-
-    private val ANSI = Regex("\\u001B\\[[0-9;]*m")
-    private fun firstErr(err: String, fallback: String) =
-        err.lineSequence().map { ANSI.replace(it, "").trim() }.firstOrNull { it.isNotEmpty() } ?: fallback
-
-    private fun git(dir: File, vararg args: String): String = try {
-        val proc = ProcessBuilder(listOf("git", *args)).directory(dir)
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(20, TimeUnit.SECONDS)) { proc.destroyForcibly(); "" }
-        else if (proc.exitValue() != 0) "" else out
-    } catch (e: Exception) { "" }
 }

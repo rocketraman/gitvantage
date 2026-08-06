@@ -816,7 +816,7 @@ class AppState(private val scope: CoroutineScope) {
         val candidates = picked.flatMap { p ->
             val dir = File(p)
             when {
-                File(dir, ".git").exists() -> listOf(dir.absolutePath)          // a git repo → add it
+                Git.isRepo(dir) -> listOf(dir.absolutePath)          // a git repo → add it
                 else -> Registry.discover(dir).map { it.path }                   // a parent → add its git children
                     .ifEmpty { listOf(dir.absolutePath) }                        // neither → add as-is (scanner flags "Not a git repo")
             }
@@ -956,7 +956,7 @@ class AppState(private val scope: CoroutineScope) {
     // ---- push / fetch (git side effects; run off-thread, then rescan) ----
 
     /** Push each repo that has a remote; skips the rest, reports per-repo outcome.
-     *  (Branches without a tracking upstream are still pushed — see [GitOps.push].) */
+     *  (Branches without a tracking upstream are still pushed — see [RepoOps.push].) */
     fun push(ids: Collection<String>) {
         val pushable = ids.filter { id -> repos.find { it.id == id }?.hasRemote == true }
         val skipped = ids.size - pushable.size
@@ -965,7 +965,7 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             toast("Pushing ${es.size} ${plural(es.size)}…")
             val results = withContext(Dispatchers.Default) {
-                es.map { e -> async { scanLimiter.withPermit { GitOps.push(e) } } }.awaitAll()
+                es.map { e -> async { scanLimiter.withPermit { RepoOps.push(e) } } }.awaitAll()
             }
             rescanRepos(results.map { it.id }, fetch = false)
             val ok = results.count { it.ok }
@@ -1462,7 +1462,7 @@ class AppState(private val scope: CoroutineScope) {
     fun stashApply(id: String, ref: String) {
         val e = entries[id] ?: return
         scope.launch {
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { GitOps.stashApply(e, ref) } }
+            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.stashApply(e, ref) } }
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }
@@ -1471,7 +1471,7 @@ class AppState(private val scope: CoroutineScope) {
     fun stashDrop(id: String, ref: String) {
         val e = entries[id] ?: return
         scope.launch {
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { GitOps.stashDrop(e, ref) } }
+            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.stashDrop(e, ref) } }
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }
@@ -1483,7 +1483,7 @@ class AppState(private val scope: CoroutineScope) {
         if (title.isBlank()) return
         scope.launch {
             toast("Committing ${File(id).name}…")
-            val result = withContext(Dispatchers.Default) { scanLimiter.withPermit { GitOps.commit(e, title, body, stageAll) } }
+            val result = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.commit(e, title, body, stageAll) } }
             rescanRepos(listOf(id), fetch = false)
             toast(result.message)
         }
@@ -1494,7 +1494,7 @@ class AppState(private val scope: CoroutineScope) {
         val e = entries[id] ?: return
         scope.launch {
             toast("Fast-forwarding ${File(id).name}…")
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { GitOps.fastForward(e) } }
+            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.fastForward(e) } }
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }

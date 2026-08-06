@@ -6,7 +6,6 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Git-worktree inspection for a repo: every working tree attached to the same repository —
@@ -116,7 +115,7 @@ object WorktreeOps {
      * [Worktree.isCurrent]. Empty when the path isn't a repo, or on a git too old for the command.
      */
     fun list(repoPath: String): List<Worktree> {
-        val trees = parse(git(File(repoPath), "worktree", "list", "--porcelain"))
+        val trees = parse(Git.read(File(repoPath), "worktree", "list", "--porcelain"))
         if (trees.isEmpty()) return trees
         val here = canonical(repoPath)
         return trees.map { it.copy(isCurrent = canonical(it.path) == here) }
@@ -159,16 +158,16 @@ object WorktreeOps {
             val dir = File(wt.path)
             if (!dir.isDirectory) return@map wt.copy(missing = true)
             wt.copy(
-                dirtyCount = git(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
+                dirtyCount = Git.read(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
                 unmerged = mainline?.let { count(dir, "$it..HEAD") } ?: 0,
                 mainline = mainline,
-                lastRelative = if (detail) git(dir, "log", "-1", "--format=%cr").trim() else "",
+                lastRelative = if (detail) Git.read(dir, "log", "-1", "--format=%cr").trim() else "",
                 // A branch can only be "merged" against something, and never against itself: mainline
                 // is trivially its own ancestor, and calling the main checkout's branch merged would
                 // offer to delete it.
                 branchMerged = detail && wt.branch != null && mainline != null &&
                     wt.branch != mainline.substringAfter('/') &&
-                    gitExit(dir, "merge-base", "--is-ancestor", wt.branch, mainline) == 0,
+                    Git.exitCode(dir, "merge-base", "--is-ancestor", wt.branch, mainline) == 0,
             )
         }
     }
@@ -176,10 +175,10 @@ object WorktreeOps {
     /** The ref to measure "landed" against: a local main/master if there is one, else the remote's. */
     private fun mainlineRef(dir: File): String? =
         listOf("main", "master", "origin/main", "origin/master")
-            .firstOrNull { git(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
+            .firstOrNull { Git.read(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
 
     private fun count(dir: File, range: String): Int =
-        git(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
+        Git.read(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
 
     /**
      * `git worktree remove` — deletes the worktree's folder and its files. The branch it held is
@@ -205,7 +204,7 @@ object WorktreeOps {
         force: Boolean,
         locked: Boolean,
         alsoBranch: String? = null,
-    ): GitOps.Result = withContext(Dispatchers.IO) {
+    ): OpResult = withContext(Dispatchers.IO) {
         val dir = File(runFrom)
         val args = buildList {
             add("worktree"); add("remove")
@@ -213,17 +212,17 @@ object WorktreeOps {
             if (locked) add("--force")
             add(path)
         }
-        val (code, _, err) = GitLog.exec(dir.name, dir, args)
-        if (code != 0) return@withContext GitOps.Result(runFrom, false, firstErr(err, "remove failed"))
+        val res = Git.run(dir, args)
+        if (!res.ok) return@withContext OpResult(runFrom, false, res.firstError("remove failed"))
 
         val name = File(path).name
         tidyAgentParent(path)
-        if (alsoBranch == null) return@withContext GitOps.Result(runFrom, true, "Removed worktree $name")
-        val (bCode, _, bErr) = GitLog.exec(dir.name, dir, listOf("branch", "-d", alsoBranch))
-        GitOps.Result(
+        if (alsoBranch == null) return@withContext OpResult(runFrom, true, "Removed worktree $name")
+        val branchRes = Git.run(dir, listOf("branch", "-d", alsoBranch))
+        OpResult(
             runFrom, true,
-            if (bCode == 0) "Removed worktree $name and branch $alsoBranch"
-            else "Removed worktree $name — branch kept: ${firstErr(bErr, "delete failed")}",
+            if (branchRes.ok) "Removed worktree $name and branch $alsoBranch"
+            else "Removed worktree $name — branch kept: ${branchRes.firstError("delete failed")}",
         )
     }
 
@@ -242,32 +241,12 @@ object WorktreeOps {
     }
 
     /** `git worktree prune` — drop the administrative entries for worktrees whose directory is gone. */
-    suspend fun prune(repoPath: String): GitOps.Result = withContext(Dispatchers.IO) {
+    suspend fun prune(repoPath: String): OpResult = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        val (code, _, err) = GitLog.exec(dir.name, dir, listOf("worktree", "prune", "-v"))
-        if (code == 0) GitOps.Result(repoPath, true, "Pruned stale worktree entries")
-        else GitOps.Result(repoPath, false, firstErr(err, "prune failed"))
+        val res = Git.run(dir, listOf("worktree", "prune", "-v"))
+        if (res.ok) OpResult(repoPath, true, "Pruned stale worktree entries")
+        else OpResult(repoPath, false, res.firstError("prune failed"))
     }
 
     private fun canonical(path: String): String = runCatching { File(path).canonicalPath }.getOrDefault(path)
-
-    private val ANSI = Regex("\\u001B\\[[0-9;]*m")
-    private fun firstErr(err: String, fallback: String) =
-        err.lineSequence().map { ANSI.replace(it, "").trim() }.firstOrNull { it.isNotEmpty() } ?: fallback
-
-    /** Exit code only, for git's yes/no questions (`merge-base --is-ancestor`). -1 if it never ran. */
-    private fun gitExit(dir: File, vararg args: String): Int = try {
-        val proc = ProcessBuilder(listOf("git", *args)).directory(dir)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        if (!proc.waitFor(20, TimeUnit.SECONDS)) { proc.destroyForcibly(); -1 } else proc.exitValue()
-    } catch (e: Exception) { -1 }
-
-    private fun git(dir: File, vararg args: String): String = try {
-        val proc = ProcessBuilder(listOf("git", *args)).directory(dir)
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(20, TimeUnit.SECONDS)) { proc.destroyForcibly(); "" }
-        else if (proc.exitValue() != 0) "" else out
-    } catch (e: Exception) { "" }
 }

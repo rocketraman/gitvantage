@@ -144,7 +144,7 @@ object Registry {
         if (!root.isDirectory) return emptyList()
         val out = mutableListOf<RegistryEntry>()
         fun walk(dir: File, depth: Int) {
-            if (File(dir, ".git").exists()) {          // a repo → record it, stop descending
+            if (Git.isRepo(dir)) {          // a repo → record it, stop descending
                 out += RegistryEntry(dir.absolutePath)
                 return
             }

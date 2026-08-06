@@ -16,6 +16,17 @@ data class ChangedFile(
 
 data class Stash(val label: String, val msg: String)
 
+/**
+ * The outcome of one side-effecting operation, as the UI needs it: which repo it touched, whether
+ * it worked, and the line to put in a toast. Shared by every `*Ops` object ([RepoOps], [BranchOps],
+ * [WorktreeOps], [SubmoduleOps]) — it belongs to none of them, which is why it lives here rather
+ * than nested inside whichever one happened to declare it first.
+ *
+ * [ok] is "the operation did what it said", not "nothing went wrong": a worktree removal whose
+ * branch delete was refused still reports true, because the worktree is gone and a retry can't help.
+ */
+data class OpResult(val id: String, val ok: Boolean, val message: String)
+
 /** A git repo discovered under a picked parent folder, shown in the "Add repo" chooser. */
 data class RepoCandidate(val path: String, val name: String, val alreadyTracked: Boolean)
 

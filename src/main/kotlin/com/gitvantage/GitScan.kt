@@ -6,15 +6,15 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
- * Scans a registered repo into a [Repo] by shelling out to `git`. All process work
+ * Scans a registered repo into a [Repo]. Every command goes through [Git]; all process work
  * runs on [Dispatchers.IO] so the UI thread is never blocked (README § State
  * Management: "shell out to git … ideally off the UI thread").
  *
- * Git surface used: `git fetch` (optional), `symbolic-ref`, `rev-list` (ahead/behind),
- * `status --porcelain`, `stash list`, `log -1`.
+ * Git surface used: `git fetch` (optional — the one mutating command here, so the only one
+ * logged), `symbolic-ref`, `rev-list` (ahead/behind), `status --porcelain`, `stash list`,
+ * `log -1`. The reads run on every poll, which is why they stay out of [GitLog].
  */
 object RepoScanner {
 
@@ -37,7 +37,7 @@ object RepoScanner {
         val (snoozed, snoozedFor) = Meta.snoozeState(entry, now)
         val reminder = Meta.reminder(entry, now)
 
-        if (!File(dir, ".git").exists()) {
+        if (!Git.isRepo(dir)) {
             return@withContext Repo(
                 id = id, name = name, branch = "—", tags = baseTags,
                 isGitRepo = false, warning = "Not a git repo", note = note,
@@ -45,34 +45,34 @@ object RepoScanner {
             )
         }
 
-        if (fetch) GitLog.exec(name, dir, listOf("fetch")) // logged; best-effort, ignore offline/errors
+        if (fetch) Git.run(dir, listOf("fetch"), Git.NETWORK_TIMEOUT, repoName = name) // logged; best-effort, ignore offline/errors
 
         // Whether the repo has ANY remote configured. Gates Push/Fetch/Fast-forward:
         // a branch can be pushable (via `push -u origin`) even without a tracking upstream,
         // as long as a remote exists.
-        val hasRemote = gitOrNull(dir, "remote")?.lineSequence()?.any { it.isNotBlank() } ?: false
+        val hasRemote = Git.readOrNull(dir, "remote")?.lineSequence()?.any { it.isNotBlank() } ?: false
         // Remote web base (for GitHub commit/issue/PR/actions links). Prefer origin.
-        val remoteUrl = gitOrNull(dir, "remote", "get-url", "origin")?.trim()?.takeIf { it.isNotEmpty() }
+        val remoteUrl = Git.readOrNull(dir, "remote", "get-url", "origin")?.trim()?.takeIf { it.isNotEmpty() }
         val (webBase, isGitHub) = Meta.webBase(remoteUrl)
         val hasWorkflows = File(dir, ".github/workflows").isDirectory
 
         // Branch (empty/null when detached)
-        val symbolic = gitOrNull(dir, "symbolic-ref", "--short", "-q", "HEAD")?.trim().orEmpty()
+        val symbolic = Git.readOrNull(dir, "symbolic-ref", "--short", "-q", "HEAD")?.trim().orEmpty()
         val detached = symbolic.isEmpty()
         val branch = if (detached) DETACHED_BRANCH else symbolic
 
         // Upstream + ahead/behind. Prefer a configured @{upstream}; else fall back to
         // origin/<branch> if it exists (a branch that was pushed but never `-u`-tracked).
-        var upstream = gitOrNull(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+        var upstream = Git.readOrNull(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
             ?.trim()?.takeIf { it.isNotEmpty() && !it.endsWith("@{upstream}") }
         if (upstream == null && !detached) {
             val implied = "origin/$symbolic"
-            if (gitOrNull(dir, "rev-parse", "--verify", "-q", implied) != null) upstream = implied
+            if (Git.readOrNull(dir, "rev-parse", "--verify", "-q", implied) != null) upstream = implied
         }
         var ahead = 0
         var behind = 0
         if (upstream != null) {
-            gitOrNull(dir, "rev-list", "--left-right", "--count", "HEAD...$upstream")?.trim()?.let { line ->
+            Git.readOrNull(dir, "rev-list", "--left-right", "--count", "HEAD...$upstream")?.trim()?.let { line ->
                 val parts = line.split(Regex("\\s+"))
                 ahead = parts.getOrNull(0)?.toIntOrNull() ?: 0
                 behind = parts.getOrNull(1)?.toIntOrNull() ?: 0
@@ -85,7 +85,7 @@ object RepoScanner {
             else -> null
         }
 
-        val status = parseStatus(gitOrNull(dir, "status", "--porcelain").orEmpty())
+        val status = parseStatus(Git.readOrNull(dir, "status", "--porcelain").orEmpty())
         // "Dirty for how long": the registry records when the tree first went dirty; keep it only
         // while still dirty (AppState reconciles/persists the timestamp after each scan).
         val dirtyNow = status.staged + status.unstaged + status.untracked > 0
@@ -102,7 +102,7 @@ object RepoScanner {
             .maxOrNull()
             ?.takeIf { it > 0 }
 
-        val stashes = gitOrNull(dir, "stash", "list").orEmpty()
+        val stashes = Git.readOrNull(dir, "stash", "list").orEmpty()
             .lineSequence().filter { it.isNotBlank() }
             .map { line ->
                 // "stash@{0}: WIP on main: 1a2b3c message"
@@ -135,7 +135,7 @@ object RepoScanner {
             ?.let { "$it/$name" }
             ?: name
 
-        val log = gitOrNull(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct")?.trim().orEmpty()
+        val log = Git.readOrNull(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct")?.trim().orEmpty()
         val logParts = log.split(SEP)
         val lastRel = logParts.getOrNull(0)?.trim().orEmpty()
         val author = logParts.getOrNull(1)?.trim().orEmpty()
@@ -157,7 +157,7 @@ object RepoScanner {
             upstream = upstream, hasRemote = hasRemote,
             webBase = webBase, isGitHub = isGitHub, hasWorkflows = hasWorkflows,
             hasSubmodules = File(dir, ".gitmodules").exists(),
-            superproject = gitOrNull(dir, "rev-parse", "--show-superproject-working-tree")
+            superproject = Git.readOrNull(dir, "rev-parse", "--show-superproject-working-tree")
                 ?.trim()?.takeIf { it.isNotEmpty() },
             worktreeCount = worktreeCount, isWorktree = isWorktree,
             worktreeMain = worktreeMain,
@@ -195,24 +195,5 @@ object RepoScanner {
             }
         }
         return StatusResult(files, staged, unstaged, untracked)
-    }
-
-    /** Run `git <args>` in [dir]; return stdout, or null on failure/non-zero/timeout. */
-    private fun gitOrNull(dir: File, vararg args: String): String? = try {
-        val proc = ProcessBuilder(listOf("git", *args))
-            .directory(dir)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(15, TimeUnit.SECONDS)) {
-            proc.destroyForcibly()
-            null
-        } else if (proc.exitValue() != 0) {
-            null
-        } else {
-            out
-        }
-    } catch (e: Exception) {
-        null
     }
 }

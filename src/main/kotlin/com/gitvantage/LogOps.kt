@@ -6,7 +6,6 @@ package com.gitvantage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * Reads the commits in an arbitrary revision range (`git log <range>`) into a list of
@@ -92,7 +91,7 @@ object LogOps {
      *  — the log companion to [DiffOps.loadBranchDiff]. */
     suspend fun loadBranchLog(repoPath: String, ref: String): List<Commit> = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext emptyList()
+        if (!Git.isRepo(dir)) return@withContext emptyList()
         val base = DiffOps.mainlineFor(dir, ref) ?: return@withContext emptyList()
         loadRange(repoPath, "$base..$ref")
     }
@@ -100,8 +99,8 @@ object LogOps {
     /** Commits reachable in [range] (e.g. "HEAD..origin/main"), newest first, capped at [max]. */
     suspend fun loadRange(repoPath: String, range: String, max: Int = 500): List<Commit> = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
-        if (!File(dir, ".git").exists()) return@withContext emptyList()
-        val out = git(dir, "log", "--max-count=$max", "--decorate=full", "--format=$FMT", range)
+        if (!Git.isRepo(dir)) return@withContext emptyList()
+        val out = Git.read(dir, "log", "--max-count=$max", "--decorate=full", "--format=$FMT", range)
         val unpushed = unpushedIn(dir, range, max)
         out.split(RS).mapNotNull { rec ->
             val r = rec.trim('\n', '\r')
@@ -134,16 +133,6 @@ object LogOps {
      * the UI did before it could tell, and better than hiding a link that would have worked.
      */
     private fun unpushedIn(dir: File, range: String, max: Int): Set<String> =
-        git(dir, "rev-list", "--max-count=$max", range, "--not", "--remotes=origin")
+        Git.read(dir, "rev-list", "--max-count=$max", range, "--not", "--remotes=origin")
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-
-    private fun git(dir: File, vararg args: String): String = try {
-        val proc = ProcessBuilder(listOf("git", *args))
-            .directory(dir).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(30, TimeUnit.SECONDS)) { proc.destroyForcibly(); "" }
-        else if (proc.exitValue() != 0) "" else out
-    } catch (e: Exception) {
-        ""
-    }
 }
