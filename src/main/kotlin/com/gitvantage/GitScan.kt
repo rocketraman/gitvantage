@@ -182,18 +182,16 @@ object RepoScanner {
 
             if (x == '?' && y == '?') {
                 untracked++
-                files += ChangedFile("?", "untracked", path, "#77767b")
+                files += ChangedFile("?", "untracked", path)
                 return@forEach
             }
             if (x != ' ' && x != '?') {   // staged (index) change
                 staged++
-                val color = when (x) { 'D' -> "#e01b24"; 'R', 'C' -> "#3584e4"; else -> "#2ec27e" }
-                files += ChangedFile(x.toString(), "staged", path, color)
+                files += ChangedFile(x.toString(), "staged", path)
             }
             if (y != ' ' && y != '?') {   // unstaged (worktree) change
                 unstaged++
-                val color = if (y == 'D') "#e01b24" else "#e5a50a"
-                files += ChangedFile(y.toString(), "unstaged", path, color)
+                files += ChangedFile(y.toString(), "unstaged", path)
             }
         }
         return StatusResult(files, staged, unstaged, untracked)

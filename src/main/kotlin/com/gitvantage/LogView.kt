@@ -58,7 +58,7 @@ fun LogView(state: AppState) {
     LaunchedEffect(state.diffOpen) { if (!state.diffOpen) runCatching { focus.requestFocus() } }
     val shape = RoundedCornerShape(12.dp)
     Box(
-        Modifier.fillMaxSize().background(Color(0x55000000)).onTap { }
+        Modifier.fillMaxSize().background(Tokens.scrim).onTap { }
             .focusRequester(focus).focusable()
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -75,7 +75,7 @@ fun LogView(state: AppState) {
     ) {
         Column(
             Modifier.fillMaxWidth(0.66f).fillMaxHeight().padding(24.dp)
-                .clip(shape).background(Color.White, shape).border(1.dp, Tokens.borderDc, shape),
+                .clip(shape).background(Tokens.surface, shape).border(1.dp, Tokens.borderDc, shape),
         ) {
             Row(
                 Modifier.fillMaxWidth().background(Tokens.panelFb).drawBottomBorder(Tokens.borderEd)
@@ -206,7 +206,7 @@ private fun RefChip(ref: LogOps.Ref, accent: Color) {
 private fun LogPill(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
-            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
+            .border(1.dp, Tokens.accentBorder, RoundedCornerShape(6.dp))
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) { Txt(label, 10.5.sp, accent, FontWeight.SemiBold) }

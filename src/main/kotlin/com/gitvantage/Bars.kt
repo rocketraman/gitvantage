@@ -48,7 +48,7 @@ fun Segmented(
             val on = key == active
             val shape = RoundedCornerShape(6.dp)
             var m = Modifier.clip(shape)
-            if (on) m = m.shadow(1.dp, shape).background(Color.White, shape)
+            if (on) m = m.shadow(1.dp, shape).background(Tokens.surface, shape)
             val option: @Composable () -> Unit = {
                 Box(m.onTap { onSelect(key) }.padding(horizontal = 11.dp, vertical = 4.dp)) {
                     Txt(
@@ -81,7 +81,7 @@ fun Toolbar(state: AppState) {
         // Search field (fixed 300dp so the single Spacer right-aligns the trailing group)
         Row(
             Modifier.width(300.dp)
-                .clip(RoundedCornerShape(8.dp)).background(Color.White)
+                .clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                 .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -134,11 +134,32 @@ fun Toolbar(state: AppState) {
         Spacer(Modifier.weight(1f))
 
         Txt(state.fetchedLabel(), 12.sp, Tokens.muted2)
+        // Appearance. Glyph *and* label, like the Console and Fetch-all buttons it sits between:
+        // these buttons are a fill a single step off the toolbar's own, so it's the label that
+        // gives them a body to find. Glyph-only, this one read as an empty outline — see the note
+        // on ThemeMode for the half of that which was the sun turning into a colour emoji.
+        val themeTip = "Appearance: ${Theme.mode.label.lowercase()}" +
+            // systemDark, not isDark — the parenthetical reports what the *desktop* asked for.
+            (if (Theme.mode == ThemeMode.SYSTEM) " (${if (Theme.systemDark) "dark" else "light"})" else "") +
+            ". Click to switch between light, dark, and matching your desktop."
+        HoverTip(themeTip) {
+            Row(
+                Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
+                    .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
+                    .onTap { state.popup = Popup.Appearance }
+                    .padding(horizontal = 11.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Txt(Theme.mode.glyph, 13.sp, Tokens.text)
+                Txt(Theme.mode.short, 12.5.sp, Tokens.text, FontWeight.Bold)
+            }
+        }
         // Git console toggle — opens the log of git commands the app has run
         Box(
             Modifier.clip(RoundedCornerShape(8.dp))
-                .background(if (state.consoleOpen) Tokens.tintBlue else Color.White)
-                .border(1.dp, if (state.consoleOpen) hex("#c3dcf8") else Tokens.borderD8, RoundedCornerShape(8.dp))
+                .background(if (state.consoleOpen) Tokens.tintBlue else Tokens.surface)
+                .border(1.dp, if (state.consoleOpen) Tokens.accentBorder else Tokens.borderD8, RoundedCornerShape(8.dp))
                 .onTap { state.toggleConsole() }
                 .padding(horizontal = 11.dp, vertical = 6.dp),
         ) {
@@ -146,7 +167,7 @@ fun Toolbar(state: AppState) {
         }
         // Fetch all — re-scan every repo with `git fetch`, off the UI thread
         Row(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White)
+            Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                 .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
                 .onTap { state.refreshAll(fetch = true) }
                 .padding(horizontal = 11.dp, vertical = 6.dp),
@@ -158,11 +179,11 @@ fun Toolbar(state: AppState) {
         }
         // Add repo — native folder picker → register + scan
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(state.accent)
+            Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.accentFill)
                 .onTap { state.pickAndAddRepo() }
                 .padding(horizontal = 12.dp, vertical = 7.dp),
         ) {
-            Txt("+ Add repo", 12.5.sp, Color.White, FontWeight.Bold)
+            Txt("+ Add repo", 12.5.sp, Tokens.onAccent, FontWeight.Bold)
         }
     }
 }
@@ -211,7 +232,7 @@ fun BulkActionBar(state: AppState) {
 private fun BulkBtn(label: String, danger: Boolean = false, onClick: () -> Unit) {
     val shape = RoundedCornerShape(7.dp)
     Box(
-        Modifier.clip(shape).background(Color.White, shape)
+        Modifier.clip(shape).background(Tokens.surface, shape)
             .border(1.dp, if (danger) Tokens.warnBorder else Tokens.borderD8, shape)
             .onTap(onClick).padding(horizontal = 11.dp, vertical = 5.dp),
     ) {
@@ -246,7 +267,7 @@ fun StatusBar(state: AppState) {
         Triple("recentmod", "Recently Modified", "Repos whose working tree was edited in the last 12 hours."),
     )
     Row(
-        Modifier.fillMaxWidth().background(Color.White)
+        Modifier.fillMaxWidth().background(Tokens.surface)
             .drawBottomBorder(Tokens.borderEd)
             .padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -261,7 +282,7 @@ fun StatusBar(state: AppState) {
         ) {
             chips.forEach { (key, label, tip) ->
                 HoverTip(tip) {
-                    StatusChip(label, counts[key] ?: 0, key == state.status, statusPalette.getValue(key)) {
+                    StatusChip(label, counts[key] ?: 0, key == state.status, statusPalette(key)) {
                         state.status = key
                     }
                 }
@@ -282,7 +303,7 @@ private fun StatusChip(label: String, count: Int, on: Boolean, p: NsPalette, onC
     val shape = RoundedCornerShape(20.dp)
     Row(
         Modifier.clip(shape)
-            .background(if (on) p.t else Color.White, shape)
+            .background(if (on) p.t else Tokens.surface, shape)
             .border(1.dp, if (on) p.b else Tokens.borderE2, shape)
             .onTap(onClick)
             .padding(horizontal = 11.dp, vertical = 5.dp),
@@ -297,7 +318,7 @@ private fun StatusChip(label: String, count: Int, on: Boolean, p: NsPalette, onC
                 .padding(horizontal = 5.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Txt("$count", 11.sp, if (on) Color.White else Tokens.muted, FontWeight.Bold)
+            Txt("$count", 11.sp, if (on) Tokens.onBright else Tokens.muted, FontWeight.Bold)
         }
     }
 }
@@ -322,7 +343,7 @@ fun TagBar(state: AppState) {
                     val on = chip.key in state.tagFilter
                     val excluded = chip.key in state.tagExclude
                     val shape = RoundedCornerShape(20.dp)
-                    val bg = when { on -> p.t; excluded -> Tokens.tintRed; else -> Color.White }
+                    val bg = when { on -> p.t; excluded -> Tokens.tintRed; else -> Tokens.surface }
                     val bd = when { on -> p.b; excluded -> Tokens.warnBorder; else -> Tokens.borderE2 }
                     val fg = when { on -> p.c; excluded -> Tokens.redText; else -> Tokens.muted }
                     // Tooltip reflects the chip's current state: what a plain click will select, or

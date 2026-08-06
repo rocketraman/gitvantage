@@ -60,7 +60,7 @@ private fun EmptyState(registryEmpty: Boolean) {
         Box(
             Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Tokens.segTrack),
             contentAlignment = Alignment.Center,
-        ) { Txt(if (registryEmpty) "＋" else "◍", 20.sp, hex("#b0aeaa")) }
+        ) { Txt(if (registryEmpty) "＋" else "◍", 20.sp, Tokens.emptyGlyph) }
         if (registryEmpty) {
             Txt("No repositories yet", 15.sp, Tokens.secondary, FontWeight.Bold)
             Txt("Click + Add repo to start tracking.", 13.sp, Tokens.muted2)
@@ -216,7 +216,7 @@ private fun RepoCard(state: AppState, rv: RepoView) {
     var m = Modifier.clip(shape)
     m = if (selected) m.border(2.dp, state.accent, shape)
     else m.shadow(1.dp, shape).border(1.dp, Tokens.borderE2, shape)
-    m = m.background(Color.White, shape).onModifierClick(rv.id) { ctrl, shift -> state.clickRow(rv.id, ctrl, shift) }
+    m = m.background(Tokens.surface, shape).onModifierClick(rv.id) { ctrl, shift -> state.clickRow(rv.id, ctrl, shift) }
     Column(m) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(rv.accent))
         Column(
@@ -265,7 +265,7 @@ private fun RepoCard(state: AppState, rv: RepoView) {
             }
             // Footer
             Row(
-                Modifier.fillMaxWidth().drawTopBorder(hex("#f1f0ed")).padding(top = 10.dp),
+                Modifier.fillMaxWidth().drawTopBorder(Tokens.rowBorder).padding(top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -350,7 +350,7 @@ fun SnoozeToggle(rv: RepoView, size: Int = 27) {
     val text = if (rv.snoozed) "☾ ${rv.repo.snoozedFor ?: "on"}" else "☾"
     val border = if (rv.snoozed) Tokens.snoozeChipBorder else Tokens.borderDc
     val color = if (rv.snoozed) Tokens.snoozeChipText else Tokens.secondary
-    val bg = if (rv.snoozed) Tokens.snoozeChipBg else Color.White
+    val bg = if (rv.snoozed) Tokens.snoozeChipBg else Tokens.surface
     val shape = RoundedCornerShape(7.dp)
     val tip = if (rv.snoozed) {
         "Alerts are silenced for this repo${rv.repo.snoozedFor?.let { " ($it)" } ?: ""}. " +

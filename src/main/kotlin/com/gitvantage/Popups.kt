@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Remind -> RemindPopup(state, popup.ids, popup.text, popup.due)
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.Confirm -> ConfirmPopup(state, popup)
+        is Popup.Appearance -> AppearancePopup(state)
     }
 }
 
@@ -101,8 +103,8 @@ private fun UntagPopup(state: AppState, ids: Set<String>) {
                         val shape = RoundedCornerShape(20.dp)
                         Row(
                             Modifier.clip(shape)
-                                .background(if (on) Tokens.tintRed else Color.White, shape)
-                                .border(1.dp, if (on) hex("#f2b8b9") else Tokens.borderE2, shape)
+                                .background(if (on) Tokens.tintRed else Tokens.surface, shape)
+                                .border(1.dp, if (on) Tokens.warnBorder else Tokens.borderE2, shape)
                                 .onTap { if (on) selected.remove(tag) else selected.add(tag) }
                                 .padding(horizontal = 11.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -114,7 +116,7 @@ private fun UntagPopup(state: AppState, ids: Set<String>) {
                     }
                 }
             }
-            ModalButtons({ state.popup = null }, "Untag", selected.isNotEmpty(), true, state.accent, ::commit)
+            ModalButtons({ state.popup = null }, "Untag", selected.isNotEmpty(), true, ::commit)
         }
     }
 }
@@ -135,6 +137,55 @@ private fun SnoozePopup(state: AppState, ids: Set<String>) {
             MenuRow("Resume now (clear snooze)", accent = true) {
                 state.setSnoozeUntil(ids, null)
                 state.popup = null
+            }
+        }
+    }
+}
+
+/**
+ * The appearance picker: Match system / Light / Dark.
+ *
+ * A menu of the three modes rather than a light↔dark switch, because "follow the desktop" is a
+ * distinct answer from either fixed choice and a two-state toggle has nowhere to put it.
+ *
+ * "Match system" is annotated with what the *desktop* currently asks for, so choosing it isn't a
+ * leap of faith. That has to come from [Theme.systemDark] and not [Theme.isDark]: the latter is
+ * the theme in force, so under a Light or Dark override it just reports the user's own choice
+ * back at them — "Match system · dark" purely because dark is what's on screen. When the desktop
+ * never answered (a session with no portal and no gsettings), the row says so rather than
+ * quietly presenting light as the desktop's choice.
+ */
+@Composable
+private fun AppearancePopup(state: AppState) {
+    // The poller only runs under SYSTEM, so outside it the last reading can be arbitrarily old.
+    // Re-read on open — this is the one moment the value is actually being shown to someone.
+    LaunchedEffect(Unit) { Theme.refreshSystemPreferenceAsync() }
+    Modal({ state.popup = null }) {
+        ModalHeader("Appearance", "How GitVantage looks. Applies immediately and is remembered.")
+        Column(Modifier.padding(vertical = 6.dp)) {
+            ThemeMode.entries.forEach { m ->
+                val on = m == Theme.mode
+                val detail = when {
+                    m != ThemeMode.SYSTEM -> null
+                    !Theme.systemKnown -> "this desktop didn't say — using light"
+                    Theme.systemDark -> "dark"
+                    else -> "light"
+                }
+                Row(
+                    Modifier.fillMaxWidth().onTap {
+                        Theme.switchTo(m)
+                        state.popup = null
+                    }.padding(horizontal = 18.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Txt(m.glyph, 13.sp, if (on) Tokens.accent else Tokens.muted)
+                    Txt(m.label, 13.sp, if (on) Tokens.accent else Tokens.text,
+                        if (on) FontWeight.SemiBold else FontWeight.Normal)
+                    detail?.let { Txt("· $it", 11.5.sp, Tokens.muted2) }
+                    Spacer(Modifier.weight(1f))
+                    if (on) Txt("✓", 13.sp, Tokens.accent, FontWeight.Bold)
+                }
             }
         }
     }
@@ -179,7 +230,7 @@ private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String, 
                         modifier = Modifier.onTap { state.clearReminder(ids); state.popup = null })
                 }
                 Spacer(Modifier.weight(1f))
-                ModalButtons({ state.popup = null }, "Save", text.isNotBlank(), false, state.accent, ::commit)
+                ModalButtons({ state.popup = null }, "Save", text.isNotBlank(), false, ::commit)
             }
         }
     }
@@ -234,7 +285,7 @@ private fun CommitPopup(state: AppState, id: String) {
                 SelectBox(checked = stageAll)
                 Txt("Stage all changes (git add -A) before committing", 12.sp, Tokens.text2)
             }
-            ModalButtons({ state.popup = null }, "Commit", title.isNotBlank(), false, state.accent, ::commit)
+            ModalButtons({ state.popup = null }, "Commit", title.isNotBlank(), false, ::commit)
         }
     }
 }
@@ -244,7 +295,7 @@ private fun ConfirmPopup(state: AppState, p: Popup.Confirm) {
     Modal({ state.popup = null }) {
         ModalHeader(p.title, p.message)
         Box(Modifier.padding(18.dp)) {
-            ModalButtons({ state.popup = null }, p.confirmLabel, true, p.danger, state.accent) {
+            ModalButtons({ state.popup = null }, p.confirmLabel, true, p.danger) {
                 state.popup = null
                 p.onConfirm()
             }
@@ -259,14 +310,14 @@ private fun ConfirmPopup(state: AppState, p: Popup.Confirm) {
 fun Toast(state: AppState, msg: String) {
     Box(Modifier.fillMaxSize().padding(bottom = 24.dp), contentAlignment = Alignment.BottomCenter) {
         Row(
-            Modifier.clip(RoundedCornerShape(10.dp)).background(Tokens.text)
+            Modifier.clip(RoundedCornerShape(10.dp)).background(Tokens.tooltipBg)
                 .onTap { state.dismissToast() }
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Txt(msg, 12.5.sp, Color.White, FontWeight.Medium)
-            Txt("✕", 11.sp, Color.White.copy(alpha = 0.6f))
+            Txt(msg, 12.5.sp, Tokens.tooltipText, FontWeight.Medium)
+            Txt("✕", 11.sp, Tokens.tooltipText.copy(alpha = 0.6f))
         }
     }
 }
@@ -276,12 +327,12 @@ fun Toast(state: AppState, msg: String) {
 @Composable
 private fun Modal(onDismiss: () -> Unit, width: Int = 380, content: @Composable ColumnScope.() -> Unit) {
     Box(
-        Modifier.fillMaxSize().background(Color(0x33000000)).onTap(onDismiss),
+        Modifier.fillMaxSize().background(Tokens.scrimSoft).onTap(onDismiss),
         contentAlignment = Alignment.Center,
     ) {
         val shape = RoundedCornerShape(14.dp)
         Column(
-            Modifier.width(width.dp).clip(shape).background(Color.White, shape)
+            Modifier.width(width.dp).clip(shape).background(Tokens.surface, shape)
                 .border(1.dp, Tokens.borderDc, shape).onTap { },
             content = content,
         )
@@ -313,7 +364,7 @@ private fun TextInput(
 ) {
     val style = TextStyle(fontSize = 12.5.sp, color = Tokens.text, fontFamily = font)
     Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color.White)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
             .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .columnGuide(guideCol, style),
@@ -338,7 +389,7 @@ private fun Modifier.columnGuide(col: Int?, style: TextStyle): Modifier {
     val measurer = rememberTextMeasurer()
     return this.drawBehind {
         val x = measurer.measure("0".repeat(col), style).size.width.toFloat()
-        drawLine(Color.Black.copy(alpha = 0.07f), Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+        drawLine(Tokens.hairline, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
     }
 }
 
@@ -346,7 +397,7 @@ private fun Modifier.columnGuide(col: Int?, style: TextStyle): Modifier {
 private fun MultilineInput(value: String, onValue: (String) -> Unit, placeholder: String, accent: Color, guideCol: Int? = null) {
     val style = TextStyle(fontSize = 12.5.sp, color = Tokens.text, fontFamily = MonoFont)
     Box(
-        Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(8.dp)).background(Color.White)
+        Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
             .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .columnGuide(guideCol, style),
@@ -367,26 +418,25 @@ private fun ModalButtons(
     confirmLabel: String,
     confirmEnabled: Boolean,
     danger: Boolean,
-    accent: Color,
     onConfirm: () -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         Spacer(Modifier.weight(1f))
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White)
+            Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                 .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
                 .onTap(cancel).padding(horizontal = 14.dp, vertical = 7.dp),
         ) { Txt("Cancel", 12.5.sp, Tokens.text, FontWeight.SemiBold) }
         val bg = when {
             !confirmEnabled -> Tokens.segTrack
-            danger -> Tokens.redText
-            else -> accent
+            danger -> Tokens.dangerFill
+            else -> Tokens.accentFill
         }
         Box(
             Modifier.clip(RoundedCornerShape(8.dp)).background(bg)
                 .let { if (confirmEnabled) it.onTap(onConfirm) else it }
                 .padding(horizontal = 14.dp, vertical = 7.dp),
-        ) { Txt(confirmLabel, 12.5.sp, if (confirmEnabled) Color.White else Tokens.muted2, FontWeight.Bold) }
+        ) { Txt(confirmLabel, 12.5.sp, if (confirmEnabled) Tokens.onAccent else Tokens.muted2, FontWeight.Bold) }
     }
 }
 
@@ -402,8 +452,8 @@ private fun PresetChip(label: String, selected: Boolean, accent: Color, onClick:
     val shape = RoundedCornerShape(20.dp)
     Box(
         Modifier.clip(shape)
-            .background(if (selected) Tokens.tintBlue else Color.White, shape)
-            .border(1.dp, if (selected) hex("#c3dcf8") else Tokens.borderE2, shape)
+            .background(if (selected) Tokens.tintBlue else Tokens.surface, shape)
+            .border(1.dp, if (selected) Tokens.accentBorder else Tokens.borderE2, shape)
             .onTap(onClick).padding(horizontal = 11.dp, vertical = 5.dp),
     ) {
         Txt(label, 12.sp, if (selected) accent else Tokens.secondary, if (selected) FontWeight.Bold else FontWeight.Medium)

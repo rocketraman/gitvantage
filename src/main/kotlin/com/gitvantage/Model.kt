@@ -12,7 +12,6 @@ data class ChangedFile(
     val tag: String,        // M / A / D / ? / R
     val section: String,    // staged | unstaged | untracked
     val path: String,
-    val tagColor: String,   // hex, per change type
 )
 
 data class Stash(val label: String, val msg: String)

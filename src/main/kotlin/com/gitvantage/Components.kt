@@ -194,9 +194,9 @@ fun BadgeView(badge: Badge) {
 fun NoteChip() {
     Pill(
         label = "✎ note",
-        color = hex("#556080"),
-        bg = hex("#eef0f5"),
-        border = hex("#cdd3e0"),
+        color = Tokens.noteChip.c,
+        bg = Tokens.noteChip.t,
+        border = Tokens.noteChip.b,
         fontSize = 11.sp,
         weight = FontWeight.Medium,
         radius = 6,
@@ -227,9 +227,9 @@ fun PathTip(path: String, modifier: Modifier = Modifier, content: @Composable ()
         modifier = modifier,
         tooltip = {
             Box(
-                Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.text)
+                Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tooltipBg)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) { Txt(path, 11.5.sp, Color.White, font = MonoFont) }
+            ) { Txt(path, 11.5.sp, Tokens.tooltipText, font = MonoFont) }
         },
     ) { content() }
 }
@@ -242,9 +242,9 @@ fun HoverTip(text: String, modifier: Modifier = Modifier, content: @Composable (
         modifier = modifier,
         tooltip = {
             Box(
-                Modifier.widthIn(max = 340.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.text)
+                Modifier.widthIn(max = 340.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.tooltipBg)
                     .padding(horizontal = 12.dp, vertical = 9.dp),
-            ) { Txt(text, 11.5.sp, Color.White, maxLines = 10) }
+            ) { Txt(text, 11.5.sp, Tokens.tooltipText, maxLines = 10) }
         },
     ) { content() }
 }
@@ -276,14 +276,14 @@ fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifie
     Box(
         modifier.clip(shape)
             .background(if (copied) Tokens.tintGreen else Tokens.tintBlue, shape)
-            .border(1.dp, if (copied) hex("#9fd8b0") else hex("#c3dcf8"), shape)
+            .border(1.dp, if (copied) Tokens.okBorder else Tokens.accentBorder, shape)
             .pointerHoverIcon(PointerIcon.Hand)
             .onTap { clipboard.setText(AnnotatedString(value)); copied = true }
             .padding(horizontal = 9.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
         Txt(if (copied) "✓ Copied" else "⧉ $label", 10.5.sp,
-            if (copied) hex("#1a7f37") else Tokens.accent, FontWeight.SemiBold)
+            if (copied) Tokens.addFg else Tokens.accent, FontWeight.SemiBold)
     }
 }
 
@@ -361,7 +361,7 @@ fun CopyAction(value: String, label: String = "Copy") {
     LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
     Txt(
         if (copied) "✓ Copied" else label, 11.5.sp,
-        if (copied) hex("#1a7f37") else Tokens.accent, FontWeight.Medium,
+        if (copied) Tokens.addFg else Tokens.accent, FontWeight.Medium,
         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
             .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
     )
@@ -379,14 +379,14 @@ fun SelectBox(checked: Boolean, enabled: Boolean = true, modifier: Modifier = Mo
     val shape = RoundedCornerShape(5.dp)
     val bg = when {
         !enabled -> Tokens.segTrack
-        checked -> Tokens.accent
-        else -> Color.White
+        checked -> Tokens.accentFill
+        else -> Tokens.surface
     }
     val border = if (checked && enabled) Tokens.accent else Tokens.borderD8
     Box(
         modifier.size(18.dp).clip(shape).background(bg, shape).border(1.dp, border, shape),
         contentAlignment = Alignment.Center,
     ) {
-        if (checked) Txt("✓", 11.sp, if (enabled) Color.White else Tokens.muted2, FontWeight.Bold)
+        if (checked) Txt("✓", 11.sp, if (enabled) Tokens.onAccent else Tokens.muted2, FontWeight.Bold)
     }
 }

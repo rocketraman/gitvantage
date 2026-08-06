@@ -65,7 +65,7 @@ fun DiffView(state: AppState) {
     androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     val shape = RoundedCornerShape(12.dp)
     Box(
-        Modifier.fillMaxSize().background(Color(0x55000000)).onTap { }
+        Modifier.fillMaxSize().background(Tokens.scrim).onTap { }
             .focusRequester(focus).focusable()
             // Re-grab focus after every click (Final pass = after children) so Escape keeps
             // working even if a click inside the diff moved focus to the scrollable content.
@@ -86,7 +86,7 @@ fun DiffView(state: AppState) {
     ) {
         Column(
             Modifier.fillMaxSize().padding(24.dp)
-                .clip(shape).background(Color.White, shape).border(1.dp, Tokens.borderDc, shape),
+                .clip(shape).background(Tokens.surface, shape).border(1.dp, Tokens.borderDc, shape),
         ) {
             Row(
                 Modifier.fillMaxWidth().background(Tokens.panelFb).drawBottomBorder(Tokens.borderEd)
@@ -187,8 +187,8 @@ private fun TreeFile(node: PathTree.Node, ref: DiffOps.FileRef, onJump: (Int) ->
     ) {
         // Tooltip shows just the filename — the folder path is already visible in the tree.
         PathTip(node.label, Modifier.weight(1f)) { Txt(node.label, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1) }
-        if (ref.added > 0) Txt("+${ref.added}", 10.5.sp, hex("#1a7f37"), FontWeight.SemiBold, font = MonoFont)
-        if (ref.removed > 0) Txt("-${ref.removed}", 10.5.sp, hex("#b0181f"), FontWeight.SemiBold, font = MonoFont)
+        if (ref.added > 0) Txt("+${ref.added}", 10.5.sp, Tokens.addFg, FontWeight.SemiBold, font = MonoFont)
+        if (ref.removed > 0) Txt("-${ref.removed}", 10.5.sp, Tokens.delFg, FontWeight.SemiBold, font = MonoFont)
     }
 }
 
@@ -206,10 +206,10 @@ private fun DiffItemRow(item: DiffOps.Item) {
         ) {
             Txt(item.path, 12.5.sp, Tokens.text, FontWeight.Bold, font = MonoFont, modifier = Modifier.weight(1f))
             CopyPill(item.path, "Copy path")
-            if (item.added > 0) Txt("+${item.added}", 11.sp, hex("#1a7f37"), FontWeight.SemiBold, font = MonoFont)
-            if (item.removed > 0) Txt("-${item.removed}", 11.sp, hex("#b0181f"), FontWeight.SemiBold, font = MonoFont)
+            if (item.added > 0) Txt("+${item.added}", 11.sp, Tokens.addFg, FontWeight.SemiBold, font = MonoFont)
+            if (item.removed > 0) Txt("-${item.removed}", 11.sp, Tokens.delFg, FontWeight.SemiBold, font = MonoFont)
         }
-        is DiffOps.Hunk -> Box(Modifier.fillMaxWidth().background(hex("#eaf2fc")).padding(horizontal = 14.dp, vertical = 2.dp)) {
+        is DiffOps.Hunk -> Box(Modifier.fillMaxWidth().background(Tokens.tintBlue).padding(horizontal = 14.dp, vertical = 2.dp)) {
             Txt(item.text, 11.5.sp, Tokens.accent, font = MonoFont, maxLines = 2)
         }
         is DiffOps.Row -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
@@ -223,10 +223,10 @@ private fun DiffItemRow(item: DiffOps.Item) {
 @Composable
 private fun SideCell(cell: DiffOps.Cell?, modifier: Modifier) {
     val (bg, color, hl) = when (cell?.side) {
-        DiffOps.Side.ADD -> Triple(hex("#e6f9ee"), hex("#12622f"), hex("#a6ecbf"))   // saturated green highlight
-        DiffOps.Side.DEL -> Triple(hex("#fce9ea"), hex("#9a1720"), hex("#f4aab0"))   // saturated red highlight
-        DiffOps.Side.CONTEXT -> Triple(Color.White, Tokens.text2, Color.Transparent)
-        null -> Triple(hex("#f6f6f4"), Tokens.muted2, Color.Transparent)
+        DiffOps.Side.ADD -> Triple(Tokens.diffAddBg, Tokens.diffAddFg, Tokens.diffAddMark)   // saturated green highlight
+        DiffOps.Side.DEL -> Triple(Tokens.diffDelBg, Tokens.diffDelFg, Tokens.diffDelMark)   // saturated red highlight
+        DiffOps.Side.CONTEXT -> Triple(Tokens.surface, Tokens.text2, Color.Transparent)
+        null -> Triple(Tokens.diffEmptyBg, Tokens.muted2, Color.Transparent)
     }
     val text: AnnotatedString = if (cell != null && cell.hlStart >= 0 && cell.hlEnd > cell.hlStart && cell.hlEnd <= cell.text.length) {
         buildAnnotatedString {

@@ -49,18 +49,17 @@ import java.awt.Cursor
  * (or a semantic fallback) applied to the output.
  */
 
-// Light-theme console colors, drawn from the app tokens.
-private val ConErr = Tokens.redText
-private val ConOk = Tokens.cleanText
-private val ConPrompt = Tokens.accent
-private val ConText = Tokens.text2
-private val ConMuted = Tokens.muted2
+// Console colors, drawn from the app tokens. Accessors rather than stored values: a top-level
+// `val` would capture whichever palette happened to be active when this file was first touched
+// and keep the console in it for the rest of the session.
+private val ConErr get() = Tokens.redText
+private val ConOk get() = Tokens.cleanText
+private val ConPrompt get() = Tokens.accent
+private val ConText get() = Tokens.text2
+private val ConMuted get() = Tokens.muted2
 
-// ANSI foreground palette tuned for the light console background.
-private val ANSI_FG = listOf(
-    hex("#3d3d3d"), hex("#c0181f"), hex("#1a8049"), hex("#8a6d00"),
-    hex("#1a5fb4"), hex("#9c27b0"), hex("#0e7490"), hex("#5e5c64"),
-)
+// ANSI foreground palette, tuned per theme for the console background it lands on.
+private val ANSI_FG get() = Tokens.ansi
 
 @Composable
 fun GitConsolePanel(state: AppState) {
@@ -68,7 +67,7 @@ fun GitConsolePanel(state: AppState) {
     LaunchedEffect(GitLog.entries.size) {
         if (GitLog.entries.isNotEmpty()) runCatching { listState.scrollToItem(GitLog.entries.size - 1) }
     }
-    Column(Modifier.fillMaxWidth().height(state.consoleHeight.dp).background(Color.White).drawTopBorder(Tokens.borderEd)) {
+    Column(Modifier.fillMaxWidth().height(state.consoleHeight.dp).background(Tokens.surface).drawTopBorder(Tokens.borderEd)) {
         // Drag handle (top edge) — drag up to grow, down to shrink.
         Box(
             Modifier.fillMaxWidth().height(11.dp).background(Tokens.panelFb)

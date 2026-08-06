@@ -57,6 +57,9 @@ GitVantage watches all your local repositories and gives you, in one place:
 - **Reminders, snooze, and a notification outlook** — set reminders, snooze a repo's alerts for a while, and see a plain-language summary of exactly what will notify you and when (reminders, aging, stale, upstream advances), accounting for any active snooze.
   Desktop notifications fire for due reminders, for aging and stale threshold crossings, and — when you opt a repo in — when its upstream advances.
 - **Aging detection** — flags repos whose uncommitted work has been sitting past a threshold, so long-forgotten changes surface instead of rotting.
+- **Light and dark** — the appearance button in the toolbar (☀ / ☾ / ◐) switches between light, dark, and matching your desktop.
+  "Match system" is the default and follows the freedesktop appearance preference (GNOME, KDE), `AppleInterfaceStyle` on macOS, and `AppsUseLightTheme` on Windows, picking up a change to it while the app is running.
+  The choice applies immediately — window chrome included — and is remembered.
 - **Open issues and PRs** — **requires [GitHub CLI](https://cli.github.com)**: repos on GitHub (or GitHub Enterprise) get a per-repo count of what's open, and — the part that matters — which of them are **waiting on you**: your review is requested, you're assigned, the last comment @-mentions you, or someone replied on a thread you opened.
   Open issues are a blue heads-up by default (every healthy project has some) and turn yellow once one needs you; mark a repo's issues **Important** and both escalate a step, to yellow and red.
   Per-repo opt-out, and an "only mine" mode that ignores everything you aren't involved in.

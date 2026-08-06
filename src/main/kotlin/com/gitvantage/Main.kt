@@ -64,6 +64,9 @@ fun main(args: Array<String>) {
 @OptIn(FlowPreview::class)
 private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     val saved = Registry.settings()
+    // Before the first frame, so the window is painted in the right theme rather than flashing
+    // light and correcting itself.
+    Theme.load()
     val windowState = rememberWindowState(size = DpSize(saved.windowWidth.dp, saved.windowHeight.dp))
     // Keep the window hidden for one beat so it can be created and sized to the saved [windowState]
     // off-screen; revealing it afterward avoids the visible "opens small, then jumps bigger" flash.
@@ -73,7 +76,9 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
         delay(48)
         windowVisible = true
     }
-    NucleusDecoratedWindowTheme(isDark = false) {
+    // Hands the title bar (which Nucleus draws, and which supplies the native window controls)
+    // the same answer the app content uses, so the two halves of the window never disagree.
+    NucleusDecoratedWindowTheme(isDark = Theme.isDark) {
         DecoratedWindow(
             onCloseRequest = ::exitApplication,
             state = windowState,
@@ -113,8 +118,20 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
 
 @Composable
 fun GitVantageApp(app: AppState) {
+    // Follow the desktop while "Match system" is chosen. Polled rather than subscribed: there is
+    // no change notification we can take without a D-Bus interface and the native-image
+    // reachability risk that comes with it (see SystemAppearance), and one short-lived subprocess
+    // a minute is nothing beside the periodic fetch already running across every tracked repo.
+    // Keyed on the mode, so choosing "Match system" restarts this and reads the desktop at once
+    // rather than after the first delay.
+    LaunchedEffect(Theme.mode) {
+        while (Theme.mode == ThemeMode.SYSTEM) {
+            Theme.refreshSystemPreferenceAsync()
+            delay(60_000)
+        }
+    }
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().background(Color.White)) {
+        Column(Modifier.fillMaxSize().background(Tokens.surface)) {
             Toolbar(app)
             StatusBar(app)
             if (app.bulkCount > 0) BulkActionBar(app)   // appears while repos are checked

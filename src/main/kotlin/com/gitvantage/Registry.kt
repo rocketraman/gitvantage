@@ -67,6 +67,10 @@ data class Settings(
     val windowHeight: Int = 860,
     val detailPaneWidth: Int = 466,
     val sortBy: String = "name",   // name | commit | attention
+    // Appearance: system | light | dark. "system" follows the desktop's own light/dark
+    // preference (see ThemeMode / SystemAppearance) and is the default, so a fresh install
+    // matches the rest of the session rather than asserting a look of its own.
+    val theme: String = "system",
     // Poll GitHub for open issues/PRs by default (per-repo overrides in RegistryEntry win).
     // Only ever applies to repos with a github.com remote, and only when `gh` is authenticated.
     val githubIssues: Boolean = true,

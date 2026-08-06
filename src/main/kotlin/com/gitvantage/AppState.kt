@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,8 @@ sealed interface Popup {
     data class Snooze(override val ids: Set<String>) : Popup
     data class Remind(override val ids: Set<String>, val text: String, val due: Long?) : Popup
     data class Commit(val id: String) : Popup { override val ids: Set<String> = setOf(id) }
+    /** The appearance picker (Match system / Light / Dark). App-wide, so it owns no repos. */
+    data object Appearance : Popup { override val ids: Set<String> = emptySet() }
     data class Confirm(
         val title: String, val message: String, val confirmLabel: String,
         val danger: Boolean, val onConfirm: () -> Unit,
@@ -58,8 +61,10 @@ const val WORKTREE_TAG = "tag:worktree"
  * itself is dispatched to [Dispatchers.Default]/IO inside [refreshAll].
  */
 class AppState(private val scope: CoroutineScope) {
-    // Tweakable design props (reference § "Tweakable design props")
-    val accent = Tokens.accent
+    // Tweakable design props (reference § "Tweakable design props").
+    // A getter, not a stored value: the accent moves when the theme does, and a `val` captured at
+    // construction would pin the whole app to whichever palette was active when the window opened.
+    val accent: Color get() = Tokens.accent
     val emphasis = Emphasis.MEDIUM
     val showNotes = true
 

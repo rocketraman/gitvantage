@@ -54,14 +54,14 @@ import androidx.compose.ui.unit.sp
 fun RepoChooserOverlay(state: AppState) {
     // Scrim — click outside the card to dismiss.
     Box(
-        Modifier.fillMaxSize().background(Color(0x33000000)).onTap { state.cancelChooser() },
+        Modifier.fillMaxSize().background(Tokens.scrimSoft).onTap { state.cancelChooser() },
         contentAlignment = Alignment.Center,
     ) {
         val shape = RoundedCornerShape(14.dp)
         // The card itself: swallow taps so clicks inside don't dismiss.
         Column(
             Modifier.width(560.dp).heightIn(max = 620.dp)
-                .clip(shape).background(Color.White, shape)
+                .clip(shape).background(Tokens.surface, shape)
                 .border(1.dp, Tokens.borderDc, shape)
                 .onTap { },
         ) {
@@ -227,7 +227,7 @@ private fun Footer(state: AppState) {
         Spacer(Modifier.weight(1f))
         // Cancel
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White)
+            Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                 .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
                 .onTap { state.cancelChooser() }
                 .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -236,13 +236,13 @@ private fun Footer(state: AppState) {
         val on = count > 0
         Box(
             Modifier.clip(RoundedCornerShape(8.dp))
-                .background(if (on) state.accent else Tokens.segTrack)
+                .background(if (on) Tokens.accentFill else Tokens.segTrack)
                 .let { if (on) it.onTap { state.confirmChooser() } else it }
                 .padding(horizontal = 14.dp, vertical = 7.dp),
         ) {
             Txt(
                 if (count == 0) "Add repositories" else "Add $count ${if (count == 1) "repository" else "repositories"}",
-                12.5.sp, if (on) Color.White else Tokens.muted2, FontWeight.Bold,
+                12.5.sp, if (on) Tokens.onAccent else Tokens.muted2, FontWeight.Bold,
             )
         }
     }

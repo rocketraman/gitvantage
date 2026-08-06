@@ -246,7 +246,7 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
 
     val primary = when {
         isDirty -> Primary("Commit", C.snoozeBtnBg, C.snoozeBtnText, C.snoozeBtnBorder)
-        repo.ahead > 0 -> Primary("Push", C.tintBlue, accent, hex("#c3dcf8"))
+        repo.ahead > 0 -> Primary("Push", C.tintBlue, accent, Tokens.accentBorder)
         else -> null
     }
 
@@ -289,5 +289,17 @@ data class RepoGroup(
     val repos: List<RepoView>,
 )
 
-/** File-status letter color by change type (detail panel). */
-fun fileTagColor(f: ChangedFile): Color = hex(f.tagColor)
+/**
+ * File-status letter color by change type (detail panel).
+ *
+ * Derived here rather than stamped onto [ChangedFile] by the scanner: the scanner runs on every
+ * filesystem event and its output outlives a theme switch, so a color baked in at scan time would
+ * still be the old theme's until the repo happened to change on disk.
+ */
+fun fileTagColor(f: ChangedFile): Color = when {
+    f.section == "untracked" -> Tokens.gray
+    f.tag == "D" -> Tokens.red
+    f.section == "unstaged" -> Tokens.amber
+    f.tag == "R" || f.tag == "C" -> Tokens.accent
+    else -> Tokens.green
+}

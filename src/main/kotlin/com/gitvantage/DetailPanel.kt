@@ -81,7 +81,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         }
         Column(
             Modifier.weight(1f).fillMaxHeight()
-                .background(Color.White)
+                .background(Tokens.surface)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 22.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp),
@@ -153,10 +153,10 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             // need a remote — but Push works even without a tracking upstream (it pushes with
             // `-u origin HEAD`), so it's gated on hasRemote, not on upstream. Fetch just needs
             // the remote (offline/no-upstream is fine).
-            ActionButton("Commit…", Color.White, state.accent, null, disabled = !repo.isGitRepo) {
+            ActionButton("Commit…", Tokens.onAccent, Tokens.accentFill, null, disabled = !repo.isGitRepo) {
                 state.popup = Popup.Commit(repo.id)
             }
-            ActionButton("Push", Tokens.text2, Color.White, Tokens.borderD8, disabled = !repo.hasRemote) {
+            ActionButton("Push", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
                 state.popup = Popup.Confirm(
                     "Push ${repo.name}?",
                     if (repo.upstream != null) "Runs git push to ${repo.upstream}."
@@ -164,12 +164,12 @@ fun DetailPanel(state: AppState, rv: RepoView) {
                     "Push", danger = false,
                 ) { state.push(listOf(repo.id)) }
             }
-            ActionButton("Fetch", Tokens.text2, Color.White, Tokens.borderD8, disabled = !repo.hasRemote) {
+            ActionButton("Fetch", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
                 state.fetchRepo(repo.id)
             }
             // Fast-forward is only possible when strictly behind upstream (no local commits).
             val canFf = repo.upstream != null && repo.behind > 0 && repo.ahead == 0
-            ActionButton("Fast Forward", Tokens.text2, Color.White, Tokens.borderD8, disabled = !canFf) {
+            ActionButton("Fast Forward", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !canFf) {
                 state.popup = Popup.Confirm(
                     "Fast-forward ${repo.name}?",
                     "Advances “${repo.branch}” to ${repo.upstream} (${repo.behind} commit${if (repo.behind == 1) "" else "s"}). No local commits are lost.",
@@ -177,10 +177,10 @@ fun DetailPanel(state: AppState, rv: RepoView) {
                 ) { state.fastForward(repo.id) }
             }
             val hasChanges = repo.staged + repo.unstaged + repo.untracked > 0
-            ActionButton("Diff", Tokens.text2, Color.White, Tokens.borderD8, disabled = !hasChanges) {
+            ActionButton("Diff", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !hasChanges) {
                 state.openDiff(repo.id)
             }
-            ActionButton("Log", Tokens.text2, Color.White, Tokens.borderD8, disabled = !repo.isGitRepo) {
+            ActionButton("Log", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.isGitRepo) {
                 state.openRepoLog(repo.id)
             }
             ActionButton("☾ Snooze ▾", Tokens.snoozeBtnText, Tokens.snoozeBtnBg, Tokens.snoozeBtnBorder) {
@@ -237,7 +237,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
 
         // Curation: stop tracking this repo (non-destructive)
         Row(
-            Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp),
+            Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -280,7 +280,7 @@ private fun TagEditor(state: AppState, rv: RepoView) {
         if (!state.addingTag) {
             val shape = RoundedCornerShape(12.dp)
             Box(
-                Modifier.clip(shape).border(1.dp, hex("#cbc9c5"), shape)
+                Modifier.clip(shape).border(1.dp, Tokens.borderCb, shape)
                     .onTap { state.addingTag = true }
                     .padding(horizontal = 10.dp, vertical = 3.dp),
             ) { Txt("+ Tag", 11.5.sp, Tokens.secondary, FontWeight.SemiBold) }
@@ -359,7 +359,7 @@ fun TagAutocompleteField(
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Box(
             // Fixed width (not fillMaxWidth-driven) so the Add / Cancel controls stay on-row.
-            Modifier.width(fieldWidth).clip(RoundedCornerShape(8.dp)).background(Color.White)
+            Modifier.width(fieldWidth).clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                 .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
                 .padding(horizontal = 9.dp, vertical = 4.dp),
         ) {
@@ -390,9 +390,9 @@ fun TagAutocompleteField(
             )
         }
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(accent)
+            Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.accentFill)
                 .onTap { commit(active ?: typed) }.padding(horizontal = 10.dp, vertical = 4.dp),
-        ) { Txt("Add", 11.5.sp, Color.White, FontWeight.Bold) }
+        ) { Txt("Add", 11.5.sp, Tokens.onAccent, FontWeight.Bold) }
         Txt("Cancel", 11.5.sp, Tokens.muted, modifier = Modifier.onTap { onCancel() })
         // Hint: cycle position when there are several matches, else the accept affordance.
         val hint = when {
@@ -436,7 +436,7 @@ private fun OpenInGroup(state: AppState, repo: Repo) {
     val shape = RoundedCornerShape(9.dp)
     androidx.compose.foundation.layout.FlowRow(
         Modifier.fillMaxWidth().padding(top = 8.dp).clip(shape)
-            .background(hex("#f4f3f1")).border(1.dp, Tokens.borderE2, shape).padding(3.dp),
+            .background(Tokens.panelF7).border(1.dp, Tokens.borderE2, shape).padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -461,7 +461,7 @@ private fun OpenInGroup(state: AppState, repo: Repo) {
 private fun OpenInButton(label: String, font: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
     val shape = RoundedCornerShape(6.dp)
     Box(
-        Modifier.clip(shape).background(Color.White, shape).border(1.dp, Tokens.borderE6, shape)
+        Modifier.clip(shape).background(Tokens.surface, shape).border(1.dp, Tokens.borderE6, shape)
             .onTap(onClick).padding(horizontal = 10.dp, vertical = 5.dp),
     ) { Txt(label, 12.sp, Tokens.text2, FontWeight.Bold, font = font) }
 }
@@ -596,7 +596,7 @@ private fun FileSection(title: String, titleColor: Color, dotColor: Color, files
  */
 @Composable
 private fun StashSection(state: AppState, id: String, stashes: List<Stash>) {
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -647,7 +647,7 @@ private fun StashSection(state: AppState, id: String, stashes: List<Stash>) {
 private fun SubmodulesSection(state: AppState, rv: RepoView) {
     LaunchedEffect(rv.id) { state.loadSubmodules(rv.id) }
     if (state.submodulesRepo != rv.id || state.submodules.isEmpty()) return
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -764,7 +764,7 @@ private fun WorktreesSection(state: AppState, rv: RepoView) {
     LaunchedEffect(rv.id) { state.loadWorktrees(rv.id) }
     if (state.worktreesRepo != rv.id || state.worktrees.isEmpty()) return
     val stale = state.worktrees.count { it.prunable || it.missing }
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -968,7 +968,7 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
     val hide = remember(patterns) { Meta.compileHidePatterns(patterns) }
     val hidden = state.branches.filter { Meta.isBranchHidden(it.name, hide) }
     val shown = if (state.showHiddenBranches) state.branches else state.branches - hidden.toSet()
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1306,7 +1306,7 @@ private fun BranchBadge(label: String, color: Color, bg: Color) {
 private fun BannerActionPill(label: String, onClick: () -> Unit) {
     Box(
         Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
-            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
+            .border(1.dp, Tokens.accentBorder, RoundedCornerShape(6.dp))
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 9.dp, vertical = 2.dp),
     ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
@@ -1342,7 +1342,7 @@ private fun QuietBadge(label: String) {
 private fun IssuesSection(state: AppState, rv: RepoView) {
     val tracked = state.issuesTracked(rv.repo)
     val gh = rv.gh
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1521,7 +1521,7 @@ private fun IssueRow(state: AppState, item: GitHub.Item) {
 @Composable
 private fun StaleThresholdRow(state: AppState, rv: RepoView) {
     val override = state.staleThresholdDays(rv.id)
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1593,7 +1593,7 @@ private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
     val patterns = state.hideBranchPatterns(rv.id)
     val override = state.hideBranchPatternsOverride(rv.id)
     val invalid = remember(patterns) { Meta.invalidHidePatterns(patterns) }
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1620,7 +1620,7 @@ private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
                 val shape = RoundedCornerShape(12.dp)
                 val fg = if (bad) Tokens.redText else Tokens.secondary
                 Row(
-                    Modifier.clip(shape).background(if (bad) Tokens.tintRed else Color.White, shape)
+                    Modifier.clip(shape).background(if (bad) Tokens.tintRed else Tokens.surface, shape)
                         .border(1.dp, if (bad) Tokens.redText.copy(alpha = 0.35f) else Tokens.borderE2, shape)
                         .padding(start = 9.dp, end = 5.dp, top = 3.dp, bottom = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1640,7 +1640,7 @@ private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
             if (!adding) {
                 val shape = RoundedCornerShape(12.dp)
                 Box(
-                    Modifier.clip(shape).border(1.dp, hex("#cbc9c5"), shape)
+                    Modifier.clip(shape).border(1.dp, Tokens.borderCb, shape)
                         .pointerHoverIcon(PointerIcon.Hand).onTap { adding = true }
                         .padding(horizontal = 10.dp, vertical = 3.dp),
                 ) { Txt("+ Pattern", 11.5.sp, Tokens.secondary, FontWeight.SemiBold) }
@@ -1673,8 +1673,8 @@ private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
 private fun PresetPill(label: String, on: Boolean, accent: Color, onClick: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Box(
-        Modifier.clip(shape).background(if (on) Tokens.tintBlue else Color.White, shape)
-            .border(1.dp, if (on) hex("#c3dcf8") else Tokens.borderE2, shape)
+        Modifier.clip(shape).background(if (on) Tokens.tintBlue else Tokens.surface, shape)
+            .border(1.dp, if (on) Tokens.accentBorder else Tokens.borderE2, shape)
             .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
             .padding(horizontal = 10.dp, vertical = 3.dp),
     ) { Txt(label, 11.5.sp, if (on) accent else Tokens.secondary, if (on) FontWeight.Bold else FontWeight.Medium) }
@@ -1755,7 +1755,7 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
         }
     }
     if (rows.isEmpty()) return
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(hex("#ecebe8")).padding(top = 14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Txt("Notifications outlook", 12.5.sp, Tokens.text, FontWeight.Bold, modifier = Modifier.padding(bottom = 6.dp))
         rows.forEach { r ->
             Row(
@@ -1775,7 +1775,7 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
                 r.action?.let { (label, act) ->
                     Box(
                         Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
-                            .border(1.dp, hex("#c3dcf8"), RoundedCornerShape(6.dp))
+                            .border(1.dp, Tokens.accentBorder, RoundedCornerShape(6.dp))
                             .pointerHoverIcon(PointerIcon.Hand).onTap(act)
                             .padding(horizontal = 9.dp, vertical = 2.dp),
                     ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
@@ -1787,7 +1787,7 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
 
 @Composable
 private fun NotesSection(state: AppState, rv: RepoView) {
-    Column(Modifier.fillMaxWidth().padding(top = 22.dp).drawTopBorder(hex("#ecebe8")).padding(top = 16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 22.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 16.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1803,7 +1803,7 @@ private fun NotesSection(state: AppState, rv: RepoView) {
         }
         val shape = RoundedCornerShape(8.dp)
         Box(
-            Modifier.fillMaxWidth().heightIn(min = 62.dp).clip(shape).background(hex("#fcfcfb"))
+            Modifier.fillMaxWidth().heightIn(min = 62.dp).clip(shape).background(Tokens.panelFb)
                 .border(1.dp, Tokens.borderD8, shape).padding(10.dp),
         ) {
             BasicTextField(
