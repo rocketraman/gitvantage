@@ -34,6 +34,9 @@ object LogOps {
         val body: String,      // remaining message lines (may be blank)
         val refs: List<Ref> = emptyList(),   // branches/tags pointing here (git's %D decoration)
         val parents: List<Parent> = emptyList(),
+        // Reachable from one of origin's remote-tracking refs — i.e. the commit exists on the
+        // remote as of the last fetch, so a link to it on the web will actually resolve.
+        val pushed: Boolean = true,
     ) {
         /** More than one parent means this commit merged history together. */
         val isMerge: Boolean get() = parents.size > 1
@@ -99,6 +102,7 @@ object LogOps {
         val dir = File(repoPath)
         if (!File(dir, ".git").exists()) return@withContext emptyList()
         val out = git(dir, "log", "--max-count=$max", "--decorate=full", "--format=$FMT", range)
+        val unpushed = unpushedIn(dir, range, max)
         out.split(RS).mapNotNull { rec ->
             val r = rec.trim('\n', '\r')
             if (r.isBlank()) return@mapNotNull null
@@ -114,9 +118,24 @@ object LogOps {
                 parents = parseParents(full = f[6], short = f[7]),
                 subject = f[8].trim(),
                 body = f.getOrElse(9) { "" }.trim(),
+                pushed = f[0].trim() !in unpushed,
             )
         }
     }
+
+    /**
+     * The commits in [range] that no `origin` remote-tracking ref reaches — everything that only
+     * exists locally, as of the last fetch. One `rev-list` for the whole range rather than a
+     * `branch --contains` per commit, which would be a process per row.
+     *
+     * `origin` specifically (not `--remotes`) because the GitHub links the caller draws are built
+     * from origin's URL: reachable from some *other* remote says nothing about whether the link
+     * will resolve. When the command fails, the empty set means "assume pushed" — the same thing
+     * the UI did before it could tell, and better than hiding a link that would have worked.
+     */
+    private fun unpushedIn(dir: File, range: String, max: Int): Set<String> =
+        git(dir, "rev-list", "--max-count=$max", range, "--not", "--remotes=origin")
+            .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
     private fun git(dir: File, vararg args: String): String = try {
         val proc = ProcessBuilder(listOf("git", *args))

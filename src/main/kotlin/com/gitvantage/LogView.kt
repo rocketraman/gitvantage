@@ -7,6 +7,9 @@ import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,9 +26,11 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -116,9 +121,17 @@ fun LogView(state: AppState) {
 @Composable
 private fun CommitRow(state: AppState, c: LogOps.Commit) {
     val accent = state.accent
-    val webBase = state.logWebBase
+    // Only worth offering for commits the remote actually has: a link to a hash that was never
+    // pushed lands on GitHub's 404, so the button would be a promise the row can't keep.
+    val webBase = state.logWebBase?.takeIf { c.pushed }
+    // Held behind hover for the reason the branch and worktree lists are — see [HoverRow]. A log is
+    // the longest of these lists, so a permanent pair of pills on every row is the worst offender.
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
     Column(
-        Modifier.fillMaxWidth().drawBottomBorder(Tokens.rowBorder).padding(horizontal = 18.dp, vertical = 11.dp),
+        Modifier.fillMaxWidth().background(if (hovered) Tokens.rowHoverBg else Color.Transparent)
+            .drawBottomBorder(Tokens.rowBorder).hoverable(source)
+            .padding(horizontal = 18.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -133,8 +146,17 @@ private fun CommitRow(state: AppState, c: LogOps.Commit) {
             }
             Txt(c.subject, 13.sp, Tokens.text, FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 2)
             // Per-commit actions: view its diff, and (GitHub remotes) open the commit on the web.
-            LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
-            if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
+            // Faded rather than removed when the row isn't hovered, so the subject keeps the same
+            // width either way — a subject that reflowed from two lines to one under the pointer
+            // would shrink the row and shove the rows below it out from under the cursor. Nothing
+            // can be clicked while invisible: the pointer being over a pill *is* what reveals it.
+            Row(
+                Modifier.alpha(if (hovered) 1f else 0f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
+                if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
+            }
         }
         // Merge commits are where history actually branches, and a flat list hides that entirely.
         // Surfacing the parents (and diffing against each) covers what you'd normally go to a
