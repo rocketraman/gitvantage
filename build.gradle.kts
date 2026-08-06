@@ -1,11 +1,19 @@
 import dev.nucleusframework.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import java.io.File
 
 plugins {
     kotlin("jvm") version "2.4.0"
     kotlin("plugin.compose") version "2.4.0"
     kotlin("plugin.serialization") version "2.4.0"
+    // Rewrites `assert(x == y)` failures into a diagram of every sub-expression and its value, so a
+    // failing test names what was actually wrong without the test having to spell out a message.
+    kotlin("plugin.power-assert") version "2.4.0"
     id("org.jetbrains.compose") version "1.11.1"
+    // TestBalloon: coroutine-native test framework. The operations under test are all `suspend`,
+    // and its tests are suspend functions — no runBlocking wrapper around every case.
+    // The version is pinned to the Kotlin it was built against; it must track the kotlin() versions.
+    id("de.infix.testBalloon") version "1.0.1-K2.4.0"
     id("dev.nucleusframework") version "2.1.9"
 }
 repositories {
@@ -74,6 +82,69 @@ dependencies {
     // alongside the one filekit resolves, and the two could then disagree at runtime. This way the
     // runtime graph stays filekit's to decide, and we only borrow the types to compile against.
     compileOnly("com.github.hypfvieh:dbus-java-core:5.2.0")
+
+    testImplementation("de.infix.testBalloon:testBalloon-framework-core:1.0.1-K2.4.0")
+}
+
+// Only `assert` is instrumented: the tests use it exclusively, so there is no second assertion
+// vocabulary to keep in sync, and the diagram is the whole reason to prefer it over a message.
+@OptIn(ExperimentalKotlinGradlePluginApi::class)
+powerAssert {
+    functions = listOf("kotlin.assert")
+}
+
+/**
+ * The git environment the tests run in, written out rather than inherited.
+ *
+ * The tests drive the real `git` binary against throwaway repositories, so whatever is in the
+ * developer's ~/.gitconfig — `commit.gpgsign`, a commit template, hooks, a custom
+ * `init.defaultBranch` — would otherwise leak in and fail on their machine while passing in CI, or
+ * the reverse. Pointing GIT_CONFIG_GLOBAL at a file we generate gives both isolation *and* control.
+ *
+ * `protocol.file.allow` has to live here rather than in each test repository: git has refused
+ * file:// transport for submodule clones since 2.38 (CVE-2022-39253), and the commands that trip
+ * over it — `submodule update --init` inside [SubmoduleOps] — are the code under test, so there is
+ * no call site to pass `-c` at. Every "remote" in the tests is a local path, which is exactly the
+ * shape that restriction targets, so the tests opt back in for their own throwaway repositories.
+ */
+val testGitConfig = tasks.register("testGitConfig") {
+    description = "Generate the isolated git config the tests run against."
+    val target = layout.buildDirectory.file("test-gitconfig")
+    outputs.file(target)
+    doLast {
+        target.get().asFile.apply { parentFile.mkdirs() }.writeText(
+            """
+            [user]
+                name = GitVantage Test
+                email = test@example.invalid
+            [init]
+                defaultBranch = main
+            [commit]
+                gpgsign = false
+            [tag]
+                gpgsign = false
+            [protocol "file"]
+                allow = always
+            [advice]
+                detachedHead = false
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+tasks.test {
+    dependsOn(testGitConfig)
+    environment("GIT_CONFIG_GLOBAL", layout.buildDirectory.file("test-gitconfig").get().asFile.path)
+    // No generated equivalent: /etc/gitconfig is simply switched off. Git reads a missing config
+    // file as an empty one, so a path that is never created is the portable way to say "none".
+    environment("GIT_CONFIG_SYSTEM", layout.buildDirectory.file("test-git-no-system-config").get().asFile.path)
+    // A test must never block on a credential prompt: fail the command instead.
+    environment("GIT_TERMINAL_PROMPT", "0")
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStackTraces = false
+    }
 }
 nucleus.application {
     mainClass = "com.gitvantage.MainKt"
