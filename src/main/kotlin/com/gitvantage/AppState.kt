@@ -1279,9 +1279,13 @@ class AppState(private val scope: CoroutineScope) {
             val e = RegistryEntry(path, tags = tags, addedAt = java.time.Instant.now())
             entries[path] = e; order.add(path)
             persist(); syncWatches()
-            withContext(Dispatchers.Default) { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() } }
-                ?.let { repos.add(it) }
-            toast("Added ${File(path).name}")
+            val scanned = withContext(Dispatchers.Default) {
+                scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() }
+            }
+            scanned?.let { repos.add(it) }
+            // The scan's name, not the folder's: a worktree is listed under its main checkout's
+            // name, and the confirmation should say what the list is about to show.
+            toast("Added ${scanned?.name ?: File(path).name}")
             selectedId = path
         }
     }

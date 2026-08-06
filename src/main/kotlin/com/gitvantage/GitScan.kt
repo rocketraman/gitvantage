@@ -121,6 +121,19 @@ object RepoScanner {
         // A bare main repo isn't a working tree, so it doesn't count towards "how many checkouts".
         val worktreeCount = worktrees.count { !it.bare }
         val worktreesUnlanded = worktrees.count { !it.isCurrent && !it.bare && !it.missing && it.unlanded }
+        val worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null
+
+        // A linked worktree's folder is named for the branch it holds, and a branch name alone says
+        // nothing about which project it belongs to — "fix-login" sitting in the repo list is a
+        // guess. Tracked worktrees are shown as "<main checkout>/<folder>", which both supplies the
+        // missing context and sorts them next to the repo they were added from. A bare main repo
+        // loses its ".git" suffix — "gitvantage.git/fix-login" reads like a path, not a name — and a
+        // worktree folder that already matches its parent isn't doubled up.
+        val displayName = worktreeMain
+            ?.let { File(it).name.removeSuffix(".git") }
+            ?.takeIf { it.isNotEmpty() && it != name }
+            ?.let { "$it/$name" }
+            ?: name
 
         val log = gitOrNull(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct")?.trim().orEmpty()
         val logParts = log.split(SEP)
@@ -135,7 +148,7 @@ object RepoScanner {
             commitEpoch != null && (now / 1000 - commitEpoch) > staleDays.toLong() * 86_400
 
         Repo(
-            id = id, name = name, branch = branch, tags = baseTags,
+            id = id, name = displayName, branch = branch, tags = baseTags,
             ahead = ahead, behind = behind,
             staged = status.staged, unstaged = status.unstaged, untracked = status.untracked,
             stash = stashes.size,
@@ -147,7 +160,7 @@ object RepoScanner {
             superproject = gitOrNull(dir, "rev-parse", "--show-superproject-working-tree")
                 ?.trim()?.takeIf { it.isNotEmpty() },
             worktreeCount = worktreeCount, isWorktree = isWorktree,
-            worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null,
+            worktreeMain = worktreeMain,
             worktreesUnlanded = worktreesUnlanded,
             warning = warning, stale = isStale, staleDays = staleDays,
             staleImportant = entry.staleImportant,
