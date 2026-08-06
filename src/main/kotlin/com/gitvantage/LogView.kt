@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -135,7 +137,31 @@ private fun CommitRow(state: AppState, c: LogOps.Commit) {
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Txt(c.shortHash, 12.sp, accent, FontWeight.SemiBold, font = MonoFont)
+            // The hash is its own copy button. A "Copy" in the hover lane below would have to say
+            // which of the row's identifiers it meant — the commit or one of its branches — and the
+            // hash is the thing the eye is already on when the answer is "the commit".
+            //
+            // Copies the *full* hash, not the abbreviation on screen: the short form is for reading,
+            // the long one is what a git command wants. The tooltip shows what will land.
+            //
+            // The offset cancels the flash pill's own padding, so the hash stays flush with the
+            // author line below it and sits exactly where it did before this was clickable.
+            CopyTarget(
+                c.fullHash, "Copy the full commit id — ${c.fullHash}",
+                Modifier.offset(x = (-4).dp, y = (-1).dp),
+            ) { copied ->
+                val hashShape = RoundedCornerShape(4.dp)
+                Box(
+                    Modifier.clip(hashShape)
+                        .background(if (copied) Tokens.tintGreen else Color.Transparent, hashShape)
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    Txt(
+                        c.shortHash, 12.sp, if (copied) Tokens.addFg else accent,
+                        FontWeight.SemiBold, font = MonoFont,
+                    )
+                }
+            }
             // Refs first, so the eye lands on "where am I / what's tagged" before the message.
             // FlowRow because a commit can carry several (HEAD + branch + remote + tags).
             if (c.refs.isNotEmpty()) {
@@ -202,6 +228,10 @@ private fun CommitRow(state: AppState, c: LogOps.Commit) {
 /**
  * A branch/tag pointing at this commit. Colour carries the kind so the list is scannable without
  * reading every label: green = where HEAD is, blue = local branch, grey = remote, amber = tag.
+ *
+ * Every chip that names something is click-to-copy, which is why the copy affordance lives here
+ * rather than in the row's hover lane: a commit can carry several refs at once, and one button per
+ * ref would put more chrome in the lane than there is room for.
  */
 @Composable
 private fun RefChip(ref: LogOps.Ref, accent: Color) {
@@ -214,13 +244,30 @@ private fun RefChip(ref: LogOps.Ref, accent: Color) {
     }
     // The glyph distinguishes tags from branches even in a screenshot or for a colour-blind reader.
     val glyph = if (ref.kind == LogOps.RefKind.TAG) "⌂ " else "⎇ "
-    Box(
-        Modifier.clip(shape).background(bg, shape).padding(horizontal = 5.dp, vertical = 1.dp),
-    ) {
-        Txt(
-            if (ref.kind == LogOps.RefKind.HEAD) ref.label else "$glyph${ref.label}",
-            10.sp, fg, FontWeight.Bold, font = MonoFont, maxLines = 1,
+    // "HEAD" arrives as a chip of its own — [LogOps.parseRefs] splits `HEAD -> main` in two — so it
+    // is a marker rather than a name, and putting the literal string "HEAD" on the clipboard would
+    // help nobody. The branch it points at is the chip beside it, and that one copies. It is also
+    // the one chip already green, so it has no room to flash a confirmation.
+    if (ref.kind == LogOps.RefKind.HEAD) {
+        RefChipBody(ref.label, fg, bg, shape)
+        return
+    }
+    val what = if (ref.kind == LogOps.RefKind.TAG) "tag" else "branch"
+    CopyTarget(ref.label, "Copy the $what name — ${ref.label}") { copied ->
+        RefChipBody(
+            "$glyph${ref.label}",
+            if (copied) Tokens.addFg else fg,
+            if (copied) Tokens.tintGreen else bg,
+            shape,
         )
+    }
+}
+
+/** The chip itself, shared by [RefChip]'s plain and click-to-copy forms. */
+@Composable
+private fun RefChipBody(label: String, fg: Color, bg: Color, shape: Shape) {
+    Box(Modifier.clip(shape).background(bg, shape).padding(horizontal = 5.dp, vertical = 1.dp)) {
+        Txt(label, 10.sp, fg, FontWeight.Bold, font = MonoFont, maxLines = 1)
     }
 }
 

@@ -367,6 +367,37 @@ fun CopyAction(value: String, label: String = "Copy") {
     )
 }
 
+/**
+ * Click-to-copy on the identifier itself, for the places where the thing you would copy *is* the
+ * thing already on screen — a commit hash, a branch chip. [content] draws it and is handed the
+ * copied flag back, so each caller keeps its own colours.
+ *
+ * The confirmation is a colour change rather than [CopyPill]'s and [CopyAction]'s label swap
+ * because these sit inline among other content: a label that grew to "✓ Copied" would push
+ * everything to its right along, and in a log row that is far enough to reflow the subject onto a
+ * second line and change the row's height under the pointer. Colour says the same thing at a fixed
+ * width. It is the same green either way, which is what ties this to the pill form.
+ *
+ * Used for the identifiers a row carries several of, where a single [CopyAction] in the row's
+ * hover lane would have no way to say which one it meant.
+ */
+@Composable
+fun CopyTarget(
+    value: String,
+    tip: String,
+    modifier: Modifier = Modifier,
+    content: @Composable (copied: Boolean) -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(value) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    HoverTip(
+        tip,
+        modifier.pointerHoverIcon(PointerIcon.Hand)
+            .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
+    ) { content(copied) }
+}
+
 /** A small filled circle of the given diameter. */
 @Composable
 fun StatusDot(color: Color, diameter: Int, modifier: Modifier = Modifier) {
