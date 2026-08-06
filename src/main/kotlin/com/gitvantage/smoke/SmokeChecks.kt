@@ -3,8 +3,13 @@
 
 package com.gitvantage.smoke
 
+import com.gitvantage.app.AppState
+import com.gitvantage.ui.main
 import dev.nucleusframework.fswatcher.FsWatchers
 import dev.nucleusframework.notification.common.NotificationManager
+import java.nio.file.Files
+import kotlin.io.path.createTempDirectory
+import kotlin.system.exitProcess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -13,9 +18,6 @@ import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.exceptions.AddressResolvingException
 import org.freedesktop.dbus.exceptions.InvalidBusAddressException
 import org.freedesktop.dbus.interfaces.Properties
-import java.nio.file.Files
-import kotlin.io.path.createTempDirectory
-import kotlin.system.exitProcess
 
 /**
  * Functional checks for the subsystems that fail silently.
