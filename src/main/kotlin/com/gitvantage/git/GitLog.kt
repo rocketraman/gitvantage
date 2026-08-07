@@ -39,6 +39,33 @@ object GitLog {
     // is the key the console's list is diffed by.
     private val seq = AtomicLong(0)
 
+    /**
+     * Record a git client the app *launched* rather than ran — `git gui`, GitButler.
+     *
+     * These are started detached with both streams discarded, so there is no output to show and
+     * no exit code to wait for. They are recorded anyway, because the user goes on to commit and
+     * stage inside them: those are real mutations this console would otherwise have no trace of,
+     * and the dashboard state jumps afterwards with nothing to explain why. The entry marks *when
+     * the app handed the repo over*, which is the part the app actually knows.
+     *
+     * [command] is the whole argv and is written verbatim — unlike [record] these are not all
+     * `git` subcommands, and captioning `but --path …` as a git command would misreport what ran.
+     *
+     * The output line states the gap in as many words rather than leaving a blank the reader
+     * would take for "it printed nothing": a console that invents plausible command output is
+     * worse than one that admits what it cannot see.
+     */
+    internal fun recordLaunch(repo: String, command: List<String>, started: Boolean) {
+        val entry = GitCommand(
+            seq.getAndIncrement(), repo, command.joinToString(" "),
+            exitCode = if (started) 0 else -1,
+            durationMs = 0,
+            output = if (started) "(launched detached — its output is not captured here)"
+            else "(could not be launched)",
+        )
+        _entries.update { (it + entry).takeLast(MAX) }
+    }
+
     internal fun record(repo: String, args: List<String>, res: Git.Result, durationMs: Long) {
         val combined = listOf(res.out, res.err).filter { it.isNotBlank() }.joinToString("\n").trimEnd()
         val entry = GitCommand(

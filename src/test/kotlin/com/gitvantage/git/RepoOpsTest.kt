@@ -108,7 +108,50 @@ val RepoOperations by testSuite {
             val result = RepoOps.commit(entry(work), "nothing here", "", stageAll = true)
 
             assert(!result.ok)
-            assert(result.message.startsWith("${work.name}: "))
+            // The verdict, not the status preamble. git announces "nothing to commit" on stdout
+            // underneath "On branch main", and reporting the branch name as the reason a commit
+            // failed tells the user nothing at all.
+            assert(result.message == "${work.name}: nothing to commit")
+        }
+
+        test("commit on a clean detached HEAD reports the verdict too") {
+            val work = repo()
+            git(work, "checkout", "-q", "--detach")
+
+            val result = RepoOps.commit(entry(work), "nothing here", "", stageAll = true)
+
+            assert(!result.ok)
+            // Same shape, different preamble: git leads with "HEAD detached at <sha>" here, so a
+            // fix that only skipped the literal "On branch " would pass the test above and fail this.
+            assert(result.message == "${work.name}: nothing to commit")
+        }
+
+        test("commit tells an unstaged tree apart from an empty one") {
+            val work = repo()
+            dirty(work)
+
+            val result = RepoOps.commit(entry(work), "not staged", "", stageAll = false)
+
+            assert(!result.ok)
+            // "nothing to commit" would contradict the dirty counts the dashboard is showing.
+            assert(result.message == "${work.name}: nothing staged to commit")
+        }
+
+        test("commit reports git's own reason when the index is not the problem") {
+            val work = repo()
+            git(work, "switch", "-q", "-c", "feature")
+            commit(work, "a.txt", "theirs\n", "on feature")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            commit(work, "a.txt", "mine\n", "on main")
+            check(gitAllowingFailure(work, "merge", "feature") != 0) { "arrangement: expected a conflict" }
+
+            val result = RepoOps.commit(entry(work), "resolve", "", stageAll = false)
+
+            assert(!result.ok)
+            // Unresolved conflicts leave entries staged, so the index probe declines to answer and
+            // git's own stderr line comes through: "Committing is not possible because you have
+            // unmerged files."
+            assert(result.message.contains("unmerged files"))
         }
 
         // --- fast-forward -------------------------------------------------------------------

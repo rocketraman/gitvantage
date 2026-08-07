@@ -7,11 +7,16 @@ import de.infix.testBalloon.framework.core.testSuite
 
 /**
  * The console's contract, which is the reason [Git] and [GitLog] were split apart: everything the
- * app *changes* is recorded, and nothing it merely *reads* is.
+ * app *changes* on the user's behalf is recorded, and nothing it merely *reads* is.
  *
  * Both halves matter. A mutation missing from the console is a change the user cannot account for;
  * a read that reaches it buries those changes under polling noise, which is what makes the console
  * worth opening at all.
+ *
+ * "On the user's behalf" is the part that mutating-or-not cannot decide by itself: `git fetch` is
+ * a mutation either way, but it is worth recording when it came from the Refresh button and is
+ * pure noise when it came from the five-minute timer. Only the caller knows which, so the trigger
+ * travels with the scan and both directions are pinned below.
  */
 val GitConsoleRecording by testSuite {
     testFixture { Sandbox() } asContextForEach {
@@ -79,6 +84,41 @@ val GitConsoleRecording by testSuite {
             // The one mutating command in a scan. Every status/rev-list/log around it stays out,
             // which is what keeps a polling dashboard from filling the console.
             assert(commands == listOf("git fetch"))
+        }
+
+        test("a background scan's fetch stays out of the console") {
+            val work = repo("log-scan-bg")
+
+            val commands = recordedFor("log-scan-bg") {
+                RepoScanner.scan(entry(work), fetch = true, userInitiated = false)
+            }
+
+            // The same command as the test above, and the same mutation — only the trigger differs.
+            // The auto-refresh fires one of these per repo every five minutes for as long as the app
+            // is open; recorded, they are all a 500-deep console would have left by lunchtime.
+            assert(commands.isEmpty())
+        }
+
+        test("a launched git client is recorded even though its output cannot be") {
+            GitLog.recordLaunch("log-launch", listOf("git", "gui"), started = true)
+
+            val entry = GitLog.entries.value.last { it.repo == "log-launch" }
+            assert(entry.command == "git gui")
+            assert(entry.exitCode == 0)
+            // The user commits from inside it, so the launch is the console's only trace of what
+            // follows. The missing output is stated rather than left blank, which would read as
+            // "git printed nothing".
+            assert(entry.output.isNotBlank())
+        }
+
+        test("a launched client that is not git is recorded verbatim") {
+            GitLog.recordLaunch("log-launch-but", listOf("but", "--path", "/x"), started = false)
+
+            val entry = GitLog.entries.value.last { it.repo == "log-launch-but" }
+            // Not captioned "git but --path /x": these launchers are not all git subcommands, and
+            // the console must not misreport which program ran.
+            assert(entry.command == "but --path /x")
+            assert(entry.exitCode != 0)
         }
 
         test("push checks for an upstream without recording the question") {

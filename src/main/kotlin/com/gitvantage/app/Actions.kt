@@ -3,6 +3,7 @@
 
 package com.gitvantage.app
 
+import com.gitvantage.git.GitLog
 import java.io.File
 
 /**
@@ -23,29 +24,40 @@ object Actions {
             add(listOf("kitty", "--directory", path))
             add(listOf("xterm"))
         }
-        return launchFirst(candidates, File(path))
+        return launchFirst(candidates, File(path)) != null
     }
 
-    fun openFolder(path: String): Boolean = launchFirst(listOf(listOf("xdg-open", path)), File(path))
+    fun openFolder(path: String): Boolean = launchFirst(listOf(listOf("xdg-open", path)), File(path)) != null
 
     /** Open a URL in the default browser. */
     fun openUrl(url: String): Boolean =
-        launchFirst(listOf(listOf("xdg-open", url), listOf("open", url)), File(System.getProperty("user.home")))
+        launchFirst(listOf(listOf("xdg-open", url), listOf("open", url)), File(System.getProperty("user.home"))) != null
 
     fun openIde(path: String): Boolean = launchFirst(
         listOf(listOf("idea", path), listOf("idea.sh", path), listOf("code", path), listOf("codium", path)),
         File(path),
+    ) != null
+
+    fun openGitGui(path: String): Boolean = launchGitClient(path, listOf(listOf("git", "gui")))
+
+    fun openGitButler(path: String): Boolean = launchGitClient(
+        path,
+        listOf(listOf("but", "--path", path), listOf("gitbutler-tauri"), listOf("gitbutler")),
     )
 
-    fun openGitGui(path: String): Boolean = launchFirst(listOf(listOf("git", "gui")), File(path))
+    /** Try each command in [cmds] with cwd [dir]; the first that starts, or null if none did.
+     *  Returns the command rather than a flag so the git-client launchers can record what ran. */
+    private fun launchFirst(cmds: List<List<String>>, dir: File): List<String>? =
+        cmds.firstOrNull { launch(it, dir) }
 
-    fun openGitButler(path: String): Boolean =
-        launchFirst(listOf(listOf("but", "--path", path), listOf("gitbutler-tauri"), listOf("gitbutler")), File(path))
-
-    /** Try each command in [cmds] with cwd [dir]; true on the first that starts. */
-    private fun launchFirst(cmds: List<List<String>>, dir: File): Boolean {
-        for (cmd in cmds) if (launch(cmd, dir)) return true
-        return false
+    /** Launch a git client and record it: what the user does inside one is real git mutation, so
+     *  the entry is the console's only account of the dashboard state that jumps afterwards.
+     *  Names the command that actually started, or the preferred candidate if none would. */
+    private fun launchGitClient(path: String, cmds: List<List<String>>): Boolean {
+        val dir = File(path)
+        val started = launchFirst(cmds, dir)
+        GitLog.recordLaunch(dir.name.ifEmpty { path }, started ?: cmds.first(), started != null)
+        return started != null
     }
 
     private fun launch(cmd: List<String>, dir: File): Boolean = try {

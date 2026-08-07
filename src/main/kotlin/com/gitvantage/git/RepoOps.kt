@@ -59,8 +59,35 @@ object RepoOps {
             }
             val res = Git.run(dir, args, repoName = name)
             if (res.ok) OpResult(entry.path, true, "$name committed")
-            else OpResult(entry.path, false, "$name: ${res.firstError("commit failed")}")
+            else OpResult(entry.path, false, "$name: ${commitFailure(dir, res)}")
         }
+
+    /**
+     * Why a `git commit` failed, in one line.
+     *
+     * "Nothing to commit" is put to git as a *question* rather than read out of its prose.
+     * git announces it on stdout, underneath a status preamble — `On branch master`, or
+     * `HEAD detached at 6fd705e` — and [Git.Result.firstError] returns the first usable line,
+     * which is the preamble and not the verdict. Reporting "On branch master" as the reason a
+     * commit failed is worse than saying nothing.
+     *
+     * Asking only *after* git has refused is what makes this safe, and is why it needs no
+     * merge-in-progress special case. A merge whose conflict was resolved in favour of `ours`
+     * stages nothing at all yet still commits legitimately — but it *succeeds*, so it never
+     * reaches here. Unresolved conflicts leave their entries staged, so they fall through to
+     * git's own `Committing is not possible …` on stderr, which [Git.Result.firstError] already
+     * reports correctly.
+     *
+     * The two queries are unlogged: the commit itself is in the console with git's full output,
+     * and these only ask how to word the toast.
+     */
+    private fun commitFailure(dir: File, res: Git.Result): String {
+        if (Git.exitCode(dir, "diff", "--cached", "--quiet") != 0) return res.firstError("commit failed")
+        // Nothing is staged. Distinguish an empty repo from one whose changes were never staged —
+        // "nothing to commit" contradicts the dirty counts the dashboard is showing right next to it.
+        return if (Git.read(dir, "status", "--porcelain").isNotBlank()) "nothing staged to commit"
+        else "nothing to commit"
+    }
 
     /** `git merge --ff-only @{upstream}` — advances the branch to its upstream when possible. */
     suspend fun fastForward(entry: RegistryEntry): OpResult = withContext(Dispatchers.IO) {

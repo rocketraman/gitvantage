@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
  *
  * The one deliberate exception is [Actions.openGitGui], which *launches* `git gui` detached
  * rather than running a command: nothing is captured and nothing is waited on, so it belongs
- * with the other "Open in …" launchers and has none of the concerns here.
+ * with the other "Open in …" launchers and has none of the concerns here. It does not bypass
+ * [GitLog] though — it records the launch itself, since the user commits from inside it.
  *
  * Logging is opt-in per call and defaults to on for [run]: side-effecting commands are what
  * the console in [GitLog] exists to show, and read-only polling would flood it.

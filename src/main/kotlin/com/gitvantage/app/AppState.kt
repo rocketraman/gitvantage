@@ -745,7 +745,7 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Re-scan every registered repo concurrently. Git runs on Default/IO; the state
      *  updates run on [scope] (the UI dispatcher) so the list actually recomposes. */
-    fun refreshAll(fetch: Boolean) {
+    fun refreshAll(fetch: Boolean, userInitiated: Boolean = true) {
         if (scanning) return
         scope.launch {
             scanning = true
@@ -753,7 +753,11 @@ class AppState(private val scope: CoroutineScope) {
                 val snapshot = order.mapNotNull { entries[it] }
                 val results = withContext(Dispatchers.Default) {
                     snapshot.map { e ->
-                        async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, fetch) }.getOrNull() } }
+                        async {
+                            scanLimiter.withPermit {
+                                runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull()
+                            }
+                        }
                     }.awaitAll()
                 }.filterNotNull().associateBy { it.id }
                 val ordered = order.mapNotNull { results[it] }
@@ -1556,10 +1560,12 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /** Re-scan the given repos in place (git state may have changed after push/fetch). */
-    private suspend fun rescanRepos(ids: Collection<String>, fetch: Boolean) {
+    private suspend fun rescanRepos(ids: Collection<String>, fetch: Boolean, userInitiated: Boolean = true) {
         val es = ids.mapNotNull { entries[it] }
         val scanned = withContext(Dispatchers.Default) {
-            es.map { e -> async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, fetch) }.getOrNull() } } }.awaitAll()
+            es.map { e ->
+                async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull() } }
+            }.awaitAll()
         }.filterNotNull()
         scanned.forEach { s ->
             val idx = repos.indexOfFirst { it.id == s.id }
@@ -1603,7 +1609,9 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             while (isActive) {
                 delay(intervalSeconds * 1000)
-                refreshAll(fetch = true)
+                // Not user-initiated: these fetches stay out of the console. One per repo every
+                // five minutes would otherwise be the only thing left in it after a lunch break.
+                refreshAll(fetch = true, userInitiated = false)
             }
         }
     }

@@ -21,14 +21,24 @@ import kotlinx.coroutines.withContext
  * Management: "shell out to git … ideally off the UI thread").
  *
  * Git surface used: `git fetch` (optional — the one mutating command here, so the only one
- * logged), `symbolic-ref`, `rev-list` (ahead/behind), `status --porcelain`, `stash list`,
- * `log -1`. The reads run on every poll, which is why they stay out of [GitLog].
+ * that can be logged), `symbolic-ref`, `rev-list` (ahead/behind), `status --porcelain`,
+ * `stash list`, `log -1`. The reads run on every poll, which is why they stay out of [GitLog].
  */
 object RepoScanner {
 
     private const val SEP = "\u001F" // %x1f delimiter between log fields
 
-    suspend fun scan(entry: RegistryEntry, fetch: Boolean): Repo = withContext(Dispatchers.IO) {
+    /**
+     * Scan one repo. [fetch] adds a `git fetch` first; [userInitiated] says whether that fetch
+     * came from something the user did.
+     *
+     * Only the trigger can answer that, which is why it's a parameter rather than a property of
+     * the command: the identical `git fetch` is worth a console entry when it came from the
+     * Refresh button, and is pure noise when it came from the 5-minute timer — which fires per
+     * repo, forever, and would otherwise evict every real entry from a 500-deep console within
+     * a couple of idle hours.
+     */
+    suspend fun scan(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean = true): Repo = withContext(Dispatchers.IO) {
         val dir = File(entry.path)
         val name = dir.name.ifEmpty { entry.path }
         val id = entry.path
@@ -46,7 +56,8 @@ object RepoScanner {
             )
         }
 
-        if (fetch) Git.run(dir, listOf("fetch"), Git.NETWORK_TIMEOUT, repoName = name) // logged; best-effort, ignore offline/errors
+        // Best-effort: ignore offline/errors. Logged only when the user asked for it (see [scan]).
+        if (fetch) Git.run(dir, listOf("fetch"), Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
 
         // Whether the repo has ANY remote configured. Gates Push/Fetch/Fast-forward:
         // a branch can be pushable (via `push -u origin`) even without a tracking upstream,
