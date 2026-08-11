@@ -134,6 +134,17 @@ object RepoScanner {
         val worktreeCount = worktrees.count { !it.bare }
         val worktreesUnlanded = worktrees.count { !it.isCurrent && !it.bare && !it.missing && it.unlanded }
         val worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null
+        // The other working trees that sit *inside* this one's folder. Only these are ambiguous to
+        // the filesystem watcher: a worktree elsewhere on disk is outside the watch root and can't
+        // be mistaken for this repo changing, while one under `.claude/worktrees/` is gitignored —
+        // invisible to every git command here — yet fully visible to a recursive watch.
+        // Stored canonical, because that is the spelling they get compared against: the watcher is
+        // handed each repo's real path and echoes event paths back under it, so a worktree reached
+        // through a symlink would otherwise never match and its churn would count as this repo's.
+        val nestedWorktrees = worktrees
+            .filter { !it.isCurrent && !it.bare }
+            .filter { isUnder(dir, it.path) }
+            .map { runCatching { File(it.path).canonicalPath }.getOrDefault(it.path) }
 
         // A linked worktree's folder is named for the branch it holds, and a branch name alone says
         // nothing about which project it belongs to — "fix-login" sitting in the repo list is a
@@ -174,11 +185,27 @@ object RepoScanner {
             worktreeCount = worktreeCount, isWorktree = isWorktree,
             worktreeMain = worktreeMain,
             worktreesUnlanded = worktreesUnlanded,
+            nestedWorktrees = nestedWorktrees,
             warning = warning, stale = isStale, staleDays = staleDays,
             staleImportant = entry.staleImportant,
             snoozed = snoozed, snoozedFor = snoozedFor, reminder = reminder, note = note,
             files = status.files, stashes = stashes,
         )
+    }
+
+    /**
+     * Whether [path] names something inside [root] (and not [root] itself).
+     *
+     * Both sides are canonicalized first: `git worktree list` reports real paths, while a repo is
+     * registered under whatever path the user picked, and on a machine where either crosses a
+     * symlink — /tmp and /var on macOS, any checkout the user symlinked — the two spellings of the
+     * same directory would otherwise fail to match.
+     */
+    fun isUnder(root: File, path: String): Boolean {
+        fun canon(f: File) = runCatching { f.canonicalFile }.getOrDefault(f.absoluteFile)
+        val r = canon(root)
+        val p = canon(File(path))
+        return p != r && generateSequence(p.parentFile) { it.parentFile }.any { it == r }
     }
 
     /** Parse `git status --porcelain` (v1). X = index (staged), Y = worktree (unstaged). */

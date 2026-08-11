@@ -32,6 +32,8 @@ import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
 import com.gitvantage.model.Stash
+import com.gitvantage.model.WatchPolicy
+import dev.nucleusframework.fswatcher.FsWatchEvent
 import dev.nucleusframework.fswatcher.FsWatchRegistration
 import dev.nucleusframework.fswatcher.FsWatcher
 import dev.nucleusframework.fswatcher.FsWatchers
@@ -272,6 +274,7 @@ class AppState(private val scope: CoroutineScope) {
     private var fsWatcher: FsWatcher? = null
     private val watchRegs = HashMap<String, FsWatchRegistration>()  // repo id -> registration
     private val watchDebounce = HashMap<String, Job>()             // repo id -> pending rescan
+    private val watchDeadline = HashMap<String, Long>()             // repo id -> when its burst must scan
 
     init {
         // Load only what the user has curated. A missing/empty registry stays empty —
@@ -299,7 +302,9 @@ class AppState(private val scope: CoroutineScope) {
         // Collect BEFORE registering paths (events are a hot flow with no replay).
         scope.launch {
             runCatching {
-                w.events.collect { ev -> ev.source?.name?.let { scheduleWatchRescan(it) } }
+                w.events.collect { ev ->
+                    ev.source?.name?.let { if (concernsRepo(it, ev)) scheduleWatchRescan(it) }
+                }
             }
         }
         syncWatches()
@@ -338,15 +343,54 @@ class AppState(private val scope: CoroutineScope) {
         (watchRegs.keys - want).forEach { id ->
             runCatching { watchRegs.remove(id)?.close() }
             watchDebounce.remove(id)?.cancel()
+            watchDeadline.remove(id)
         }
     }
 
-    /** Debounced per-repo rescan: coalesces bursts of file events into one scan. */
+    /**
+     * Whether [ev] is a change to [id]'s own checkout rather than to a worktree nested inside it —
+     * see [WatchPolicy.concernsRepo] for why those are not this repo's business.
+     *
+     * Filtering them out is worth more than the scans it saves. A coding session writes more or less
+     * continuously, and each of those events used to push the parent's debounce back another quiet
+     * period, so the parent stopped being rescanned for as long as the session ran and the user's
+     * own uncommitted changes never reached the detail panel. [WatchPolicy] bounds that on its own
+     * now; this keeps the pointless scans from being scheduled at all.
+     *
+     * Only worktrees a scan has already found are filtered, so one that has just appeared still gets
+     * through and triggers the scan that discovers it.
+     */
+    private fun concernsRepo(id: String, ev: FsWatchEvent): Boolean {
+        val nested = repos.firstOrNull { it.id == id }?.nestedWorktrees ?: return true
+        if (nested.isEmpty()) return true   // the common case, before any Path is allocated
+        return WatchPolicy.concernsRepo(nested.map(Path::of), eventPaths(ev))
+    }
+
+    /** The paths an [FsWatchEvent] concerns; empty for an Overflow, which names none. */
+    private fun eventPaths(ev: FsWatchEvent): List<Path> = when (ev) {
+        is FsWatchEvent.Created -> listOf(ev.path)
+        is FsWatchEvent.Modified -> listOf(ev.path)
+        is FsWatchEvent.Removed -> listOf(ev.path)
+        is FsWatchEvent.Moved -> listOf(ev.from, ev.to)
+        is FsWatchEvent.Other -> ev.paths
+        is FsWatchEvent.Overflow -> emptyList()
+    }
+
+    /**
+     * Debounced per-repo rescan: coalesces a burst of file events into one scan, without letting a
+     * long enough burst postpone that scan forever. See [WatchPolicy] for why the ceiling is there.
+     */
     private fun scheduleWatchRescan(id: String) {
         if (entries[id] == null) return
+        val now = System.currentTimeMillis()
+        val deadline = watchDeadline.getOrPut(id) { WatchPolicy.deadlineFor(now) }
         watchDebounce[id]?.cancel()
         watchDebounce[id] = scope.launch {
-            delay(800)
+            delay(WatchPolicy.delayMs(now, deadline))
+            // Cleared as the scan starts, so the next event opens a fresh burst window rather than
+            // inheriting a deadline that has already passed (which would scan on every event).
+            watchDeadline.remove(id)
+            watchDebounce.remove(id)
             rescanRepos(listOf(id), fetch = false)
         }
     }

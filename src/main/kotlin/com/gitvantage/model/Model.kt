@@ -51,6 +51,15 @@ data class Repo(
     val isWorktree: Boolean = false,    // this checkout is a linked worktree, not the main one
     val worktreeMain: String? = null,   // the main working tree's path, when this is a linked worktree
     val worktreesUnlanded: Int = 0,     // *other* working trees holding uncommitted or unmerged work
+    /**
+     * Absolute paths of the *other* working trees that live inside this checkout's folder — a
+     * coding session's `.claude/worktrees/<slug>`, or any worktree added under the repo by hand.
+     *
+     * Not presentational: it exists for the filesystem watcher. git ignores these directories, but
+     * the recursive watch registered for the repo does not, so without it every file written in
+     * another checkout arrives looking like a change to this one.
+     */
+    val nestedWorktrees: List<String> = emptyList(),
     val isGitRepo: Boolean = true,
     val warning: String? = null,
     val stale: Boolean = false,
