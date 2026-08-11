@@ -77,6 +77,10 @@ data class Settings(
     // preference (see ThemeMode / SystemAppearance) and is the default, so a fresh install
     // matches the rest of the session rather than asserting a look of its own.
     val theme: String = "system",
+    // How big to draw the UI, as a percentage of the density the display reports. 100 leaves the
+    // windowing layer's own answer alone. Hand-editable like the rest of this file, so UiScale
+    // clamps whatever lands here rather than trusting it.
+    val uiScalePercent: Int = 100,
     // Poll GitHub for open issues/PRs by default (per-repo overrides in RegistryEntry win).
     // Only ever applies to repos with a github.com remote, and only when `gh` is authenticated.
     val githubIssues: Boolean = true,

@@ -64,6 +64,7 @@ fun runSmokeChecks(): Int {
     checkFsWatcherThroughSymlink()
     checkXdgPortal()
     checkXdgFileChooserProxy()
+    checkMacOsFileChooserBridge()
     checkNotifications()
 
     val failed = results.filter { it.first == Status.FAIL }
@@ -313,6 +314,110 @@ private fun checkXdgFileChooserProxy() {
                 "present but cannot be proxied ($it) — register it under reflection/proxy in the " +
                     "GraalVM reachability metadata",
             )
+        },
+    )
+}
+
+/**
+ * FileKit's macOS file chooser, as far as it can be driven without opening a dialog.
+ *
+ * This is the macOS counterpart of [checkXdgFileChooserProxy], and it exists because there wasn't
+ * one: every chooser check above returns SKIP off Linux, so on the platform where the app is a
+ * GraalVM native image talking to AppKit through JNA, nothing was covered at all. "Add repo does
+ * nothing and prints no error" was then reported against 1.1.1 on macOS, which is the exact shape
+ * of failure this file was written for — a subsystem that reports success and does nothing.
+ *
+ * Three things are checked, in the order they'd break:
+ *
+ *  1. **The picker class ships.** `PlatformFilePicker` selects `MacOSFilePicker` by platform, so if
+ *     the closed-world analysis dropped it there is no chooser at all.
+ *  2. **JNA can load Foundation.** `Foundation`'s initialiser calls `Native.load("Foundation", …)`,
+ *     which needs JNA's own native dispatch library to have made it into the image.
+ *  3. **The ObjC callback round-trip works.** This is the one worth having. FileKit reaches
+ *     `NSOpenPanel` by registering an ObjC class at runtime whose method is a JNA `Callback`, then
+ *     dispatching to it with `performSelectorOnMainThread:`. A callback the image doesn't know
+ *     about is invisible to static analysis, and its failure mode is silence: the selector
+ *     dispatches, nothing runs, the panel is never created, and the picker returns null — which is
+ *     also exactly what FileKit returns when a user cancels. So the check is not "did it throw" but
+ *     "did our runnable actually run".
+ *
+ * Everything is reached by name. Referencing `MacOSFilePicker` or `Foundation` statically would
+ * drag FileKit's macOS implementation into the image on every platform purely because this file
+ * mentions it, and would defeat the point of asking whether it is there.
+ *
+ * The honest limit, same as the Linux check: a working callback proves the bridge is intact, not
+ * that FileKit's own call path through `NSOpenPanel` returns a directory. Only opening a real
+ * dialog would prove that, and that needs a person to click something.
+ */
+private fun checkMacOsFileChooserBridge() {
+    val name = "FileKit macOS file chooser bridge"
+    if (!System.getProperty("os.name").lowercase().contains("mac")) {
+        record(Status.SKIP, name, "not macOS")
+        return
+    }
+
+    val pkg = "io.github.vinceglb.filekit.dialogs.platform"
+    if (runCatching { Class.forName("$pkg.mac.MacOSFilePicker") }.isFailure) {
+        record(
+            Status.FAIL, name,
+            "$pkg.mac.MacOSFilePicker is not in the image — \"Add repo\" has no chooser to call",
+        )
+        return
+    }
+
+    // Loading the class runs its initialiser, which is the Native.load("Foundation", …) call.
+    val foundation = runCatching {
+        val cls = Class.forName("$pkg.mac.foundation.Foundation")
+        cls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null) to cls
+    }.getOrElse {
+        record(
+            Status.FAIL, name,
+            "JNA could not load the Foundation framework ($it) — every native dialog on this " +
+                "platform will fail before it opens",
+        )
+        return
+    }
+    val (instance, cls) = foundation
+
+    // `[NSThread isMainThread]`, which doubles as proof that objc_msgSend dispatches at all.
+    //
+    // It also decides whether step 3 is safe to run: `performSelectorOnMainThread:waitUntilDone:`
+    // executes inline when it is already *on* the main thread, but blocks on the main run loop when
+    // it isn't — and --smoke-test opens no window, so there is no run loop to service it. Off the
+    // main thread this check would hang rather than fail, so it skips instead. In practice it never
+    // does: runSmokeChecks is called straight from main().
+    val onMainThread = runCatching {
+        val invoke = cls.getMethod("invoke", String::class.java, String::class.java, Array<Any>::class.java)
+        (invoke.invoke(instance, "NSThread", "isMainThread", emptyArray<Any>()) as Number).toLong() != 0L
+    }.getOrElse {
+        record(Status.FAIL, name, "objc_msgSend dispatch failed ($it) — the ObjC bridge is not usable")
+        return
+    }
+    if (!onMainThread) {
+        record(Status.SKIP, name, "not on the main thread; the callback round-trip would block rather than fail")
+        return
+    }
+
+    var ran = false
+    val dispatched = runCatching {
+        cls.getMethod("executeOnMainThread", Boolean::class.java, Boolean::class.java, Runnable::class.java)
+            .invoke(instance, false, true, Runnable { ran = true })
+    }
+    dispatched.fold(
+        onSuccess = {
+            if (ran) {
+                record(Status.PASS, name, "ObjC bridge live and the main-thread callback round-tripped")
+            } else {
+                record(
+                    Status.FAIL, name,
+                    "the main-thread dispatch returned but the callback never ran — the JNA " +
+                        "Callback backing FileKit's runtime-registered ObjC class is missing from " +
+                        "the image, so the file chooser will never open and will report a cancel",
+                )
+            }
+        },
+        onFailure = {
+            record(Status.FAIL, name, "main-thread dispatch threw ($it) — the file chooser cannot open")
         },
     )
 }

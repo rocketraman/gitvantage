@@ -38,6 +38,7 @@ import com.gitvantage.app.Registry
 import com.gitvantage.app.Theme
 import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
+import com.gitvantage.app.UiScale
 import com.gitvantage.git.model.Commit
 import com.gitvantage.smoke.runSmokeChecks
 import dev.nucleusframework.application.DecoratedWindow
@@ -73,6 +74,8 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     // Before the first frame, so the window is painted in the right theme rather than flashing
     // light and correcting itself.
     Theme.load()
+    // Same reasoning: a zoom applied after the first frame is a visible re-layout.
+    UiScale.load()
     val windowState = rememberWindowState(size = DpSize(saved.windowWidth.dp, saved.windowHeight.dp))
     // Built here rather than inside the window so the close handler below — which is a parameter of
     // [DecoratedWindow], evaluated outside its content — can reach it. Same composition either way,
@@ -100,30 +103,35 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
             title = "GitVantage",
             icon = painterResource("app-icon.png"),   // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
         ) {
-            // Remember the window size across sessions (debounced so resizes don't thrash the file).
-            LaunchedEffect(Unit) {
-                snapshotFlow { windowState.size }.debounce(600).collect {
-                    app.saveWindowSize(it.width.value.toInt(), it.height.value.toInt())
+            // Everything the window draws — the Nucleus-drawn title bar included — sizes itself
+            // against one density. Wrapping only the app content would let the two halves
+            // disagree at any zoom other than 100%.
+            UiScale.Provide {
+                // Remember the window size across sessions (debounced so resizes don't thrash the file).
+                LaunchedEffect(Unit) {
+                    snapshotFlow { windowState.size }.debounce(600).collect {
+                        app.saveWindowSize(it.width.value.toInt(), it.height.value.toInt())
+                    }
                 }
-            }
-            // Adwaita-style header: app icon + title + repo count live in the real
-            // window title bar (which supplies the native GNOME window controls).
-            TitleBar { _ ->
-                Row(
-                    Modifier.align(Alignment.Start).padding(start = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Image(
-                        painter = painterResource("app-icon.png"),
-                        contentDescription = "GitVantage",
-                        modifier = Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)),
-                    )
-                    Txt("GitVantage", 14.sp, Tokens.text, FontWeight.Bold)
-                    Txt("— ${app.counts()["all"]} repositories", 12.sp, Tokens.muted2)
+                // Adwaita-style header: app icon + title + repo count live in the real
+                // window title bar (which supplies the native GNOME window controls).
+                TitleBar { _ ->
+                    Row(
+                        Modifier.align(Alignment.Start).padding(start = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Image(
+                            painter = painterResource("app-icon.png"),
+                            contentDescription = "GitVantage",
+                            modifier = Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)),
+                        )
+                        Txt("GitVantage", 14.sp, Tokens.text, FontWeight.Bold)
+                        Txt("— ${app.counts()["all"]} repositories", 12.sp, Tokens.muted2)
+                    }
                 }
+                GitVantageApp(app)
             }
-            GitVantageApp(app)
         }
     }
 }

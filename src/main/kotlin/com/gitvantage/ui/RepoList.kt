@@ -51,7 +51,7 @@ import com.gitvantage.app.ViewMode
 fun RepoListBody(state: AppState) {
     val groups = state.groups()
     if (state.filtered().isEmpty()) {
-        EmptyState(registryEmpty = state.repos.isEmpty())
+        EmptyState(registryEmpty = state.repos.isEmpty(), onAdd = state::pickAndAddRepo)
         return
     }
     when (state.view) {
@@ -60,23 +60,53 @@ fun RepoListBody(state: AppState) {
     }
 }
 
+/**
+ * The centre-of-screen placeholder, in its two flavours: nothing tracked yet, and nothing matching
+ * the current filters.
+ *
+ * The first flavour is a **button**, and it has to be. A large ＋ tile with "No repositories yet"
+ * under it reads as the thing you press to get started — a first-run user reported pressing it,
+ * finding it dead, and concluding the app's Add-repo flow was broken, without ever noticing the
+ * real toolbar button. Wiring it to the same [AppState.pickAndAddRepo] costs nothing and removes
+ * a first-run dead end.
+ *
+ * Only the tile and its label take the click, not the whole empty pane: a click target the size of
+ * the window would fire a native folder dialog on any stray click into blank space.
+ *
+ * The "no matches" flavour stays inert — there is no single obvious action behind it (which filter
+ * did you mean to clear?), so it explains instead.
+ */
 @Composable
-private fun EmptyState(registryEmpty: Boolean) {
+private fun EmptyState(registryEmpty: Boolean, onAdd: () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(60.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Tokens.segTrack),
-            contentAlignment = Alignment.Center,
-        ) { Txt(if (registryEmpty) "＋" else "◍", 20.sp, Tokens.emptyGlyph) }
-        if (registryEmpty) {
-            Txt("No repositories yet", 15.sp, Tokens.secondary, FontWeight.Bold)
-            Txt("Click + Add repo to start tracking.", 13.sp, Tokens.muted2)
-        } else {
-            Txt("No repositories match", 15.sp, Tokens.secondary, FontWeight.Bold)
-            Txt("Try clearing a tag or status filter.", 13.sp, Tokens.muted2)
+        Column(
+            Modifier
+                .then(
+                    if (registryEmpty) {
+                        Modifier.clip(RoundedCornerShape(14.dp)).onTap(onAdd)
+                            .pointerHoverIcon(PointerIcon.Hand).padding(16.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Tokens.segTrack),
+                contentAlignment = Alignment.Center,
+            ) { Txt(if (registryEmpty) "＋" else "◍", 20.sp, Tokens.emptyGlyph) }
+            if (registryEmpty) {
+                Txt("No repositories yet", 15.sp, Tokens.secondary, FontWeight.Bold)
+                Txt("Click here to pick a folder, or use + Add repo above.", 13.sp, Tokens.muted2)
+            } else {
+                Txt("No repositories match", 15.sp, Tokens.secondary, FontWeight.Bold)
+                Txt("Try clearing a tag or status filter.", 13.sp, Tokens.muted2)
+            }
         }
     }
 }
