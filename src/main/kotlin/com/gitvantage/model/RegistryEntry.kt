@@ -52,6 +52,15 @@ data class RegistryEntry(
     val reminderDueEpoch: Long? = null,
     val dirtySinceEpoch: Long? = null,   // when the working tree first went dirty (for the "Aging" signal)
     val notifyUpstream: Boolean = false, // desktop-notify when this repo's upstream advances (opt-in)
+    // Auto-fetch bookkeeping, both epoch millis. Persisted rather than in-memory because
+    // [FetchPolicy] schedules in hours and days: rebuilt at every launch, a 24-hour interval would
+    // really mean "on every start", which for an app opened several times a day is more traffic
+    // than the fixed timer it replaced, not less.
+    val lastFetchedEpoch: Long? = null,
+    // When a fetch last brought new upstream commits in. Tiering on local activity alone would
+    // silence exactly the repo you left a month ago that your team is still pushing to; this is
+    // what lets such a repo promote itself back out of the dormant tier. See [FetchPolicy].
+    val lastUpstreamAdvanceEpoch: Long? = null,
     // When this repo was first tracked (for the "Recently Added" filter). ISO-8601 in JSON.
     @Serializable(with = InstantIsoSerializer::class)
     val addedAt: Instant? = null,

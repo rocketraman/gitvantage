@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.graphics.Color
 import com.gitvantage.git.BranchOps
 import com.gitvantage.git.DiffOps
@@ -24,6 +25,7 @@ import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
 import com.gitvantage.git.model.Worktree
+import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
 import com.gitvantage.model.RegistryEntry
 import com.gitvantage.model.Reminder
@@ -45,6 +47,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -271,6 +274,8 @@ class AppState(private val scope: CoroutineScope) {
         Registry.load().forEach { entries[it.path] = it; order.add(it.path) }
         refreshAll(fetch = false)   // fast initial scan (no network)
         startAutoRefresh()
+        startGitHubRefresh()
+        startSelectionFetch()
         startReminderChecker()
         startFsWatcher()
     }
@@ -763,18 +768,22 @@ class AppState(private val scope: CoroutineScope) {
                 val ordered = order.mapNotNull { results[it] }
                 repos.clear()
                 repos.addAll(ordered)
+                // Before notifyUpstreamAdvances moves the prevBehind baseline it compares against.
+                if (fetch) stampFetched(ordered, System.currentTimeMillis())
                 notifyUpstreamAdvances(ordered)
                 notifyStaleCrossings(ordered)
                 reconcileDirtySince(ordered)
                 lastFetchedEpoch = System.currentTimeMillis()
-                // Piggyback the GitHub poll on the full refresh rather than giving it its own
-                // timer. This is exactly the right cadence — startup, the manual refresh button,
-                // and the 5-minute auto-refresh — while the *frequent* rescans (fs-watcher
-                // events, several a minute while you type) go through rescanRepos and correctly
-                // don't touch the network. It also runs after `repos` is populated, which is
-                // what tells it which repos have GitHub remotes. Fire-and-forget: it has its own
-                // in-flight guard and must never hold up the git dashboard.
-                refreshGitHub()
+                // Poll GitHub alongside a refresh the *user* asked for, so the Refresh button and
+                // startup update the PR pills as well as the git state, and so the poll runs after
+                // `repos` is populated — that is what tells it which repos have GitHub remotes.
+                //
+                // It no longer rides the background timer. `gh` is rate-limited per token and has
+                // nothing to do with git transport, so it keeps its own cadence in
+                // [startGitHubRefresh] rather than inheriting whatever the fetch policy decides.
+                // Fire-and-forget: it has its own in-flight guard and must never hold up the git
+                // dashboard.
+                if (userInitiated) refreshGitHub()
             } finally {
                 scanning = false
             }
@@ -1567,6 +1576,8 @@ class AppState(private val scope: CoroutineScope) {
                 async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull() } }
             }.awaitAll()
         }.filterNotNull()
+        // Before the prevBehind baseline moves below — the advance stamp needs the previous value.
+        if (fetch) stampFetched(scanned, System.currentTimeMillis())
         scanned.forEach { s ->
             val idx = repos.indexOfFirst { it.id == s.id }
             if (idx >= 0) repos[idx] = s else repos.add(s)
@@ -1605,22 +1616,134 @@ class AppState(private val scope: CoroutineScope) {
         if (changed) persist()
     }
 
-    private fun startAutoRefresh(intervalSeconds: Long = 300) {
+    /**
+     * Poll GitHub on its own clock.
+     *
+     * This used to ride on the five-minute all-repo git refresh. That coupling was invisible and
+     * one-directional: change the git fetch cadence and the PR/issue pills quietly stop updating,
+     * with no error and nothing to show the data has gone stale. The two also draw on unrelated
+     * budgets — `gh` spends a per-token API rate limit, `git fetch` spends network round trips to
+     * the remote — so there was never a reason for one policy to govern both.
+     */
+    private fun startGitHubRefresh(intervalSeconds: Long = 300) {
         scope.launch {
             while (isActive) {
                 delay(intervalSeconds * 1000)
-                // Not user-initiated: these fetches stay out of the console. One per repo every
-                // five minutes would otherwise be the only thing left in it after a lunch break.
-                refreshAll(fetch = true, userInitiated = false)
+                refreshGitHub()   // no-ops harmlessly when no repo has a tracked GitHub remote
             }
         }
     }
 
+    /**
+     * Fetch a repo when the user opens its detail pane — rule 1.
+     *
+     * Observed rather than hooked into the click handlers: `selectedId` is assigned from the repo
+     * list, the chooser, keyboard navigation and "Add repo", and a fetch wired into each of them
+     * would be missing from whichever one is added next. `snapshotFlow` sees them all, and
+     * `distinctUntilChanged` keeps a recomposition that reassigns the same id from re-fetching.
+     *
+     * User-initiated, so this one *is* recorded — unlike the five-minute repeat that follows it in
+     * [startAutoRefresh], which is the clock's doing and would flood the console at 12 entries an
+     * hour for whichever repo happens to be open.
+     */
+    private var selectionFetchJob: Job? = null
+
+    private fun startSelectionFetch() {
+        scope.launch {
+            snapshotFlow { selectedId }.distinctUntilChanged().collect { id ->
+                // Debounced like the fs-watcher rescan, and for the same reason: arrow-keying down
+                // the list would otherwise open a network connection to every repo it passes over.
+                selectionFetchJob?.cancel()
+                if (id == null || entries[id] == null) return@collect
+                selectionFetchJob = scope.launch {
+                    delay(500)
+                    rescanRepos(listOf(id), fetch = true)
+                }
+            }
+        }
+    }
+
+    /**
+     * The background fetch loop.
+     *
+     * The tick is a *scheduling grain*, not a fetch rate: every five minutes this asks which repos
+     * are due under [FetchPolicy] and fetches only those, so an idle dashboard of mostly-dormant
+     * repos goes almost entirely quiet. It replaced a loop that fetched every repo on every tick.
+     *
+     * The open repo is always due — rule 2, "fetch every five minutes while its details are open",
+     * which falls out of the tick rate rather than needing a timer of its own.
+     *
+     * None of it is user-initiated, so none of it reaches the console; see [RepoScanner.scan].
+     */
+    private fun startAutoRefresh(intervalSeconds: Long = 300) {
+        scope.launch {
+            while (isActive) {
+                delay(intervalSeconds * 1000)
+                val now = System.currentTimeMillis()
+                val due = order.filter { id -> id == selectedId || isFetchDue(id, now) }
+                if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false)
+            }
+        }
+    }
+
+    /** Whether [id]'s background fetch interval has elapsed. See [FetchPolicy]. */
+    private fun isFetchDue(id: String, now: Long): Boolean {
+        val e = entries[id] ?: return false
+        return FetchPolicy.isDue(activityMsOf(id, e), e.lastFetchedEpoch, now)
+    }
+
+    /** The newest sign of life for [id], across git history, the working tree and the upstream. */
+    private fun activityMsOf(id: String, e: RegistryEntry): Long? = FetchPolicy.activityMs(
+        lastCommitEpochSeconds = repos.firstOrNull { it.id == id }?.lastCommitEpoch,
+        dirtySinceMs = e.dirtySinceEpoch,
+        lastUpstreamAdvanceMs = e.lastUpstreamAdvanceEpoch,
+    )
+
+    /**
+     * Stamp the fetch bookkeeping [FetchPolicy] schedules from, for repos that were just fetched.
+     *
+     * The upstream-advance stamp uses the `behind` count rising against [prevBehind], which is the
+     * same signal the upstream notifications already run on — a repo that turns out to be live
+     * promotes itself back out of the dormant tier the next time a fetch finds something.
+     *
+     * Called *before* [rescanRepos] refreshes `prevBehind`, since it needs the previous value.
+     */
+    private fun stampFetched(scanned: List<Repo>, now: Long) {
+        var changed = false
+        scanned.forEach { r ->
+            val e = entries[r.id] ?: return@forEach
+            val advanced = r.behind > (prevBehind[r.id] ?: 0)
+            entries[r.id] = e.copy(
+                lastFetchedEpoch = now,
+                lastUpstreamAdvanceEpoch = if (advanced) now else e.lastUpstreamAdvanceEpoch,
+            )
+            changed = true
+        }
+        if (changed) persist()
+    }
+
     /** Toolbar timestamp text. */
+    /**
+     * How stale the dashboard is, as the *least* recently fetched repo — not the most.
+     *
+     * When every repo was fetched on the same five-minute timer, one timestamp spoke accurately
+     * for all of them. Under [FetchPolicy] they run on different clocks, and "fetched just now"
+     * taken from whichever repo happened to be due would assert a freshness the hourly and daily
+     * tiers do not have. The oldest is the honest summary, and it is the number that answers the
+     * question the label sits next to: is this worth pressing Refresh for?
+     *
+     * Repos the policy has switched off are excluded. They are stale by design, and including
+     * them would peg this at a month forever and make it say nothing at all.
+     */
     fun fetchedLabel(): String {
         if (scanning) return "fetching…"
-        if (lastFetchedEpoch == 0L) return "not fetched yet"
-        val secs = (System.currentTimeMillis() - lastFetchedEpoch) / 1000
+        val now = System.currentTimeMillis()
+        val oldest = order.mapNotNull { id ->
+            val e = entries[id] ?: return@mapNotNull null
+            if (FetchPolicy.intervalMs(activityMsOf(id, e), now) == null) null else e.lastFetchedEpoch ?: 0L
+        }.minOrNull() ?: lastFetchedEpoch
+        if (oldest == 0L) return "not fetched yet"
+        val secs = (now - oldest) / 1000
         val rel = when {
             secs < 5 -> "just now"
             secs < 60 -> "${secs}s ago"
