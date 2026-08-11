@@ -14,9 +14,11 @@ plugins {
     // and its tests are suspend functions — no runBlocking wrapper around every case.
     // The version is pinned to the Kotlin it was built against; it must track the kotlin() versions.
     id("de.infix.testBalloon") version "1.0.1-K2.4.0"
-    // Konture: architecture rules as ordinary tests. See ArchitectureTest.kt for what it does and
-    // does not cover — it resolves types from imports, which has consequences worth reading there.
-    id("io.github.baole.konture") version "0.7.6"
+    // Konture: architecture rules as ordinary tests. The rules themselves live in :konture-test —
+    // see the comment in its build file for why they cannot live here — but the plugin is applied
+    // to the root project too, because the root is what generates the project layout every rule
+    // reads and shares it with that module.
+    id("io.github.baole.konture") version "0.7.7"
     id("dev.nucleusframework") version "2.1.9"
 }
 repositories {
@@ -87,7 +89,6 @@ dependencies {
     compileOnly("com.github.hypfvieh:dbus-java-core:5.2.0")
 
     testImplementation("de.infix.testBalloon:testBalloon-framework-core:1.0.1-K2.4.0")
-    testImplementation("io.github.baole:konture:0.7.6")
 }
 
 // Only `assert` is instrumented: the tests use it exclusively, so there is no second assertion
@@ -138,10 +139,6 @@ val testGitConfig = tasks.register("testGitConfig") {
 
 tasks.test {
     dependsOn(testGitConfig)
-    // Konture reads a description of the project (source roots, classpaths) from a generated
-    // resource. Without this the architecture tests do not fail — they error out at load time,
-    // which is a far more confusing way to discover a missing build step.
-    dependsOn("generateArchitectureLayout")
     environment("GIT_CONFIG_GLOBAL", layout.buildDirectory.file("test-gitconfig").get().asFile.path)
     // No generated equivalent: /etc/gitconfig is simply switched off. Git reads a missing config
     // file as an empty one, so a path that is never created is the portable way to say "none".

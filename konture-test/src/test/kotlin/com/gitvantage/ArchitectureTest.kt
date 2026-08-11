@@ -3,36 +3,33 @@
 
 package com.gitvantage
 
-import com.gitvantage.app.AppState
-import com.gitvantage.app.Registry
-import com.gitvantage.git.model.Branch
-import com.gitvantage.git.model.Diff
-import com.gitvantage.git.model.RemoteBranch
-import com.gitvantage.git.model.StatusResult
-import com.gitvantage.model.RegistryEntry
-import com.gitvantage.model.Repo
 import de.infix.testBalloon.framework.core.testSuite
 import io.github.baole.konture.FilesRuleBuilder
 import io.github.baole.konture.Konture
 import io.github.baole.konture.SourceSets
 import io.github.baole.konture.architecture
 import io.github.baole.konture.assertNoCycles
-import io.github.baole.konture.fileScope
 import io.github.baole.konture.fileScopeFromPackage
 import java.io.File
 
 /**
  * Guards the boundary `com.gitvantage.git` exists to create: git is reached through that package,
- * and only [com.gitvantage.git.Git] starts a git process.
+ * and only `com.gitvantage.git.Git` starts a git process.
  *
  * Two mechanisms, because no single one covers it:
  *
- *  1. **Who may reach the git package** — a Konture rule, on the package rather than on any one
- *     class. This is a type-level question, which is what Konture is for.
- *  2. **Who may start a process, and who may name the git binary** — plain source scans. Konture
- *     cannot see either, for reasons documented at [processSpawningIsConfinedToGit].
+ *  1. **Who may reach the git package, and who may start a process** — Konture rules. Both are
+ *     type-level questions, which is what Konture is for.
+ *  2. **Who may name the git binary** — a plain source scan, because the binary's name is a string
+ *     literal rather than a type, and no type-level tool can see it.
  *
- * Konture needs `generateArchitectureLayout` to have run; the `test` task depends on it.
+ * Every production type below is named in prose rather than linked, because this module does not
+ * depend on the one it describes — see the comment in its build file. That is the point: rules that
+ * could not compile without the code they police would be rules the code could break by moving.
+ *
+ * This file shares the `com.gitvantage` package with the code it describes but is compiled
+ * separately, so it can see none of it. Konture reads everything it needs from the layout the root
+ * project generates and hands to this module.
  */
 val Architecture by testSuite {
 
@@ -82,8 +79,8 @@ val Architecture by testSuite {
     /**
      * The package-level cycle check `assertNoCycles` cannot do, written out explicitly.
      *
-     * The git layer may reach *down* into `com.gitvantage.model` — it produces [Repo] and consumes
-     * [RegistryEntry], and shared model types are what that package exists to hold. It may not
+     * The git layer may reach *down* into `com.gitvantage.model` — it produces `Repo` and consumes
+     * `RegistryEntry`, and shared model types are what that package exists to hold. It may not
      * reach *up*: nothing in `com.gitvantage.git` may name application state, a service, or the UI.
      *
      * This used to pin a list of allowed back-edge symbols, because `Repo`, `RegistryEntry` and
@@ -109,8 +106,8 @@ val Architecture by testSuite {
     /**
      * `git.model` holds what the git layer *returns*, so it must not know how the git layer works.
      *
-     * It may reach down into `model` — [StatusResult] is a list of [com.gitvantage.model.ChangedFile],
-     * and [RemoteBranch] asks `Meta` whether a branch is a shared integration branch. It may not
+     * It may reach down into `model` — `StatusResult` is a list of `ChangedFile`, and `RemoteBranch`
+     * asks `Meta` whether a branch is a shared integration branch. It may not
      * reach sideways into `com.gitvantage.git` or up into the application: a data type that calls
      * the runner is no longer a data type, and the UI consumes these freely on that understanding.
      *
@@ -161,7 +158,7 @@ val Architecture by testSuite {
      * state and services, the exceptions are structural rather than listed: a Compose file that
      * wants git has to go through `AppState`, and there is nothing to allowlist.
      *
-     * `com.gitvantage.git.model` is deliberately *not* covered — rendering a [Branch] or a [Diff] is
+     * `com.gitvantage.git.model` is deliberately *not* covered — rendering a `Branch` or a `Diff` is
      * exactly what the UI is for. What it must not touch is the package that runs commands.
      */
     test("the UI never reaches the git layer") {
@@ -200,31 +197,37 @@ val Architecture by testSuite {
     // ---- 2. Who may start a process ------------------------------------------------------
 
     /**
-     * Why this is a source scan and not a Konture rule.
+     * The production sources, read as text.
      *
-     * **Konture issue #47** — https://github.com/baole/konture/issues/47
+     * Only the git-binary rule needs this. The process-spawning rule below used to as well, because
+     * `ProcessBuilder` arrives through Kotlin's implicit `java.lang.*` import and Konture could not
+     * resolve those; naming the git binary is a string literal, so it stays a text scan whatever
+     * Konture learns to see.
      *
-     * Konture turns a bare type name into a fully-qualified one through the file's imports, plus a
-     * hardcoded table of Kotlin's implicit imports (`KotlinDefaultTypes`). That table has 60
-     * entries and exactly one of them is from `java.lang` — `Appendable`. Kotlin's real JVM default
-     * imports are the whole of `java.lang`, so `ProcessBuilder`, `Thread`, `Runtime`, `System` and
-     * the rest resolve to nothing, and a rule written against them silently matches nothing.
+     * The roots come from Konture's layout rather than a written-down path. From this module a
+     * literal path would have to climb out of its own directory — `../src/main/kotlin` — which is
+     * both fragile and silent when wrong: a scan that walks nothing reports no offenders and passes.
+     * Asking the layout means these roots are the same ones every rule above is evaluated against,
+     * and a source root added to the root build is picked up without being named twice.
      *
-     * Measured, on a file that plainly constructs a `ProcessBuilder`: `notReferenceClass`,
-     * `notCall` and `notDependOnClassesInAnyPackage` all report clean. Adding a redundant
-     * `import java.lang.ProcessBuilder` makes the first two fire immediately — which is exactly why
-     * it is no fix, since a *new* violator would not have written that import either.
+     * Konture hands these back absolute, so none of it depends on the working directory — which is
+     * this module's own directory, where a relative `src/main/kotlin` would find nothing at all.
      *
-     * [kontureIssue47StillOpen] fails the moment that is fixed upstream, so this workaround gets
-     * revisited rather than quietly outliving its reason.
-     *
-     * The remaining rule below cannot move to Konture whatever happens to #47: naming the git
-     * binary is a string literal (`listOf("git") + args`), not a type.
+     * `distinct` because the same root can arrive more than once: Konture resolves every module's
+     * source dirs against the root project, so this module's non-existent `src/main` and the real
+     * one can both land on the same path. Without it a single offender would be reported twice.
      */
     fun mainSources(): List<File> {
-        // Gradle runs tests with the project directory as the working directory.
-        val files = File("src/main/kotlin/com/gitvantage")
-            .walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        val roots = Konture.projectGraph.builds.values.flatten()
+            .flatMap { module -> module.sourceSets }
+            .filter { it.production }
+            .flatMap { it.srcDirs }
+            .distinct()
+            .map { File(it) }
+
+        val files = roots
+            .flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList() }
+            .sortedBy { it.path }
         // A scan that silently found nothing would pass every rule below while checking nothing —
         // the exact failure this whole file exists to prevent.
         assert(files.size > 20)
@@ -241,16 +244,58 @@ val Architecture by testSuite {
      *
      * Each entry has a reason, which is what makes a new name appearing in a failure worth stopping
      * on rather than adding to the list.
+     *
+     * This was a regex over the source text until Konture 0.7.7. Konture resolves a bare type name
+     * through the file's imports plus a table of Kotlin's implicit ones, and that table used to
+     * carry exactly one `java.lang` entry — `Appendable` — where Kotlin's real JVM defaults are the
+     * whole package. `ProcessBuilder` therefore resolved to nothing: `notReferenceClass`, `notCall`
+     * and `notDependOnClassesInAnyPackage` all reported clean on a file that plainly constructs
+     * one, and only a redundant `import java.lang.ProcessBuilder` made them fire — no fix, since a
+     * new violator would not write that import either. Fixed upstream in
+     * https://github.com/baole/konture/issues/47.
+     *
+     * The `files` scope rather than `classes`, for the same reason as the rule at the top of this
+     * file: Konture attributes a dependency to the file it appears in, so an allowlist over classes
+     * would have to name every class each allowed file declares.
      */
     test("process spawning is confined to Git and the two non-git launchers") {
-        val allowed = setOf("Git.kt", "Actions.kt", "GitHub.kt")
+        architecture {
+            files {
+                that().notHaveName { it in setOf("Git.kt", "Actions.kt", "GitHub.kt") }
+                should().notReferenceClass("java.lang.ProcessBuilder")
+            }
+        }
+    }
 
-        val offenders = mainSources()
-            .filter { it.name !in allowed && Regex("\\bProcessBuilder\\b").containsMatchIn(it.readText()) }
-            .map { it.name }
-            .sorted()
+    /**
+     * That the rule above can see what it is looking for.
+     *
+     * A Konture rule that resolves nothing reports no violations, which is indistinguishable from a
+     * codebase with nothing to find. That is not a hypothetical: it is exactly what
+     * `notReferenceClass("java.lang.ProcessBuilder")` did before 0.7.7, and why the rule above had
+     * to be a regex until now. So this asserts the positive case: run the same rule *against*
+     * `com.gitvantage.git.Git`, which unquestionably constructs a `ProcessBuilder`, and require it
+     * to fail.
+     *
+     * `Git.kt` is deliberate rather than a fixture written for the test. A fixture can drift out of
+     * step with how production code is actually written; the file this rule exists to permit cannot.
+     * It also imports nothing from `java.lang`, so what is being proved is specifically that the
+     * implicit import resolves.
+     *
+     * Only a failure that names the type counts. Konture also throws when a rule selects no files
+     * at all, and reading that as "detection works" would defeat the whole point.
+     *
+     * Built from [FilesRuleBuilder] directly rather than through `architecture { files { … } }`,
+     * because that entry point asserts on the spot and there is no result to inspect.
+     */
+    test("the process-spawning rule can see an unimported ProcessBuilder") {
+        val rule = FilesRuleBuilder(Konture.projectGraph, SourceSets.production()).apply {
+            that().haveName("Git.kt")
+            should().notReferenceClass("java.lang.ProcessBuilder")
+        }
+        val failure = runCatching { rule.check() }.exceptionOrNull()
 
-        assert(offenders.isEmpty())
+        assert(failure != null && "ProcessBuilder" in (failure.message ?: ""))
     }
 
     /**
@@ -271,64 +316,4 @@ val Architecture by testSuite {
 
         assert(offenders.isEmpty())
     }
-
-    /**
-     * A canary for Konture issue #47 — https://github.com/baole/konture/issues/47
-     *
-     * **This test asserts that a bug still exists, and is meant to start failing.** Its subject is
-     * [CanarySpawner] at the foot of this file: a class whose only job is to construct a
-     * `ProcessBuilder` without an explicit import. A working Konture must report that; today it
-     * reports nothing, so the rule below finds a clean file and this passes.
-     *
-     * When this starts failing, #47 has been fixed. At that point:
-     *
-     *  1. replace [processSpawningIsConfinedToGit]'s source scan with this Konture rule, keeping
-     *     the same four-name allowlist;
-     *  2. drop the #47 references from the KDoc above;
-     *  3. delete this test and [CanarySpawner].
-     *
-     * A comment saying "revisit after a Konture upgrade" is a note nobody re-reads. A failing build
-     * is not.
-     *
-     * Built from [FilesRuleBuilder] directly rather than through `architecture { files { … } }`,
-     * because that entry point hardcodes the production source sets and this file is a test one.
-     */
-    test("KONTURE #47 canary: implicitly imported JDK types are still invisible to Konture") {
-        // The rule is worthless if this file is not in scope — an unscanned source set reports no
-        // violations for the same reason a fixed Konture would report none.
-        val inScope = Konture.fileScope(SourceSets.tests()).files.map { it.name }
-        assert("ArchitectureTest.kt" in inScope)
-
-        val rule = FilesRuleBuilder(Konture.projectGraph, SourceSets.tests()).apply {
-            that().haveName("ArchitectureTest.kt")
-            should().notReferenceClass("java.lang.ProcessBuilder")
-        }
-        val failure = runCatching { rule.check() }.exceptionOrNull()
-
-        // Only a failure that actually names the type counts. Konture also throws for an empty
-        // selection, and reading that as "fixed" would retire the workaround early.
-        val kontureDetectedIt = failure != null && "ProcessBuilder" in (failure.message ?: "")
-
-        assert(!kontureDetectedIt)
-    }
-}
-
-/**
- * The violation the Konture #47 canary above looks for, kept in this file so the rule and its
- * subject cannot drift apart.
- *
- * It constructs a `ProcessBuilder` the way ordinary Kotlin does: with no import, because `java.lang`
- * is imported implicitly. That is precisely what Konture cannot resolve today.
- *
- * Two things must stay true or the canary quietly stops meaning anything, and both are the sort of
- * thing a well-meaning cleanup would "fix":
- *  - **no `import java.lang.ProcessBuilder` in this file** — adding it is what makes Konture see
- *    the reference, which is the very thing being tested for;
- *  - the call stays, so there is something to detect.
- *
- * Never invoked. Nothing here should ever start a process.
- */
-internal object CanarySpawner {
-    fun spawn(): String =
-        ProcessBuilder(listOf("true")).start().inputStream.bufferedReader().readText()
 }
