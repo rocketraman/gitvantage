@@ -74,6 +74,11 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     // light and correcting itself.
     Theme.load()
     val windowState = rememberWindowState(size = DpSize(saved.windowWidth.dp, saved.windowHeight.dp))
+    // Built here rather than inside the window so the close handler below — which is a parameter of
+    // [DecoratedWindow], evaluated outside its content — can reach it. Same composition either way,
+    // so [uiScope] is still the UI-dispatched scope AppState requires.
+    val uiScope = rememberCoroutineScope()
+    val app = remember { AppState(uiScope) }
     // Keep the window hidden for one beat so it can be created and sized to the saved [windowState]
     // off-screen; revealing it afterward avoids the visible "opens small, then jumps bigger" flash.
     // Driven from the application scope (not the window content) so it fires even while hidden.
@@ -86,14 +91,15 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     // the same answer the app content uses, so the two halves of the window never disagree.
     NucleusDecoratedWindowTheme(isDark = Theme.isDark) {
         DecoratedWindow(
-            onCloseRequest = ::exitApplication,
+            // Get any coalesced registry write to disk first: closing cancels the composition and
+            // with it the scope the debounce timer is waiting on, so a note typed in the last
+            // half-second would otherwise never be written. See AppState.flushPendingWrites.
+            onCloseRequest = { app.flushPendingWrites(); exitApplication() },
             state = windowState,
             visible = windowVisible,
             title = "GitVantage",
             icon = painterResource("app-icon.png"),   // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
         ) {
-            val uiScope = rememberCoroutineScope()
-            val app = remember { AppState(uiScope) }
             // Remember the window size across sessions (debounced so resizes don't thrash the file).
             LaunchedEffect(Unit) {
                 snapshotFlow { windowState.size }.debounce(600).collect {

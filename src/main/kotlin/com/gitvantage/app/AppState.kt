@@ -78,6 +78,13 @@ sealed interface Popup {
 const val WORKTREE_TAG = "tag:worktree"
 
 /**
+ * How long a coalesced registry write waits (see [AppState.persistDebounced]). Long enough that
+ * ordinary typing lands as one write, short enough that a pause mid-note still reaches disk well
+ * before the user does anything else about it.
+ */
+private const val SAVE_DEBOUNCE_MS = 500L
+
+/**
  * Observable app state (README § State Management) plus the derived filtering,
  * grouping and count logic. Repos are populated by [RepoScanner] shelling out to
  * `git` off the UI thread; tags/notes are persisted to the [Registry].
@@ -272,6 +279,9 @@ class AppState(private val scope: CoroutineScope) {
         // (Bulk import is still available by picking a parent folder in "Add repo".)
         Notify.init()
         Registry.load().forEach { entries[it.path] = it; order.add(it.path) }
+        // An empty list because the registry wouldn't parse looks identical to an empty list
+        // because you haven't added anything yet. Say which one this is, and don't time it out.
+        Registry.loadFailure?.let { toast(it, sticky = true) }
         refreshAll(fetch = false)   // fast initial scan (no network)
         startAutoRefresh()
         startGitHubRefresh()
@@ -488,10 +498,12 @@ class AppState(private val scope: CoroutineScope) {
             .take(limit)
     }
 
+    /** Edited a character at a time from the detail panel's notes field, so the write is
+     *  coalesced — see [persistDebounced]. */
     fun setNote(id: String, text: String) {
         val e = entries[id] ?: return
         entries[id] = e.copy(note = text)
-        persist()
+        persistDebounced()
     }
 
     /** This repo's per-repo "stale after N days" override, or null when it uses the global default. */
@@ -744,7 +756,48 @@ class AppState(private val scope: CoroutineScope) {
         tagExclude.filter { it in live }.toSet().let { if (it.size != tagExclude.size) tagExclude = it }
     }
 
-    private fun persist() = Registry.save(order.mapNotNull { entries[it] })
+    // ---- persistence -------------------------------------------------------------------------
+
+    /** In flight [persistDebounced] timer, if any. Not observable — nothing renders it. */
+    private var saveJob: Job? = null
+
+    /** Encode + rewrite the whole registry, reporting a failure rather than dropping it. */
+    private fun writeRegistry() {
+        Registry.save(order.mapNotNull { entries[it] })
+            .onFailure { toast("Couldn't save ${Registry.file.name}: ${it.message ?: it::class.simpleName}") }
+    }
+
+    /**
+     * Write now. Cancels any deferred write first: this encodes the entire registry from the
+     * current [entries], so whatever that timer was going to write is already included.
+     */
+    private fun persist() {
+        saveJob?.cancel(); saveJob = null
+        writeRegistry()
+    }
+
+    /**
+     * Same, but coalesced — for state that changes on every keystroke. [entries] is still updated
+     * synchronously (the UI reads it straight back), only the disk write waits, and each call
+     * restarts the timer so a burst of typing costs one write instead of one per character.
+     *
+     * A write left pending when the window closes is flushed by [flushPendingWrites].
+     */
+    private fun persistDebounced() {
+        saveJob?.cancel()
+        saveJob = scope.launch {
+            delay(SAVE_DEBOUNCE_MS)
+            saveJob = null
+            writeRegistry()
+        }
+    }
+
+    /**
+     * Flush a deferred write synchronously. Called from the window's close handler, where [scope]
+     * is about to be cancelled along with the composition — a pending timer would never fire, and
+     * the note the user just typed would be lost.
+     */
+    fun flushPendingWrites() { if (saveJob != null) persist() }
 
     // ---- scanning ----
 
@@ -927,10 +980,12 @@ class AppState(private val scope: CoroutineScope) {
 
     // ---- transient op feedback (toast) ----
 
-    private fun toast(msg: String) {
+    /** [sticky] holds it until the user dismisses it — for things they must not miss by looking
+     *  away for five seconds, like being told their registry wouldn't load. */
+    private fun toast(msg: String, sticky: Boolean = false) {
         opStatus = msg
         toastJob?.cancel()
-        toastJob = scope.launch { delay(4500); opStatus = null }
+        toastJob = if (sticky) null else scope.launch { delay(4500); opStatus = null }
     }
     fun dismissToast() { toastJob?.cancel(); opStatus = null }
     private fun plural(n: Int) = if (n == 1) "repo" else "repos"
