@@ -5,6 +5,7 @@ package com.gitvantage.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,9 +38,13 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +59,7 @@ import com.gitvantage.app.Theme
 import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
+import com.gitvantage.app.UiScale
 import com.gitvantage.git.model.Commit
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Reminder
@@ -171,8 +177,13 @@ private fun AppearancePopup(state: AppState) {
     // The poller only runs under SYSTEM, so outside it the last reading can be arbitrarily old.
     // Re-read on open — this is the one moment the value is actually being shown to someone.
     LaunchedEffect(Unit) { Theme.refreshSystemPreferenceAsync() }
-    Modal({ state.popup = null }) {
-        ModalHeader("Appearance", "How GitVantage looks. Applies immediately and is remembered.")
+    // takeFocus: nothing here is typed into, and the zoom steps are meant to be tried one after
+    // another — so Escape has to work without first having clicked something.
+    Modal({ state.popup = null }, takeFocus = true) {
+        ModalHeader(
+            "Appearance", "How GitVantage looks. Applies immediately and is remembered.",
+            onClose = { state.popup = null },
+        )
         Column(Modifier.padding(vertical = 6.dp)) {
             ThemeMode.entries.forEach { m ->
                 val on = m == Theme.mode
@@ -196,6 +207,32 @@ private fun AppearancePopup(state: AppState) {
                     detail?.let { Txt("· $it", 11.5.sp, Tokens.muted2) }
                     Spacer(Modifier.weight(1f))
                     if (on) Txt("✓", 13.sp, Tokens.accent, FontWeight.Bold)
+                }
+            }
+            // Zoom. Its own row rather than another entry in the list above, because it answers a
+            // different question from light/dark — and it lives here, in the one dialog reachable
+            // from a single toolbar button, so it stays usable when the UI is the wrong size to
+            // read comfortably (see UiScale).
+            Row(
+                Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Txt("Zoom", 13.sp, Tokens.text, FontWeight.SemiBold)
+                Txt("· ${UiScale.percent}%", 11.5.sp, Tokens.muted2)
+                Spacer(Modifier.weight(1f))
+                if (UiScale.percent != 100) {
+                    Txt("Reset", 11.5.sp, Tokens.accent, FontWeight.SemiBold,
+                        modifier = Modifier.onTap { UiScale.zoomTo(100) })
+                }
+            }
+            FlowRow(
+                Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                UiScale.STEPS.forEach { step ->
+                    PresetChip("$step%", step == UiScale.percent, state.accent) { UiScale.zoomTo(step) }
                 }
             }
         }
@@ -335,10 +372,35 @@ fun Toast(state: AppState, msg: String) {
 
 // ---------- shared building blocks ----------
 
+/**
+ * [takeFocus] makes Escape dismiss the modal.
+ *
+ * The key handler is on the scrim either way, and `onPreviewKeyEvent` sees a key on its way *down*
+ * to whatever is focused — so a modal whose content can hold focus (a text field, or any of the
+ * clickable rows, since `clickable` is focusable) gets Escape for free once the user has interacted
+ * with it. What it doesn't get is Escape before that first interaction, because nothing inside the
+ * modal has focus yet and the keystroke goes elsewhere entirely.
+ *
+ * Hence the opt-in: modals built around a text field must not have focus taken from that field, so
+ * they keep relying on the field's own `onEscape`. Modals with nothing to type into ask for it here.
+ */
 @Composable
-private fun Modal(onDismiss: () -> Unit, width: Int = 380, content: @Composable ColumnScope.() -> Unit) {
+private fun Modal(
+    onDismiss: () -> Unit,
+    width: Int = 380,
+    takeFocus: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    if (takeFocus) {
+        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    }
     Box(
-        Modifier.fillMaxSize().background(Tokens.scrimSoft).onTap(onDismiss),
+        Modifier.fillMaxSize().background(Tokens.scrimSoft).onTap(onDismiss)
+            .then(if (takeFocus) Modifier.focusRequester(focus).focusable() else Modifier)
+            .onPreviewKeyEvent {
+                if (it.key == Key.Escape && it.type == KeyEventType.KeyDown) { onDismiss(); true } else false
+            },
         contentAlignment = Alignment.Center,
     ) {
         val shape = RoundedCornerShape(14.dp)
@@ -350,15 +412,32 @@ private fun Modal(onDismiss: () -> Unit, width: Int = 380, content: @Composable 
     }
 }
 
+/**
+ * [onClose] adds a × at the trailing edge. Only for modals that have no button row of their own to
+ * dismiss from — the ones ending in [ModalButtons] already offer Cancel, and a second way out in
+ * the corner would just be noise.
+ */
 @Composable
-private fun ModalHeader(title: String, subtitle: String) {
-    Column(
+private fun ModalHeader(title: String, subtitle: String, onClose: (() -> Unit)? = null) {
+    Row(
         Modifier.fillMaxWidth().background(Tokens.panelFb).drawBottomBorder(Tokens.borderEd)
             .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Txt(title, 15.sp, Tokens.text, FontWeight.Bold)
-        Txt(subtitle, 11.5.sp, Tokens.muted, maxLines = 3)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Txt(title, 15.sp, Tokens.text, FontWeight.Bold)
+            Txt(subtitle, 11.5.sp, Tokens.muted, maxLines = 3)
+        }
+        if (onClose != null) {
+            // U+00D7 MULTIPLICATION SIGN, not "x" and not U+2715: it is the glyph every desktop
+            // toolkit draws here, and unlike the dingbats it carries no Emoji property, so it can't
+            // be claimed by a colour-emoji font (the trap documented on ThemeMode).
+            Box(
+                Modifier.clip(RoundedCornerShape(6.dp)).onTap(onClose).padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Txt("×", 16.sp, Tokens.muted)
+            }
+        }
     }
 }
 

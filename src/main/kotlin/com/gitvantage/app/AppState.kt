@@ -845,11 +845,30 @@ class AppState(private val scope: CoroutineScope) {
 
     /** "Add repo" step 1: show FileKit's native single-directory picker for a *parent*
      *  folder, then open the repo chooser listing the git repos found beneath it.
-     *  (FileKit has no multi-directory mode, so we discover-then-multi-select instead.) */
+     *  (FileKit has no multi-directory mode, so we discover-then-multi-select instead.)
+     *
+     *  The picker reaches the OS through JNA and platform-specific native interfaces, and in a
+     *  GraalVM native image any of that can be missing (see [FolderPicker] and the checks in
+     *  `com.gitvantage.smoke`). Launched bare, such a failure would go to the coroutine scope and
+     *  never be seen — leaving a button that does nothing and says nothing, which is a far harder
+     *  thing to report than an error message.
+     */
     fun pickAndAddRepo() {
         scope.launch {
-            val parent = withContext(Dispatchers.IO) { FolderPicker.pickParent(Registry.defaultRoot().absolutePath) }
-                ?: return@launch
+            val picked = runCatching {
+                withContext(Dispatchers.IO) { FolderPicker.pickParent(Registry.defaultRoot().absolutePath) }
+            }
+            // A null result is the user cancelling, and is the common case — only a thrown failure
+            // is worth saying anything about.
+            val parent = picked.getOrElse { e ->
+                // Also to stderr: the app deliberately carries no logging framework, and this is
+                // the one thing worth having when someone runs it from a terminal to find out why
+                // "Add repo" did nothing.
+                System.err.println("GitVantage: the folder picker failed to open — $e")
+                e.printStackTrace()
+                toast("Couldn't open the folder picker: ${e.message ?: e::class.simpleName}")
+                return@launch
+            } ?: return@launch
             openChooserFor(parent)
         }
     }

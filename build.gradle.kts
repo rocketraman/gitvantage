@@ -19,7 +19,7 @@ plugins {
     // to the root project too, because the root is what generates the project layout every rule
     // reads and shares it with that module.
     id("io.github.baole.konture") version "0.7.7"
-    id("dev.nucleusframework") version "2.1.9"
+    id("dev.nucleusframework") version "2.4.0"
 }
 repositories {
     mavenCentral()
@@ -59,17 +59,17 @@ version = appVersion
 dependencies {
     implementation(compose.desktop.currentOs)
     // The entry-point module — provides nucleusApplication and DecoratedWindow
-    implementation("dev.nucleusframework:nucleus.nucleus-application:2.1.9")
+    implementation("dev.nucleusframework:nucleus.nucleus-application:2.4.0")
     // Enable the Tao backend (Rust-native windowing)
-    implementation("dev.nucleusframework:nucleus.decorated-window-tao:2.1.9")
+    implementation("dev.nucleusframework:nucleus.decorated-window-tao:2.4.0")
     // Registry persistence (repo list + tags/notes) as JSON
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     // Cross-platform native directory picker (XDG portal on Linux, native on macOS/Windows).
     // Brings PlatformFile via its filekit-core dependency.
     implementation("io.github.vinceglb:filekit-dialogs:0.14.2")
     // OS desktop notifications (reminders + alerts) and a filesystem watcher (live rescans).
-    implementation("dev.nucleusframework:nucleus.notification-common:2.1.9")
-    implementation("dev.nucleusframework:nucleus.fs-watcher:2.1.9")
+    implementation("dev.nucleusframework:nucleus.notification-common:2.4.0")
+    implementation("dev.nucleusframework:nucleus.fs-watcher:2.4.0")
     // Human-readable durations ("about 5 weeks") for the notification outlook / age labels.
     implementation("nl.jacobras:Human-Readable:2.0.0-alpha02")
     // An SLF4J binding. Several dependencies (dbus-java in particular) log through SLF4J; with no
