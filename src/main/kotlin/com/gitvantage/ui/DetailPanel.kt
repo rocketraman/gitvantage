@@ -44,12 +44,10 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
@@ -337,10 +335,10 @@ fun TagAutocompleteField(
     fieldWidth: androidx.compose.ui.unit.Dp = 196.dp,
     placeholder: String = "namespace:value",
 ) {
-    var tfv by remember(resetKey) { mutableStateOf(TextFieldValue("")) }
+    val edit = remember(resetKey) { TextEditState("") }
     var cycle by remember(resetKey) { mutableStateOf(0) }
-    val typed = tfv.text
-    fun commit(v: String) { onCommit(v); tfv = TextFieldValue(""); cycle = 0 }
+    val typed = edit.text
+    fun commit(v: String) { onCommit(v); edit.setText(""); cycle = 0 }
     // Every existing tag the typed text can complete to (prefix matches first, then substring),
     // e.g. "kot" or "kotlin" both surface "lang:kotlin". Tab cycles when there are several
     // (Shift-Tab reverses) and accepts when only one is left; Enter or → also accept.
@@ -349,8 +347,8 @@ fun TagAutocompleteField(
     val idx = if (n > 0) cycle.mod(n) else 0
     val active = candidates.getOrNull(idx)
     // Accept the active completion into the field, cursor at the end.
-    fun accept() { active?.let { tfv = TextFieldValue(it, selection = TextRange(it.length)); cycle = 0 } }
-    val atEnd = tfv.selection.collapsed && tfv.selection.end == typed.length
+    fun accept() { active?.let { edit.setText(it); cycle = 0 } }
+    val atEnd = edit.value.selection.collapsed && edit.value.selection.end == typed.length
     // Inline completion via a visual transformation: render the active candidate with the typed
     // substring in black and the completed characters around it in grey — works whether the typed
     // text is a prefix, a suffix (e.g. "kotlin" → "lang:kotlin"), or in the middle. The field's real
@@ -387,28 +385,33 @@ fun TagAutocompleteField(
         ) {
             if (typed.isEmpty()) Txt(placeholder, 11.5.sp, Tokens.muted2, font = MonoFont)
             BasicTextField(
-                value = tfv, onValueChange = { nv -> if (nv.text != tfv.text) cycle = 0; tfv = nv },
+                value = edit.value,
+                onValueChange = { nv -> if (nv.text != edit.text) cycle = 0; edit.value = nv },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 11.5.sp, fontFamily = MonoFont, color = Tokens.text),
                 cursorBrush = SolidColor(accent),
                 visualTransformation = completion,
-                modifier = Modifier.fillMaxWidth().focusRequester(focus).onPreviewKeyEvent { ev ->
-                    if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    when (ev.key) {
-                        Key.Escape -> { onCancel(); true }
-                        // Tab cycles through several matches (Shift-Tab reverses); with one left, accepts.
-                        Key.Tab -> when {
-                            n == 1 -> { accept(); true }
-                            n > 1 -> { cycle += if (ev.isShiftPressed) -1 else 1; true }
+                modifier = Modifier.fillMaxWidth().focusRequester(focus)
+                    // Selects the typed text only — the greyed completion around it isn't in the
+                    // field's value, so there is nothing there to select.
+                    .selectAllOnDoubleClick { edit.selectAll() }
+                    .onPreviewKeyEvent { ev ->
+                        if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (ev.key) {
+                            Key.Escape -> { onCancel(); true }
+                            // Tab cycles through several matches (Shift-Tab reverses); with one left, accepts.
+                            Key.Tab -> when {
+                                n == 1 -> { accept(); true }
+                                n > 1 -> { cycle += if (ev.isShiftPressed) -1 else 1; true }
+                                else -> false
+                            }
+                            // Right arrow at the end of the text accepts the active completion.
+                            Key.DirectionRight -> if (active != null && atEnd) { accept(); true } else false
+                            // Enter commits — the active completion if any, else the typed text.
+                            Key.Enter, Key.NumPadEnter -> { commit(active ?: typed); true }
                             else -> false
                         }
-                        // Right arrow at the end of the text accepts the active completion.
-                        Key.DirectionRight -> if (active != null && atEnd) { accept(); true } else false
-                        // Enter commits — the active completion if any, else the typed text.
-                        Key.Enter, Key.NumPadEnter -> { commit(active ?: typed); true }
-                        else -> false
-                    }
-                },
+                    },
             )
         }
         Box(
@@ -1828,8 +1831,13 @@ private fun NotesSection(state: AppState, rv: RepoView) {
             Modifier.fillMaxWidth().heightIn(min = 62.dp).clip(shape).background(Tokens.panelFb)
                 .border(1.dp, Tokens.borderD8, shape).padding(10.dp),
         ) {
+            // Keyed on the repo: selecting a different repo starts the field over rather than
+            // carrying this one's caret into the next one's note. No selectAllOnDoubleClick — see
+            // the commit-body field in Popups.kt for why multi-line prose is left alone.
+            val edit = rememberTextEdit(state.noteOf(rv.id), key = rv.id)
             BasicTextField(
-                value = state.noteOf(rv.id), onValueChange = { state.setNote(rv.id, it) },
+                value = edit.value,
+                onValueChange = { edit.value = it; state.setNote(rv.id, it.text) },
                 textStyle = TextStyle(fontSize = 12.5.sp, color = Tokens.text2, fontFamily = UiFont),
                 cursorBrush = SolidColor(state.accent),
                 modifier = Modifier.fillMaxWidth(),

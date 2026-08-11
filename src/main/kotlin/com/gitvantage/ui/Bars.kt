@@ -105,13 +105,17 @@ fun Toolbar(state: AppState) {
                 if (state.searchText.isEmpty()) {
                     Txt("Filter repos, branches, tags…", 13.sp, Tokens.muted2)
                 }
+                // The field of the app that recomposes hardest — every character re-filters,
+                // re-groups and re-lays out the whole repo list — so the caret has to be held
+                // outside that recomposition. See [TextEditState] for what goes wrong otherwise.
+                val edit = rememberTextEdit(state.searchText)
                 BasicTextField(
-                    value = state.searchText,
-                    onValueChange = { state.searchText = it },
+                    value = edit.value,
+                    onValueChange = { edit.value = it; state.searchText = it.text },
                     singleLine = true,
                     textStyle = TextStyle(fontSize = 13.sp, color = Tokens.text, fontFamily = UiFont),
                     cursorBrush = SolidColor(Tokens.accent),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().selectAllOnDoubleClick { edit.selectAll() },
                 )
             }
         }

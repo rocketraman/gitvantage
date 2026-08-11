@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -43,8 +44,10 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -127,6 +130,98 @@ fun Modifier.onTagClick(key: Any, onClick: (exclude: Boolean) -> Unit): Modifier
                 }
             }
         }
+}
+
+/**
+ * The editing state of a text field: the text *and* where the caret and selection are.
+ *
+ * Every editable field in the app is driven by one of these rather than by `BasicTextField`'s
+ * `String` overload. That overload keeps no selection of its own — it rebuilds one from the
+ * incoming `String` on each pass and only carries the previous caret across if the composable
+ * survives untouched. In a field whose every keystroke recomposes a large subtree — the toolbar
+ * search re-filters, re-groups and re-lays out the whole repo list on each character — the caret
+ * can come back at offset 0. Typing still appends (the platform inserts at the end of the buffer),
+ * but Backspace has nothing before it to delete, which is exactly the "sometimes I can't erase
+ * what's in the search box" symptom, and exactly why it is intermittent. Holding the selection
+ * here, in state the recomposition cannot reach, removes the failure mode rather than making it
+ * rarer.
+ *
+ * [value] is public and assignable: fields that drive the caret themselves (accepting an inline
+ * completion, say) set it directly.
+ */
+@androidx.compose.runtime.Stable
+class TextEditState(text: String) {
+    var value by mutableStateOf(TextFieldValue(text, TextRange(text.length)))
+
+    val text: String get() = value.text
+
+    /** Replace the text, caret at the end — for programmatic changes, not for user edits. */
+    fun setText(text: String) { value = TextFieldValue(text, TextRange(text.length)) }
+
+    /** Select the whole field, as Ctrl-A does. */
+    fun selectAll() { value = value.copy(selection = TextRange(0, value.text.length)) }
+}
+
+/**
+ * A [TextEditState] mirroring a [text] whose source of truth lives elsewhere — app state, a
+ * registry entry, a `remember` in the caller. Edits flow out through the field's `onValueChange`;
+ * changes made to [text] by anything *else* (a "Clear" button, a popup reopening) flow back in
+ * here, replacing the text and putting the caret at the end.
+ *
+ * [key] resets the state outright, for a field reused across subjects — pass the repo id and
+ * selecting a different repo starts the field over rather than carrying the old caret into it.
+ */
+@Composable
+fun rememberTextEdit(text: String, key: Any = Unit): TextEditState {
+    val state = remember(key) { TextEditState(text) }
+    // In composition rather than a LaunchedEffect: the field must never render a frame showing
+    // text the source of truth no longer holds.
+    if (text != state.value.text) state.setText(text)
+    return state
+}
+
+/**
+ * Double-click a text field to select everything in it, the way Ctrl-A does.
+ *
+ * Compose's own double-click selects a word, which is the platform convention but not what these
+ * fields are for — a search box or a tag field holds one short value that you replace wholesale,
+ * and stopping at a word boundary in `namespace:value` or a path fragment means typing over half
+ * of it. So this widens the selection to the whole field.
+ *
+ * It fires on *release* rather than on the second press, for two reasons: by then the field's own
+ * double-click handling has certainly run, so this is the last word on the selection without
+ * depending on how the two pointer handlers happen to be ordered; and a double-click that turns
+ * into a drag is the user selecting a range by hand, which [moved] leaves alone.
+ *
+ * Clicks are counted here because Compose reports no click count on desktop and the field's own
+ * counter is internal.
+ */
+@Composable
+fun Modifier.selectAllOnDoubleClick(onSelectAll: () -> Unit): Modifier {
+    val handler = androidx.compose.runtime.rememberUpdatedState(onSelectAll)
+    return this.pointerInput(Unit) {
+        var lastDownAt = 0L
+        var lastDownPos = Offset.Zero
+        awaitEachGesture {
+            // requireUnconsumed = false: the field consumes its own presses as it places the
+            // caret, and this needs to see them anyway.
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val slop = viewConfiguration.touchSlop
+            val second = down.uptimeMillis - lastDownAt <= viewConfiguration.doubleTapTimeoutMillis &&
+                (down.position - lastDownPos).getDistance() <= slop
+            // A third click starts a fresh pair rather than firing again on every click after the
+            // second, so click-click-click reads as one double-click plus one single.
+            lastDownAt = if (second) 0L else down.uptimeMillis
+            lastDownPos = down.position
+            if (!second) return@awaitEachGesture
+            var moved = false
+            do {
+                val event = awaitPointerEvent()
+                if (event.changes.any { (it.position - down.position).getDistance() > slop }) moved = true
+            } while (event.changes.any { it.pressed })
+            if (!moved) handler.value()
+        }
+    }
 }
 
 /** Text wrapper with the tokens' defaults (family, ellipsis). */

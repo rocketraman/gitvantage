@@ -27,10 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +37,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
@@ -118,13 +114,11 @@ private fun CenteredNote(text: String) {
 private fun ColumnScope.CandidateList(state: AppState) {
     val visible = state.chooserVisible()
     val filtering = state.chooserFilter.isNotEmpty()
-    // Drive the search box with a TextFieldValue (not a raw String): the String overload of
-    // BasicTextField loses its cursor/selection when the composable recomposes heavily — and this
-    // one recomposes on every keystroke as the candidate list re-filters — which resets the caret to
-    // offset 0 so Backspace has nothing before it to delete (typing still appends, hence the
-    // "backspace doesn't work" symptom). A TextFieldValue carries its own selection across those
-    // recompositions. [state.chooserFilter] stays the filter source of truth, mirrored on each edit.
-    var tfv by remember { mutableStateOf(TextFieldValue(state.chooserFilter)) }
+    // The caret lives in a [TextEditState], not inside the field: this box recomposes on every
+    // keystroke as the candidate list re-filters, and that is what the String overload of
+    // BasicTextField cannot survive — see [TextEditState] for the failure it produces.
+    // [state.chooserFilter] stays the filter source of truth, mirrored on each edit.
+    val edit = rememberTextEdit(state.chooserFilter)
     // Auto-focus on open so it's ready to type immediately.
     val searchFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { searchFocus.requestFocus() }
@@ -139,17 +133,17 @@ private fun ColumnScope.CandidateList(state: AppState) {
         Box(Modifier.weight(1f)) {
             if (!filtering) Txt("Filter by name or path…", 12.5.sp, Tokens.muted2)
             BasicTextField(
-                value = tfv,
-                onValueChange = { tfv = it; state.chooserFilter = it.text },
+                value = edit.value,
+                onValueChange = { edit.value = it; state.chooserFilter = it.text },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 12.5.sp, color = Tokens.text, fontFamily = UiFont),
                 cursorBrush = SolidColor(state.accent),
-                modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
+                modifier = Modifier.fillMaxWidth().focusRequester(searchFocus)
+                    .selectAllOnDoubleClick { edit.selectAll() },
             )
         }
-        if (filtering) Txt("✕", 12.sp, Tokens.muted2, modifier = Modifier.onTap {
-            tfv = TextFieldValue(""); state.chooserFilter = ""
-        })
+        // Clearing the filter only has to write the source of truth: rememberTextEdit mirrors it back.
+        if (filtering) Txt("✕", 12.sp, Tokens.muted2, modifier = Modifier.onTap { state.chooserFilter = "" })
     }
     // Selected count + select-all / none (fixed height)
     Row(

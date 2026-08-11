@@ -381,14 +381,19 @@ private fun TextInput(
             .columnGuide(guideCol, style),
     ) {
         if (value.isEmpty()) Txt(placeholder, 12.5.sp, Tokens.muted2)
+        val edit = rememberTextEdit(value)
         BasicTextField(
-            value = value, onValueChange = onValue, singleLine = true,
+            value = edit.value,
+            onValueChange = { edit.value = it; onValue(it.text) },
+            singleLine = true,
             textStyle = style,
             cursorBrush = SolidColor(accent),
             keyboardActions = KeyboardActions(onDone = { onDone() }),
-            modifier = Modifier.fillMaxWidth().onPreviewKeyEvent {
-                if (it.key == Key.Escape) { onEscape(); true } else false
-            },
+            modifier = Modifier.fillMaxWidth()
+                .selectAllOnDoubleClick { edit.selectAll() }
+                .onPreviewKeyEvent {
+                    if (it.key == Key.Escape) { onEscape(); true } else false
+                },
         )
     }
 }
@@ -414,8 +419,14 @@ private fun MultilineInput(value: String, onValue: (String) -> Unit, placeholder
             .columnGuide(guideCol, style),
     ) {
         if (value.isEmpty()) Txt(placeholder, 12.5.sp, Tokens.muted2, maxLines = 2)
+        // No selectAllOnDoubleClick here, unlike every single-line field: a commit body is prose
+        // several lines long, and double-clicking a word to retype it is the normal thing to do in
+        // it. Selecting the whole message on that gesture would put the next keystroke one
+        // character away from discarding everything typed so far.
+        val edit = rememberTextEdit(value)
         BasicTextField(
-            value = value, onValueChange = onValue,
+            value = edit.value,
+            onValueChange = { edit.value = it; onValue(it.text) },
             textStyle = style,
             cursorBrush = SolidColor(accent),
             modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
