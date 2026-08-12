@@ -6,6 +6,9 @@ package com.gitvantage.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -43,6 +48,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -52,7 +58,10 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup as WindowPopup
+import androidx.compose.ui.window.PopupProperties
 import com.gitvantage.app.Actions
 import com.gitvantage.app.AppState
 import com.gitvantage.app.GitHub
@@ -69,7 +78,7 @@ import com.gitvantage.git.model.Commit
 import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
-import com.gitvantage.git.model.Worktree
+import com.gitvantage.model.Worktree
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Reminder
@@ -124,21 +133,19 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             ) { Txt("×", 14.sp, Tokens.secondary) }
         }
 
-        // Branch line
+        // Branch line. Just the branch and a way to copy it: the ahead/behind numbers used to sit
+        // here too and said the same thing as the badges on the row and the banner below, three
+        // times on one screen.
         Row(
             Modifier.padding(top = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont)
+            Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont,
+                modifier = Modifier.weight(1f, fill = false))
             // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
             if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
-            if (rv.ahead > 0) Txt("↑${rv.ahead} ahead", 12.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
-            if (rv.behind > 0) Txt("↓${rv.behind} behind", 12.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
         }
-
-        // (Behind-upstream Diff/Log now live in the BehindBanner below, next to the
-        // "N commits behind" message — where the eye lands looking for them.)
 
         // If this repo is itself a submodule of a parent that's also tracked, link to it.
         repo.superproject?.let { sup ->
@@ -156,60 +163,14 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             }
         }
 
-        // If this checkout is a linked worktree, say which working tree it was added from — and
-        // link to that one when it's tracked too, mirroring the submodule/superproject link.
-        if (repo.isWorktree) repo.worktreeMain?.let { main -> WorktreeOfLine(state, main) }
-
         // Tags
         TagEditor(state, rv)
 
-        // Primary actions (FlowRow so they wrap as the panel narrows)
-        androidx.compose.foundation.layout.FlowRow(
-            Modifier.fillMaxWidth().padding(top = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Commit opens a commit dialog (branch + message). Push/Fetch/Fast-forward all
-            // need a remote — but Push works even without a tracking upstream (it pushes with
-            // `-u origin HEAD`), so it's gated on hasRemote, not on upstream. Fetch just needs
-            // the remote (offline/no-upstream is fine).
-            ActionButton("Commit…", Tokens.onAccent, Tokens.accentFill, null, disabled = !repo.isGitRepo) {
-                state.popup = Popup.Commit(repo.id)
-            }
-            ActionButton("Push", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
-                state.popup = Popup.Confirm(
-                    "Push ${repo.name}?",
-                    if (repo.upstream != null) "Runs git push to ${repo.upstream}."
-                    else "Publishes “${repo.branch}” to origin and sets it as the upstream.",
-                    "Push", danger = false,
-                ) { state.push(listOf(repo.id)) }
-            }
-            ActionButton("Fetch", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
-                state.fetchRepo(repo.id)
-            }
-            // Fast-forward is only possible when strictly behind upstream (no local commits).
-            val canFf = repo.upstream != null && repo.behind > 0 && repo.ahead == 0
-            ActionButton("Fast Forward", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !canFf) {
-                state.popup = Popup.Confirm(
-                    "Fast-forward ${repo.name}?",
-                    "Advances “${repo.branch}” to ${repo.upstream} (${repo.behind} commit${if (repo.behind == 1) "" else "s"}). No local commits are lost.",
-                    "Fast Forward", danger = false,
-                ) { state.fastForward(repo.id) }
-            }
-            val hasChanges = repo.staged + repo.unstaged + repo.untracked > 0
-            ActionButton("Diff", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !hasChanges) {
-                state.openDiff(repo.id)
-            }
-            ActionButton("Log", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.isGitRepo) {
-                state.openRepoLog(repo.id)
-            }
-            ActionButton("☾ Snooze ▾", Tokens.snoozeBtnText, Tokens.snoozeBtnBg, Tokens.snoozeBtnBorder) {
-                state.popup = Popup.Snooze(setOf(repo.id))
-            }
-        }
-
-        // Open in
-        OpenInGroup(state, repo)
+        // Actions. Split by consequence: a bordered button changes something, a flat accent link
+        // only shows you something. That's the same rule the list rows' hover actions follow, and
+        // it's what lets Diff and Log lose their borders without losing their meaning — they were
+        // the two read-only actions wearing the same weight as Push.
+        ActionRow(state, rv)
 
         // Banners. Behind-upstream takes its own banner (with Diff/Log) so it shows whether the tree
         // is clean or dirty; the clean banner covers the "clean / ahead" case.
@@ -218,11 +179,12 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         else if (selClean) CleanBanner(state, rv)
         repo.warning?.let { WarnBanner(it) }
 
-        // Changed files
-        val openDiff = { state.openDiff(repo.id) }
-        if (staged.isNotEmpty()) FileSection("Staged", Tokens.stagedHdr, Tokens.stagedDot, staged, state.accent, true, openDiff)
-        if (modified.isNotEmpty()) FileSection("Modified", Tokens.modifiedHdr, Tokens.modifiedDot, modified, state.accent, true, openDiff)
-        if (untracked.isNotEmpty()) FileSection("Untracked", Tokens.untrackedHdr, Tokens.untrackedDot, untracked, state.accent, false, openDiff)
+        // ---- work zones, in scan order: what's in this folder, what's in the others, what refs exist
+
+        // Changed files — one list, not three sections. The three headings were a taxonomy of git's
+        // index, and the question the pane is asked is "what have I touched"; the state each file is
+        // in stays on the row, where it belongs to the file rather than to a heading.
+        if (repo.files.isNotEmpty()) ChangedFilesSection(state, rv)
 
         // Stashes
         if (repo.stashes.isNotEmpty()) StashSection(state, repo.id, repo.stashes)
@@ -230,30 +192,412 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         // Submodules (if any) — pointer status, target, fetch + pointer update
         if (repo.hasSubmodules) SubmodulesSection(state, rv)
 
-        // Working trees sharing this repository — which branch each holds, and how to reach it
-        if (repo.hasWorktrees) WorktreesSection(state, rv)
+        // The branches this repository has checked out in other folders, each openable in place.
+        WorktreesPaneSection(state, rv)
 
         // Branches (local), with status vs mainline + delete
         if (repo.isGitRepo) BranchesSection(state, rv)
 
-        // Open GitHub issues / pull requests, and how loudly they should signal. Only for remotes
-        // we can actually query: a non-GitHub forge (Azure DevOps, GitLab, …) or a GitHub URL
-        // that isn't a plain owner/repo gets no section at all, rather than a permanently empty
-        // one — GitHub is the only forge supported so far, and an empty "Issues & pull requests"
+        // Open GitHub issues / pull requests. Only for remotes we can actually query: a non-GitHub
+        // forge (Azure DevOps, GitLab, …) or a GitHub URL that isn't a plain owner/repo gets no
+        // section at all, rather than a permanently empty one — an empty "Issues & pull requests"
         // heading on a GitLab repo reads as "no open issues", which is a different claim entirely.
         if (state.issuesSupported(repo)) IssuesSection(state, rv)
+
+        // What will notify, and when. Its thresholds and opt-ins live in Settings; this is the
+        // forecast they produce.
+        NotificationsOutlook(state, rv)
+
+        // Note + reminder, two lines. The full editors are one click away; what the pane owes at a
+        // glance is what the note *says*, and a 60px empty textarea said nothing on most repos.
+        if (state.showNotes) NoteLines(state, rv)
+
+        // Everything that configures rather than reports, behind one disclosure — see [SettingsZone].
+        SettingsZone(state, rv)
+        }   // content Column
+    }       // outer Row (drag handle + content)
+}
+
+/**
+ * Zone 4: the pane's action row.
+ *
+ * One wrapping row with a divider in it, rather than two rows. The old pane had four bordered
+ * buttons, then a bordered Diff and Log beside them, then a snooze pill, then a whole second bar of
+ * "OPEN IN" buttons — nine or ten controls of near-identical weight, in which nothing said which
+ * ones would change the repository. Now the left of the divider mutates and the right of it doesn't,
+ * and "Open in" is one menu because launching an editor is the least consequential thing here.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ActionRow(state: AppState, rv: RepoView) {
+    val repo = rv.repo
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth().padding(top = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Commit opens a commit dialog (branch + message). Push/Fetch/Fast-forward all need a
+        // remote — but Push works even without a tracking upstream (it pushes with `-u origin
+        // HEAD`), so it's gated on hasRemote, not on upstream. Fetch just needs the remote
+        // (offline/no-upstream is fine).
+        ActionButton("Commit…", Tokens.onAccent, Tokens.accentFill, null, disabled = !repo.isGitRepo) {
+            state.popup = Popup.Commit(repo.id)
+        }
+        ActionButton("Push", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
+            state.popup = Popup.Confirm(
+                "Push ${repo.name}?",
+                if (repo.upstream != null) "Runs git push to ${repo.upstream}."
+                else "Publishes “${repo.branch}” to origin and sets it as the upstream.",
+                "Push", danger = false,
+            ) { state.push(listOf(repo.id)) }
+        }
+        ActionButton("Fetch", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
+            state.fetchRepo(repo.id)
+        }
+        // Fast-forward is only possible when strictly behind upstream (no local commits).
+        val canFf = repo.upstream != null && repo.behind > 0 && repo.ahead == 0
+        ActionButton("Fast Forward", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !canFf) {
+            state.popup = Popup.Confirm(
+                "Fast-forward ${repo.name}?",
+                "Advances “${repo.branch}” to ${repo.upstream} (${repo.behind} commit${if (repo.behind == 1) "" else "s"}). No local commits are lost.",
+                "Fast Forward", danger = false,
+            ) { state.fastForward(repo.id) }
+        }
+        // The read-only half travels as one unit, so it wraps to the next line together rather than
+        // leaving a divider stranded at the end of the buttons. Centred against the buttons, which
+        // are twice as tall as a bare text link.
+        Row(
+            Modifier.height(33.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(Modifier.width(1.dp).height(22.dp).background(Tokens.borderDc))
+            val hasChanges = repo.staged + repo.unstaged + repo.untracked > 0
+            if (hasChanges) FlatAction("Diff") { state.openDiff(repo.id) }
+            if (repo.isGitRepo) FlatAction("Log") { state.openRepoLog(repo.id) }
+            // Out here rather than inside the menu, unlike the other launchers. A terminal in the
+            // repo is the one thing reached often enough to be worth a click of its own — it's how
+            // you do whatever this pane doesn't cover — and burying it behind a menu made the pane's
+            // most-used escape hatch its least visible control.
+            FlatAction("Terminal") { state.openTerminal(repo.id) }
+            OpenInMenu(state, repo)
+        }
+        // Snooze is its own group: it neither changes the repository nor shows you anything about it
+        // — it changes what the repo is allowed to tell *you*. That's a third kind of action, so it
+        // gets a third compartment rather than being filed under one of the other two.
+        Row(
+            Modifier.height(33.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(Modifier.width(1.dp).height(22.dp).background(Tokens.borderDc))
+            // Carries how long it's silenced for, the way the list rows' chip does — so the button
+            // reports the state as well as offering to change it. No "Resume now" beside it: the
+            // snooze banner a few pixels below already has one, and two of them one line apart read
+            // as two different actions.
+            ActionButton(
+                if (rv.snoozed) "☾ ${rv.repo.snoozedFor ?: "on"} ▾" else "☾ Snooze ▾",
+                Tokens.snoozeBtnText, Tokens.snoozeBtnBg, Tokens.snoozeBtnBorder,
+            ) { state.popup = Popup.Snooze(setOf(repo.id)) }
+        }
+    }
+}
+
+/**
+ * "Open in ▾" — the old OPEN IN bar as a menu.
+ *
+ * That bar carried up to eight bordered buttons across two lines, permanently, for a set of actions
+ * whose entire effect is to start another program. It was the widest thing in the pane and the least
+ * consequential. Collapsed, it costs one click and gives the row back to the actions that change
+ * something.
+ */
+@Composable
+private fun OpenInMenu(state: AppState, repo: Repo) {
+    var open by remember(repo.id) { mutableStateOf(false) }
+    val below = with(LocalDensity.current) { 26.dp.roundToPx() }
+    fun pick(act: () -> Unit): () -> Unit = { open = false; act() }
+    Box {
+        FlatAction("Open in ▾") { open = !open }
+        if (open) {
+            WindowPopup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, below),
+                onDismissRequest = { open = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                val shape = RoundedCornerShape(10.dp)
+                Column(
+                    Modifier.width(210.dp).shadow(10.dp, shape).clip(shape)
+                        .background(Tokens.surface, shape).border(1.dp, Tokens.borderDc, shape)
+                        .dismissOnEscape { open = false }
+                        .padding(vertical = 5.dp),
+                ) {
+                    // No Terminal here — it graduated to the action row above.
+                    OpenInItem("GitButler", UiFont, pick { state.openGitButler(repo.id) })
+                    OpenInItem("Git Gui", UiFont, pick { state.openGitGui(repo.id) })
+                    OpenInItem("IDE", UiFont, pick { state.openIde(repo.id) })
+                    OpenInItem("Folder", UiFont, pick { state.openFolder(repo.id) })
+                    if (repo.isGitHub && repo.webBase != null) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+                                .height(1.dp).background(Tokens.borderEd),
+                        )
+                        OpenInItem("Issues", UiFont, pick { state.openUrl("${repo.webBase}/issues") })
+                        OpenInItem("Pull Requests", UiFont, pick { state.openUrl("${repo.webBase}/pulls") })
+                        if (repo.hasWorkflows) {
+                            OpenInItem("Actions", UiFont, pick { state.openUrl("${repo.webBase}/actions") })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenInItem(label: String, font: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    Box(
+        Modifier.fillMaxWidth()
+            .background(if (hovered) Tokens.rowHoverBg else Color.Transparent)
+            .hoverable(source)
+            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    ) { Txt(label, 12.sp, Tokens.text2, FontWeight.Medium, font = font) }
+}
+
+/**
+ * Zone 5: what's changed in this checkout.
+ *
+ * One section, flat paths — a tree earns its keep in the diff viewer's sidebar, where a change can
+ * touch fifty files across a deep hierarchy, but here the list is short by construction and which
+ * package a file is in isn't the question.
+ *
+ * Staged files keep a group of their own, though, and that is not a taxonomy of git's index for its
+ * own sake: "what will the next commit contain" is a different question from "what have I touched",
+ * and it's the one you're asking right before pressing Commit. Told apart only by a word at the far
+ * right of each row, the answer meant reading down the margin and counting. Told apart by a heading,
+ * it's the shape of the list.
+ *
+ * The subheadings appear only when there is something staged. On a repo with nothing staged — the
+ * common case — a lone "Not staged" heading over every row would be labelling the absence of a
+ * distinction, so the section is just its files.
+ */
+@Composable
+private fun ChangedFilesSection(state: AppState, rv: RepoView) {
+    val repo = rv.repo
+    val staged = repo.files.filter { it.section == "staged" }
+    val rest = repo.files - staged.toSet()
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt("Changed files", 12.5.sp, Tokens.text, FontWeight.Bold)
+            Txt("— ${repo.files.size}", 11.sp, Tokens.muted2)
+            Spacer(Modifier.weight(1f))
+            FlatAction("Open diff →", size = 11.5.sp) { state.openDiff(repo.id) }
+        }
+        if (staged.isEmpty()) {
+            rest.forEach { ChangedFileRow(it, repo.dirtyFor) }
+        } else {
+            FileGroupLabel("Staged", staged.size, Tokens.stagedHdr, Tokens.stagedDot, top = 0)
+            staged.forEach { ChangedFileRow(it, repo.dirtyFor) }
+            if (rest.isNotEmpty()) {
+                FileGroupLabel("Not staged", rest.size, Tokens.modifiedHdr, Tokens.modifiedDot, top = 10)
+                rest.forEach { ChangedFileRow(it, repo.dirtyFor) }
+            }
+        }
+    }
+}
+
+/** A subheading inside [ChangedFilesSection] — the square dot and coloured label the old per-state
+ *  sections used, at a size that reads as part of the section rather than as another one. */
+@Composable
+private fun FileGroupLabel(label: String, count: Int, color: Color, dot: Color, top: Int) {
+    Row(
+        Modifier.padding(top = top.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Box(Modifier.size(7.dp).clip(RoundedCornerShape(2.dp)).background(dot))
+        Txt(label, 11.5.sp, color, FontWeight.Bold)
+        Txt("$count", 10.5.sp, Tokens.muted2)
+    }
+}
+
+@Composable
+private fun ChangedFileRow(f: ChangedFile, dirtyFor: String?) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 4.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StatusDot(
+            when (f.section) {
+                "staged" -> Tokens.stagedDot
+                "untracked" -> Tokens.untrackedDot
+                else -> Tokens.modifiedDot
+            },
+            7,
+        )
+        PathTip(f.path, Modifier.weight(1f)) {
+            Txt(f.path, 11.5.sp, Tokens.text2, font = MonoFont, maxLines = 1)
+        }
+        // How long it's been sitting, on the files that have been: an untracked file has no "since"
+        // to report. "modified" rather than git's own "unstaged", which was an implementation detail
+        // that only ever showed while it was a heading.
+        Txt(
+            if (f.section == "untracked") "untracked"
+            else listOfNotNull(if (f.section == "staged") "staged" else "modified", dirtyFor).joinToString(" · "),
+            10.5.sp, Tokens.muted2, maxLines = 1,
+        )
+    }
+}
+
+/**
+ * The one setting the notifications outlook used to carry inline: whether this repo says anything
+ * when its upstream advances.
+ *
+ * Off by default, and deliberately so — on a dashboard of thirty repos, "someone pushed" is the most
+ * frequent event there is and the least likely to need you. Enabling re-baselines the behind count,
+ * so the next *new* commit alerts rather than the backlog that already exists.
+ */
+@Composable
+private fun UpstreamAlertRow(state: AppState, rv: RepoView) {
+    val repo = rv.repo
+    if (!repo.hasRemote || repo.upstream == null) return
+    val on = state.notifyUpstreamEnabled(repo.id)
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Alert when upstream advances", 12.5.sp, Tokens.text, FontWeight.Bold)
+            InfoTip(
+                "Fires a desktop notification when new commits land on ${repo.upstream}. Off by " +
+                    "default: on a dashboard of many repos this is the most frequent thing that " +
+                    "happens and rarely the thing that needs you. Turning it on starts from now, so " +
+                    "the commits you're already behind by don't alert.",
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PresetPill("On", on, state.accent) { state.setNotifyUpstream(repo.id, true) }
+            PresetPill("Off", !on, state.accent) { state.setNotifyUpstream(repo.id, false) }
+        }
+    }
+}
+
+/**
+ * Zone 8: the note and the reminder, one line each.
+ *
+ * The note used to own a permanently-mounted 60px text area near the bottom of the pane — the
+ * largest single element in it, empty on most repos, and below the things you actually came for. As
+ * a line it states what the note says and hands editing to a click, which is the same bargain the
+ * reminder already made.
+ */
+@Composable
+private fun NoteLines(state: AppState, rv: RepoView) {
+    val note = state.noteOf(rv.id)
+    val rem = rv.repo.reminder
+    Column(
+        Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Txt("✎", 12.sp, Tokens.muted2)
+            Txt(
+                note.ifBlank { "No note" }, 12.sp,
+                if (note.isBlank()) Tokens.muted2 else Tokens.text2,
+                italic = note.isNotBlank(), modifier = Modifier.weight(1f),
+            )
+            FlatAction(if (note.isBlank()) "Add" else "Edit", size = 12.sp) {
+                state.popup = Popup.Note(rv.id)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Txt("◷", 12.sp, if (rem?.overdue == true) Tokens.remOverdue else Tokens.remTeal)
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                if (rem == null) {
+                    Txt("No reminder", 12.sp, Tokens.muted2)
+                } else {
+                    Txt("Reminder: ${rem.text}", 12.sp, Tokens.text2, modifier = Modifier.weight(1f, fill = false))
+                    Txt("· ${rem.due}", 12.sp, if (rem.overdue) Tokens.remOverdue else Tokens.remTeal, FontWeight.Bold)
+                }
+            }
+            FlatAction(if (rem == null) "Add" else "Edit", size = 12.sp) {
+                state.popup = Popup.Remind(setOf(rv.id), rem?.text ?: "", null)
+            }
+            if (rem != null) {
+                FlatAction("Clear", danger = true, size = 12.sp) { state.clearReminder(setOf(rv.id)) }
+            }
+        }
+    }
+}
+
+/**
+ * Zone 9: every setting the pane owns, behind one disclosure.
+ *
+ * Six sections used to sit open at the bottom of every repo's pane, and then Remove Repo. Together
+ * they were most of the pane's height, on a screen whose job is to answer "what's going on in this
+ * repo".
+ *
+ * What belongs here is only what *configures*: the stale threshold and its severity, whether issues
+ * are polled and how loudly, the upstream-alert opt-in, the hidden-branch patterns, and Remove Repo.
+ * Read once when a repo is added, then left alone. What does *not* belong here is anything that
+ * reports — the issue list and the notifications outlook both went back to the work zones above,
+ * because a prediction about the next few hours behind a collapsed chevron is a prediction nobody
+ * reads. Snooze went to the action row for the same reason: it's a thing you do, not a thing you set.
+ *
+ * Collapsed it still has to say two things, which is what the header line is for: the summary names
+ * what's inside, so the chevron isn't a mystery box, and the "N customized" chip says whether any of
+ * it deviates from the defaults — the one fact you'd otherwise have to expand to learn.
+ */
+@Composable
+private fun SettingsZone(state: AppState, rv: RepoView) {
+    val open = state.settingsExpanded
+    val customized = state.customizedSettings(rv.id)
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
+        Row(
+            Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand)
+                .onTap { state.toggleSettingsExpanded() },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt(if (open) "▾" else "▸", 11.sp, Tokens.muted2)
+            Txt("Settings", 12.5.sp, Tokens.secondary, FontWeight.Bold)
+            Txt(
+                "staleness · issues · alerts · hidden branches · remove repo", 11.sp, Tokens.muted2,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.weight(1f))
+            if (customized > 0) {
+                val p = Tokens.worktreeChip
+                Pill(
+                    "$customized customized", p.c, p.t, p.b,
+                    fontSize = 10.5.sp, weight = FontWeight.SemiBold, radius = 20,
+                    padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 9.dp, vertical = 2.dp),
+                )
+            }
+        }
+        if (!open) return@Column
+        val repo = rv.repo
 
         // Per-repo "stale after N days" threshold (override the global default)
         if (repo.isGitRepo) StaleThresholdRow(state, rv)
 
+        // Whether open issues are polled here, how loudly they count, and which of them count
+        if (state.issuesSupported(repo)) IssuesSettings(state, rv)
+
+        // Whether new upstream commits raise a desktop notification
+        UpstreamAlertRow(state, rv)
+
         // Per-repo patterns for the branches the lists keep out of the way
         if (repo.isGitRepo) HiddenBranchesRow(state, rv)
-
-        // What will notify (attention / aging / reminders), and how snooze affects it
-        NotificationsSection(state, rv)
-
-        // Working notes
-        if (state.showNotes) NotesSection(state, rv)
 
         // Curation: stop tracking this repo (non-destructive)
         Row(
@@ -272,8 +616,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
             Spacer(Modifier.weight(1f))
             Txt("stops tracking · doesn't touch the repo", 11.sp, Tokens.muted2)
         }
-        }   // content Column
-    }       // outer Row (drag handle + content)
+    }
 }
 
 @Composable
@@ -454,43 +797,6 @@ private fun ActionButton(
     }
 }
 
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
-private fun OpenInGroup(state: AppState, repo: Repo) {
-    val path = repo.id
-    val shape = RoundedCornerShape(9.dp)
-    androidx.compose.foundation.layout.FlowRow(
-        Modifier.fillMaxWidth().padding(top = 8.dp).clip(shape)
-            .background(Tokens.panelF7).border(1.dp, Tokens.borderE2, shape).padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Box(Modifier.padding(start = 6.dp, end = 8.dp), contentAlignment = Alignment.Center) {
-            Txt("OPEN IN", 10.5.sp, Tokens.muted2, FontWeight.Bold, letterSpacing = 0.5.sp)
-        }
-        OpenInButton(">_ Terminal", MonoFont) { state.openTerminal(path) }
-        OpenInButton("GitButler", UiFont) { state.openGitButler(path) }
-        OpenInButton("Git Gui", UiFont) { state.openGitGui(path) }
-        OpenInButton("IDE", UiFont) { state.openIde(path) }
-        OpenInButton("Folder", UiFont) { state.openFolder(path) }
-        // GitHub web links, for repos with a github.com remote.
-        if (repo.isGitHub && repo.webBase != null) {
-            OpenInButton("Issues", UiFont) { state.openUrl("${repo.webBase}/issues") }
-            OpenInButton("Pull Requests", UiFont) { state.openUrl("${repo.webBase}/pulls") }
-            if (repo.hasWorkflows) OpenInButton("Actions", UiFont) { state.openUrl("${repo.webBase}/actions") }
-        }
-    }
-}
-
-@Composable
-private fun OpenInButton(label: String, font: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(6.dp)
-    Box(
-        Modifier.clip(shape).background(Tokens.surface, shape).border(1.dp, Tokens.borderE6, shape)
-            .onTap(onClick).padding(horizontal = 10.dp, vertical = 5.dp),
-    ) { Txt(label, 12.sp, Tokens.text2, FontWeight.Bold, font = font) }
-}
-
 @Composable
 private fun SnoozeBanner(state: AppState, rv: RepoView) {
     Banner(Tokens.snoozeBannerBg, Tokens.snoozeBannerBorder, top = 16) {
@@ -569,47 +875,6 @@ private fun Banner(bg: Color, border: Color, top: Int, content: @Composable andr
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         content = content,
     )
-}
-
-@Composable
-private fun FileSection(title: String, titleColor: Color, dotColor: Color, files: List<ChangedFile>, accent: Color, showDiff: Boolean, onDiff: () -> Unit) {
-    val byPath = files.associateBy { it.path }
-    Column(Modifier.fillMaxWidth().padding(top = 18.dp)) {
-        Row(
-            Modifier.padding(bottom = 6.dp).let { if (showDiff) it.onTap(onDiff) else it },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(dotColor))
-            Txt(title, 12.5.sp, titleColor, FontWeight.Bold)
-            if (showDiff) {
-                Spacer(Modifier.weight(1f))
-                Txt("Diff ›", 11.5.sp, accent, FontWeight.Medium)
-            }
-        }
-        // Flattened tree — deep package paths collapse so filenames stay readable.
-        PathTree.flatten(files.map { it.path }).forEach { node ->
-            if (node.fullPath == null) {
-                PathTip(node.label, Modifier.padding(start = (8 + node.depth * 14).dp, top = 3.dp, bottom = 3.dp)) {
-                    Txt("▸ ${node.label}", 11.5.sp, Tokens.muted2, font = MonoFont, maxLines = 1)
-                }
-            } else {
-                val f = byPath[node.fullPath] ?: return@forEach
-                Row(
-                    Modifier.fillMaxWidth().padding(start = (8 + node.depth * 14).dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Box(Modifier.width(14.dp), contentAlignment = Alignment.Center) {
-                        Txt(f.tag, 12.sp, fileTagColor(f), FontWeight.SemiBold, font = MonoFont)
-                    }
-                    PathTip(node.label, Modifier.weight(1f)) {   // filename only; folders shown in tree
-                        Txt(node.label, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1)
-                    }
-                }
-            }
-        }
-    }
 }
 
 /**
@@ -748,237 +1013,6 @@ private fun SubmoduleRow(state: AppState, id: String, s: Submodule) {
             else if (s.initialized && !busy) RowAction("Add Repo") { state.trackSubmodule(id, s) }
         }
     }
-}
-
-/**
- * "Added from <main checkout>" for a linked worktree. Clickable when that checkout is tracked too;
- * otherwise it still names it, because knowing *which* repository this worktree belongs to is the
- * point — a worktree's own folder name says nothing about it.
- */
-@Composable
-private fun WorktreeOfLine(state: AppState, mainPath: String) {
-    val parentId = state.trackedRepoAt(mainPath)
-    val shape = RoundedCornerShape(8.dp)
-    var m = Modifier.padding(top = 8.dp).clip(shape).background(Tokens.tintBlue)
-    if (parentId != null) m = m.pointerHoverIcon(PointerIcon.Hand).onTap { state.selectedId = parentId }
-    PathTip(mainPath) {
-        Row(
-            m.padding(horizontal = 10.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Txt("⑂ Worktree of", 11.5.sp, state.accent, FontWeight.SemiBold)
-            Txt(java.io.File(mainPath).name, 11.5.sp, state.accent, FontWeight.Bold, font = MonoFont)
-            if (parentId == null) Txt("· not tracked", 11.sp, Tokens.muted2)
-        }
-    }
-}
-
-/**
- * Every working tree attached to this repository: the main checkout plus each linked worktree,
- * with the branch it holds and whether it's clean. Worktrees are how one repository holds several
- * branches checked out at once, so the interesting question here isn't "is it behind" (they all
- * share one object store and one set of branches) but "what's over there, and is it dirty" —
- * uncommitted work in another worktree is invisible from this one.
- *
- * States git can report that would otherwise be silent get their own badge: `locked` (someone
- * pinned it against pruning), `prunable`/missing (its directory is gone; the entry is stale).
- */
-@Composable
-private fun WorktreesSection(state: AppState, rv: RepoView) {
-    LaunchedEffect(rv.id) { state.loadWorktrees(rv.id) }
-    if (state.worktreesRepo != rv.id || state.worktrees.isEmpty()) return
-    val stale = state.worktrees.count { it.prunable || it.missing }
-    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
-        Row(
-            Modifier.padding(bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Txt("Worktrees", 12.5.sp, Tokens.text, FontWeight.Bold)
-            Txt("— ${state.worktrees.size}", 11.sp, Tokens.muted2)
-            InfoTip(
-                "Working trees sharing this repository — separate folders with different branches " +
-                    "checked out, all against one set of commits, branches, and stashes. " +
-                    "Uncommitted work in another worktree doesn't show in this repo's changed files.",
-            )
-            Spacer(Modifier.weight(1f))
-            // `git worktree prune` takes no path — it drops every stale entry at once — so this is
-            // a section action rather than a per-row one.
-            if (stale > 0) {
-                Txt(
-                    if (state.worktreesBusy) "Pruning…" else "Prune $stale stale",
-                    12.sp, state.accent, FontWeight.SemiBold,
-                    modifier = if (state.worktreesBusy) Modifier else Modifier.onTap {
-                        state.popup = Popup.Confirm(
-                            "Prune stale worktree entries?",
-                            "Forgets $stale worktree${if (stale == 1) "" else "s"} whose folder is gone. " +
-                                "Nothing on disk is deleted — the branches and commits they held are untouched.",
-                            "Prune", danger = false,
-                        ) { state.pruneWorktrees(rv.id) }
-                    },
-                )
-            }
-        }
-        state.worktrees.forEach { wt -> WorktreeRow(state, rv.id, wt) }
-    }
-}
-
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
-private fun WorktreeRow(state: AppState, id: String, wt: Worktree) {
-    val tracked = state.trackedRepoAt(wt.path)
-    HoverRow(vertical = 6) { hovered ->
-        // Line 1: folder name · what it holds · badges
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Txt(
-                wt.name, 12.5.sp,
-                if (wt.isCurrent) Tokens.text else Tokens.text2,
-                if (wt.isCurrent) FontWeight.Bold else FontWeight.SemiBold,
-                font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f),
-            )
-            if (wt.head.isNotEmpty()) Txt("@${wt.head.take(7)}", 10.5.sp, Tokens.muted2, font = MonoFont)
-            // "current" and the role badge are separate: the repo you're looking at is usually also
-            // the main checkout, and collapsing the two would drop the fact that it's the main one.
-            if (wt.isCurrent) BranchBadge("current", Tokens.cleanText, Tokens.cleanBg)
-            when {
-                wt.missing -> BranchBadge("missing", Tokens.redText, Tokens.tintRed)
-                wt.prunable -> BranchBadge("prunable", Tokens.amber, Tokens.tintAmber)
-                // Every entry in this list is one or the other, so neither is news; the states
-                // above it — the ones that mean something has gone wrong — keep the tint.
-                wt.isMain -> QuietBadge("main")
-                else -> QuietBadge("linked")
-            }
-            if (wt.locked) {
-                HoverTip(
-                    "Locked against pruning" + (wt.lockReason?.let { ": $it" } ?: "") +
-                        ". Unlock it with `git worktree unlock` if you want git to reclaim it.",
-                ) { BranchBadge("locked", Tokens.purple, Tokens.tintPurple) }
-            }
-            // Which of these you made and which a coding session made, since the folder name —
-            // a generated slug like "copy-branch-names-clipboard-84cbcf" — can't tell you.
-            if (wt.agent) {
-                HoverTip(
-                    "Created by a Claude Code session, under the repo's .claude/worktrees/. " +
-                        "Sessions offer to remove theirs on exit; the ones kept stay here, " +
-                        "holding whatever was left in them.",
-                ) { BranchBadge("agent", state.accent, Tokens.tintBlue) }
-            }
-        }
-        // Line 2: the branch it holds · last commit there
-        Row(
-            Modifier.padding(top = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            when {
-                wt.bare -> Txt("bare — no working tree", 11.sp, Tokens.muted2)
-                wt.branch != null -> Txt("⎇ ${wt.branch}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
-                else -> Txt("⚠ detached HEAD", 11.sp, Tokens.muted2)
-            }
-            if (wt.lastRelative.isNotEmpty()) Txt("· ${wt.lastRelative}", 11.sp, Tokens.muted2, maxLines = 1)
-        }
-        // Line 3: where it lives (tooltip carries the full path when it's too long to fit)
-        PathTip(wt.path, Modifier.padding(top = 2.dp)) {
-            Txt("→ ${wt.path}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
-        }
-        // Uncommitted work over there is invisible from this repo's changed-files list, so say it.
-        // Not for the current worktree: its changes are the "Changed files" section further up,
-        // and repeating the count here would state the same thing twice.
-        if (wt.dirtyCount > 0 && !wt.isCurrent) {
-            Txt(
-                "⚠ ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} in this worktree",
-                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-        // Committed here and nowhere else. The other half of "what would removing this cost" — and
-        // the half that's easy to miss, since committed work *looks* safe. Suppressed for the
-        // current worktree on the same grounds as the dirty count above: the Branches section
-        // right below already carries this checkout's distance from mainline as "↑N".
-        if (wt.unmerged > 0 && !wt.branchMerged && !wt.isCurrent) {
-            Txt(
-                "⚠ ${wt.unmerged} commit${if (wt.unmerged == 1) "" else "s"} not in ${wt.mainline ?: "mainline"}",
-                11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-        if (wt.missing) {
-            Txt(
-                "⚠ folder no longer on disk" + (wt.prunableReason?.let { " — $it" } ?: ""),
-                11.sp, Tokens.redText, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-        // Actions. Adding a worktree stays in the terminal — it needs a path chosen by hand — but
-        // removing one is offered here, since a stale worktree is exactly the kind of thing this
-        // list exists to surface. git refuses to remove the main working tree, and a missing one
-        // is Prune's job, not remove's.
-        val canVisit = !wt.isCurrent && !wt.missing && !wt.bare
-        val canRemove = !wt.isMain && !wt.missing && !wt.bare
-        if (canVisit || canRemove || wt.branch != null) {
-            RowActions(hovered, Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                // The branch a worktree holds is one you can't reach from here (git refuses to
-                // check it out twice), so its name is exactly what you'd want to paste elsewhere.
-                wt.branch?.let { CopyAction(it, "Copy branch") }
-                if (canVisit) {
-                    if (tracked != null) RowAction("Goto Repo") { state.selectedId = tracked }
-                    // Tracked worktrees inherit the repo's tags plus a "worktree" marker — they're
-                    // the same project, so they belong in the same filters and groups.
-                    else RowAction("Add Repo") { state.trackRepoAt(wt.path, state.worktreeTags(id)) }
-                    RowAction("Terminal") { state.openTerminal(wt.path) }
-                    RowAction("Folder") { state.openFolder(wt.path) }
-                }
-                if (canRemove && !state.worktreesBusy) {
-                    RowAction("Remove", danger = true) {
-                        state.popup = Popup.Confirm(
-                            "Remove worktree “${wt.name}”?", removeWorktreeDetail(wt, tracked != null),
-                            "Remove", danger = true,
-                        ) { state.removeWorktree(id, wt) }
-                    }
-                    // `git worktree remove` deliberately keeps the branch, which is right for a
-                    // worktree you made — but an agent worktree's `claude/…` branch existed only to
-                    // hold that session's work, so once it has landed the branch is residue that
-                    // "Remove" alone leaves behind forever. Offered as its own action rather than
-                    // folded into Remove: the plain one promises the branch survives, and a button
-                    // that quietly stopped honouring that promise would be the worse design.
-                    if (wt.agent && wt.branchMerged && wt.branch != null) {
-                        RowAction("Remove + branch", danger = true) {
-                            state.popup = Popup.Confirm(
-                                "Remove worktree “${wt.name}” and its branch?",
-                                removeWorktreeDetail(wt, tracked != null, alsoBranch = wt.branch),
-                                "Remove both", danger = true,
-                            ) { state.removeWorktree(id, wt, removeBranch = true) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * What removing this worktree actually costs, in the order it matters: the folder goes, anything
- * uncommitted in it goes with it, and — the reassurance that stops this reading as "delete my
- * branch" — the branch itself stays. Each clause is conditional so the dialog only ever claims
- * what's true of *this* worktree.
- */
-private fun removeWorktreeDetail(
-    wt: Worktree,
-    tracked: Boolean,
-    alsoBranch: String? = null,
-): String = buildString {
-    // The dialog clamps to three lines, so this names the folder rather than spelling out its
-    // path — the full path is on the row the Remove button sits in, and an absolute path here
-    // would eat two of those lines and push the consequences off the bottom.
-    append("Deletes the folder “${wt.name}” and everything in it.")
-    if (wt.dirtyCount > 0) {
-        append(" ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} there will be lost.")
-    }
-    if (wt.locked) append(" It's locked — removing overrides that.")
-    // The reassurance flips into the extra consequence when the branch goes too; naming it as
-    // already-merged is what makes that safe to agree to at a glance.
-    if (alsoBranch != null) append(" The branch “$alsoBranch” is deleted too — it's already merged.")
-    else wt.branch?.let { append(" The branch “$it” is kept.") }
-    if (wt.isCurrent) append(" It's the checkout you're viewing, so this repo closes and stops being tracked.")
-    else if (tracked) append(" Its tracked entry here is removed too.")
 }
 
 @Composable
@@ -1316,12 +1350,6 @@ private fun RemoteBranchRow(
     }
 }
 
-@Composable
-private fun BranchBadge(label: String, color: Color, bg: Color) {
-    Pill(label, color, bg, fontSize = 10.5.sp, weight = FontWeight.SemiBold, radius = 10,
-        padding = androidx.compose.foundation.layout.PaddingValues(horizontal = 7.dp, vertical = 2.dp))
-}
-
 /**
  * A bordered action button inside a banner. Kept in pill form where the list rows dropped theirs:
  * a banner appears once, for one repo, and its buttons are the reason it's on screen — nothing
@@ -1338,31 +1366,21 @@ private fun BannerActionPill(label: String, onClick: () -> Unit) {
 }
 
 /**
- * The state a row is *expected* to be in — "up to date", "mainline", "linked", "tracked" — said in
- * plain muted text rather than a tinted pill.
+ * Open issues and pull requests from GitHub — the list itself.
  *
- * These labels are true of nearly every row in their list, so as pills they were a repeating
- * pattern rather than information, and the badges that do report something (merged, stale, behind,
- * missing, locked, agent) had to fight them for attention. Dropping them entirely would be worse:
- * "up to date" is an answer, and an empty space isn't. So they're kept, and de-emphasised.
- */
-@Composable
-private fun QuietBadge(label: String) {
-    Txt(label, 10.5.sp, Tokens.muted2, FontWeight.Medium)
-}
-
-/**
- * Open issues and pull requests from GitHub, and the controls governing them.
+ * A work zone, not a setting. What's waiting on you is the same kind of fact as what's uncommitted
+ * or what's sitting in another worktree, and it was the one such fact that had been filed away
+ * behind a disclosure alongside the knobs that govern it. The knobs stayed there; see
+ * [IssuesSettings].
  *
  * Only mounted for a remote that can actually be queried (see the call site). Within that, it
  * still renders when tracking is off or `gh` isn't usable — that's exactly when the user needs
  * telling *why* there are no counts, and each of those states is fixable. The distinction that
  * matters: "we can't read this" is worth saying, "this forge isn't supported" is not.
  *
- * The list is capped: this is a triage dashboard, and the "Issues"/"Pull Requests" buttons in
- * OPEN IN are one click away for the full picture.
+ * The list is capped: this is a triage dashboard, and the Issues/Pull Requests links in "Open in"
+ * are one click away for the full picture.
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun IssuesSection(state: AppState, rv: RepoView) {
     val tracked = state.issuesTracked(rv.repo)
@@ -1397,8 +1415,8 @@ private fun IssuesSection(state: AppState, rv: RepoView) {
         // empty section would read as "no open issues", which is a different and wrong fact.
         val blocker: String? = when {
             !tracked && state.issuesTrackedOverride(rv.id) == false ->
-                "Not tracked for this repo. Turn it on below to count open issues here."
-            !tracked -> "Issue tracking is off by default. Turn it on for this repo below."
+                "Not tracked for this repo. Turn it on under Settings to count open issues here."
+            !tracked -> "Issue tracking is off by default. Turn it on for this repo under Settings."
             state.githubStatus is GitHub.Status.Missing ->
                 "Needs the GitHub CLI. Install `gh` and run `gh auth login` — GitVantage reads " +
                     "issues through it, so it never has to hold a token of your own."
@@ -1448,12 +1466,31 @@ private fun IssuesSection(state: AppState, rv: RepoView) {
                 )
             }
         }
+    }
+}
 
-        // Tracking on/off for this repo, mirroring the stale threshold's preset/Default shape.
+/**
+ * How this repo's issue tracking behaves — whether to poll it at all, how loudly the results count,
+ * and which issues count.
+ *
+ * The settings half of the split. These are read once when a repo is added and then left alone, which
+ * is what a disclosure is for; the list they govern is checked daily, which is what a work zone is
+ * for. Keeping the two together meant one of them was always in the wrong place.
+ */
+@Composable
+private fun IssuesSettings(state: AppState, rv: RepoView) {
+    val tracked = state.issuesTracked(rv.repo)
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
-            Modifier.padding(top = 12.dp),
+            Modifier.padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            Txt("Track issues & pull requests", 12.5.sp, Tokens.text, FontWeight.Bold)
+            if (state.issuesTrackedOverride(rv.id) == null) Txt("· default", 11.sp, Tokens.muted2)
+        }
+        // Tracking on/off for this repo, mirroring the stale threshold's preset/Default shape.
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val override = state.issuesTrackedOverride(rv.id)
             PresetPill("Track", override == true, state.accent) { state.setIssuesTracked(rv.id, true) }
             PresetPill("Never", override == false, state.accent) { state.setIssuesTracked(rv.id, false) }
@@ -1492,7 +1529,7 @@ private fun IssuesSection(state: AppState, rv: RepoView) {
         }
 
         // The "only mine" filter is app-wide, but this is the only screen where its effect is
-        // visible, so it's reachable from here rather than buried in a settings dialog.
+        // visible, so it's reachable from here rather than buried in a preferences dialog.
         Row(
             Modifier.padding(top = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1694,23 +1731,20 @@ private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
     }
 }
 
+/**
+ * A plain-language outlook of the desktop notifications this repo will actually produce, each with
+ * its timing: the manual reminder, the aging/stale threshold crossings, and the opt-in upstream
+ * alert. Signals that never fire a notification (e.g. an already-stale badge) are shown as their own
+ * visuals elsewhere — they don't appear here, so every line here is a real pending alert.
+ *
+ * A work zone, not a setting, and the distinction is the whole reason it moved out of the Settings
+ * disclosure: every line is a *prediction about the next few hours* — "flags as aging in about 4
+ * hours", "reminder overdue, re-notifies in 20 minutes". That is news, and news behind a collapsed
+ * chevron is news nobody reads. What governs it — the thresholds, the upstream opt-in — stayed
+ * behind the chevron, because those are answered once.
+ */
 @Composable
-private fun PresetPill(label: String, on: Boolean, accent: Color, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
-    Box(
-        Modifier.clip(shape).background(if (on) Tokens.tintBlue else Tokens.surface, shape)
-            .border(1.dp, if (on) Tokens.accentBorder else Tokens.borderE2, shape)
-            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
-            .padding(horizontal = 10.dp, vertical = 3.dp),
-    ) { Txt(label, 11.5.sp, if (on) accent else Tokens.secondary, if (on) FontWeight.Bold else FontWeight.Medium) }
-}
-
-/** A plain-language outlook of the desktop notifications this repo will actually produce, each with
- *  its timing: the manual reminder, the aging/stale threshold crossings, and the opt-in upstream
- *  alert. Signals that never fire a notification (e.g. an already-stale badge) are shown as their
- *  own visuals elsewhere — they don't appear here, so every line here is a real pending alert. */
-@Composable
-private fun NotificationsSection(state: AppState, rv: RepoView) {
+private fun NotificationsOutlook(state: AppState, rv: RepoView) {
     val repo = rv.repo
     val now = System.currentTimeMillis()
     val paused = if (rv.snoozed) " (paused)" else ""
@@ -1767,16 +1801,11 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
                 add(Row_("◷", "Flags as stale in ${Meta.humanDuration(toStale)}, the last commit was about ${repo.last}$paused", Tokens.muted2, tip = staleTip))
             }
         }
-        // Upstream advance — opt-in per repo (default off), with an inline toggle.
-        if (repo.hasRemote && repo.upstream != null) {
-            if (state.notifyUpstreamEnabled(repo.id)) {
-                val behind = if (repo.behind > 0) " · behind ${repo.behind} now" else ""
-                add(Row_("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal,
-                    "Turn off" to { state.setNotifyUpstream(repo.id, false) }))
-            } else {
-                add(Row_("🔕", "Upstream-commit alerts off for this repo", Tokens.muted2,
-                    "Enable" to { state.setNotifyUpstream(repo.id, true) }))
-            }
+        // Upstream advance — opt-in per repo (default off). Stated, not toggled: the switch lives in
+        // Settings with the other choices, and this section's job is to say what will happen.
+        if (repo.hasRemote && repo.upstream != null && state.notifyUpstreamEnabled(repo.id)) {
+            val behind = if (repo.behind > 0) " · behind ${repo.behind} now" else ""
+            add(Row_("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal))
         }
     }
     if (rows.isEmpty()) return
@@ -1805,78 +1834,6 @@ private fun NotificationsSection(state: AppState, rv: RepoView) {
                             .padding(horizontal = 9.dp, vertical = 2.dp),
                     ) { Txt(label, 10.5.sp, Tokens.accent, FontWeight.SemiBold) }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotesSection(state: AppState, rv: RepoView) {
-    Column(Modifier.fillMaxWidth().padding(top = 22.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 16.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Txt("Working notes", 12.5.sp, Tokens.text, FontWeight.Bold)
-            Txt("— what's in progress / TODO", 11.sp, Tokens.muted2)
-            Spacer(Modifier.weight(1f))
-            if (state.noteOf(rv.id).isNotEmpty()) {
-                Txt("Clear", 11.5.sp, Tokens.redText, FontWeight.SemiBold,
-                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap { state.setNote(rv.id, "") })
-            }
-        }
-        val shape = RoundedCornerShape(8.dp)
-        Box(
-            Modifier.fillMaxWidth().heightIn(min = 62.dp).clip(shape).background(Tokens.panelFb)
-                .border(1.dp, Tokens.borderD8, shape).padding(10.dp),
-        ) {
-            // Keyed on the repo: selecting a different repo starts the field over rather than
-            // carrying this one's caret into the next one's note. No selectAllOnDoubleClick — see
-            // the commit-body field in Popups.kt for why multi-line prose is left alone.
-            val edit = rememberTextEdit(state.noteOf(rv.id), key = rv.id)
-            BasicTextField(
-                value = edit.value,
-                onValueChange = { edit.value = it; state.setNote(rv.id, it.text) },
-                textStyle = TextStyle(fontSize = 12.5.sp, color = Tokens.text2, fontFamily = UiFont),
-                cursorBrush = SolidColor(state.accent),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        // Reminder line
-        Row(
-            Modifier.padding(top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            val rem = rv.repo.reminder
-            if (rem != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Txt("◷ Reminder:", 12.sp, Tokens.muted)
-                    Txt(rem.text, 12.sp, Tokens.text2, FontWeight.SemiBold)
-                    Txt("· ${rem.due}", 12.sp, if (rem.overdue) Tokens.remOverdue else Tokens.remTeal, FontWeight.Bold)
-                    if (rem.overdue) {
-                        val next = state.nextReminderAt(rv.id)
-                        val delta = if (next != null) next - System.currentTimeMillis() else null
-                        val label = when {
-                            delta == null -> null
-                            delta <= 0 -> "· next reminder due now"
-                            else -> "· next reminder in ${Meta.compactDuration(delta)}"
-                        }
-                        if (label != null) Txt(label, 12.sp, Tokens.muted, FontWeight.Medium)
-                    }
-                }
-                Txt("Edit", 12.sp, state.accent, FontWeight.SemiBold,
-                    modifier = Modifier.onTap { state.popup = Popup.Remind(setOf(rv.id), rem.text, null) })
-                Txt("Clear", 12.sp, Tokens.redText, FontWeight.SemiBold,
-                    modifier = Modifier.onTap { state.clearReminder(setOf(rv.id)) })
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Txt("◷ Reminder:", 12.sp, Tokens.muted)
-                    Txt("none set", 12.sp, Tokens.text2, FontWeight.SemiBold)
-                }
-                Txt("+ Add reminder", 12.sp, state.accent, FontWeight.SemiBold,
-                    modifier = Modifier.onTap { state.popup = Popup.Remind(setOf(rv.id), "", null) })
             }
         }
     }

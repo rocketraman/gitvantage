@@ -123,10 +123,23 @@ private fun TableView(state: AppState, groups: List<RepoGroup>) {
             }
             group.repos.forEach { rv ->
                 item(key = "${group.name}-${rv.id}") { RepoRow(state, rv) }
+                // Sub-rows are separate list items rather than a Column inside the parent's row, so
+                // a repo with a dozen worktrees doesn't build a dozen rows' worth of layout to
+                // scroll past off-screen — the same reason the parents are items and not one Column.
+                if (state.worktreeRowsOpen(rv.id)) {
+                    rv.worktrees.forEach { wtv ->
+                        item(key = "${group.name}-${rv.id}-${wtv.path}") {
+                            WorktreeSubRow(state, rv, wtv, barWidth(state))
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+/** The row accent bar's width, which the sub-rows continue. */
+private fun barWidth(state: AppState) = if (state.emphasis == Emphasis.SUBTLE) 2f else 3f
 
 @Composable
 private fun GroupHeaderTable(group: RepoGroup) {
@@ -154,7 +167,7 @@ private fun RepoRow(state: AppState, rv: RepoView) {
         state.emphasis == Emphasis.LOUD && rv.attention -> rv.accentBg
         else -> Color.Transparent
     }
-    val barW = if (state.emphasis == Emphasis.SUBTLE) 2f else 3f
+    val barW = barWidth(state)
     Row(
         Modifier.fillMaxWidth()
             .background(rowBg)
@@ -178,7 +191,25 @@ private fun RepoRow(state: AppState, rv: RepoView) {
         // huge empty box — and the last-commit column is wide enough to never truncate.
         // Col 2 — name / branch / tags
         Column(Modifier.width(262.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Txt(rv.repo.name, 13.5.sp, Tokens.text, FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Txt(rv.repo.name, 13.5.sp, Tokens.text, FontWeight.Bold, modifier = Modifier.weight(1f, fill = false))
+                // Only where there is something to disclose. A chevron on every repo would promise a
+                // sub-list that most repos haven't got, and the badge beside it already says how many.
+                if (rv.worktrees.isNotEmpty()) {
+                    val open = state.worktreeRowsOpen(rv.id)
+                    HoverTip(
+                        if (open) "Hide this repo's worktrees." else "Show the ${rv.worktrees.size} " +
+                            "branch${if (rv.worktrees.size == 1) "" else "es"} this repo has checked " +
+                            "out in other folders.",
+                    ) {
+                        Txt(
+                            if (open) "▾" else "▸", 10.sp, Tokens.muted2,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
+                                .onTap { state.toggleWorktreeRows(rv.id) },
+                        )
+                    }
+                }
+            }
             Txt("⎇ ${rv.repo.branch}", 11.5.sp, Tokens.muted, font = MonoFont)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -293,6 +324,10 @@ private fun RepoCard(state: AppState, rv: RepoView) {
             // Badges (+ a "note" chip when the repo has a working note)
             val hasNote = state.noteOf(rv.id).isNotBlank()
             if (rv.badges.isNotEmpty() || hasNote) Badges(rv.badges, hasNote = hasNote)
+            // The branches checked out elsewhere. No disclosure here: a card has room for a few
+            // lines and the strip is the card's answer to what the table's sub-rows show, so hiding
+            // it behind a chevron would leave the card silent about work the table reports.
+            WorktreeStrip(state, rv)
             // Working note (live from the registry, so edits show without waiting for a rescan)
             val note = state.noteOf(rv.id)
             if (state.showNotes && note.isNotBlank()) {

@@ -3,8 +3,6 @@
 
 package com.gitvantage.model
 
-
-
 /**
  * Per-repo model (README § State Management). Tags are "namespace:value" strings.
  * Instances are produced by the git layer's RepoScanner from live `git` output,
@@ -47,10 +45,21 @@ data class Repo(
     val hasWorkflows: Boolean = false,  // repo defines .github/workflows (enables the Actions link)
     val hasSubmodules: Boolean = false,
     val superproject: String? = null,   // parent working-tree path if this repo is itself a submodule
-    val worktreeCount: Int = 0,         // working trees sharing this repository (main + linked, excluding a bare main)
     val isWorktree: Boolean = false,    // this checkout is a linked worktree, not the main one
     val worktreeMain: String? = null,   // the main working tree's path, when this is a linked worktree
-    val worktreesUnlanded: Int = 0,     // *other* working trees holding uncommitted or unmerged work
+    /**
+     * The linked working trees attached to this repository — every tree but this one, and never a
+     * bare main repo, which has no files to report on.
+     *
+     * Carried on the repo rather than fetched per-surface because worktrees are no longer tracked
+     * repos of their own: they are sub-rows of this one in the table, a strip on its card, and cards
+     * in its detail pane, and all three read the same list. The scan already had it — the git
+     * layer's worktree lister builds it to derive [worktreesUnlanded] — so this costs it nothing.
+     *
+     * Missing the per-tree "has its branch landed" flag, which needs a merge-base each and stays
+     * with the detail panel's own load.
+     */
+    val worktrees: List<Worktree> = emptyList(),
     /**
      * Absolute paths of the *other* working trees that live inside this checkout's folder — a
      * coding session's `.claude/worktrees/<slug>`, or any worktree added under the repo by hand.
@@ -75,14 +84,6 @@ data class Repo(
     val files: List<ChangedFile> = emptyList(),
     val stashes: List<Stash> = emptyList(),
 ) {
-    /**
-     * True when this checkout shares its repository with other working trees — either it *is* a
-     * linked worktree, or it's the checkout others were added from. Written this way rather than
-     * `worktreeCount > 1` so a bare main repo with a single linked worktree still counts: the
-     * bare one isn't a working tree, so the count there is 1.
-     */
-    val hasWorktrees get() = isWorktree || worktreeCount > 1
-
     /**
      * True when [branch] is an actual branch name rather than a stand-in — "(detached)" for a
      * detached HEAD, "—" for a folder that isn't a git repo. Those read fine as labels but are

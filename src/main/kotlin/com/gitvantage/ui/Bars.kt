@@ -52,6 +52,9 @@ fun Segmented(
     active: String,
     onSelect: (String) -> Unit,
     tips: Map<String, String> = emptyMap(),   // optional per-option hover explanation
+    // Toolbar size by default. Smaller where the control sits inside a list item rather than above
+    // the list — a worktree card's Changes|Log switch is part of that card, not a page control.
+    fontSize: androidx.compose.ui.unit.TextUnit = 12.5.sp,
 ) {
     Row(
         Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.segTrack).padding(3.dp),
@@ -65,7 +68,7 @@ fun Segmented(
             val option: @Composable () -> Unit = {
                 Box(m.onTap { onSelect(key) }.padding(horizontal = 11.dp, vertical = 4.dp)) {
                     Txt(
-                        label, 12.5.sp,
+                        label, fontSize,
                         if (on) Tokens.text else Tokens.secondary,
                         if (on) FontWeight.Bold else FontWeight.SemiBold,
                     )
@@ -276,7 +279,7 @@ fun StatusBar(state: AppState) {
         Triple("ghopen", "Open Issues", "Repos with open issues or pull requests on GitHub. Informational — every healthy project has some."),
         Triple("ghawaiting", "Awaiting You", "Repos with an open issue or PR waiting on your response: your review is requested, you're assigned, the last comment mentions you, or someone replied on a thread you opened."),
         Triple("stashes", "Stashes", "Repos holding at least one stash."),
-        Triple("worktrees", "Worktrees", "Repos sharing a repository with another working tree — either a linked worktree of their own, or a linked worktree themselves."),
+        Triple("worktrees", "Worktrees", "Repos with a branch checked out in another folder. Counts the repos, not the worktrees — and expands each one's worktree rows while the filter is on."),
         Triple("reminders", "Reminders", "Repos with a reminder set."),
         Triple("notes", "Notes", "Repos with a non-empty working note."),
         Triple("snoozed", "Snoozed", "Repos whose alerts are currently silenced."),

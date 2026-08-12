@@ -3,7 +3,7 @@
 
 package com.gitvantage.git
 
-import com.gitvantage.git.model.Worktree
+import com.gitvantage.model.Worktree
 import de.infix.testBalloon.framework.core.testSuite
 import java.io.File
 
@@ -106,6 +106,74 @@ val WorktreeOperations by testSuite {
             assert(!one.exists())
             assert(two.isDirectory)
             assert(File(work, ".claude/worktrees").isDirectory)
+        }
+
+        // ---- what the list surfaces read off each tree ----
+
+        test("listWithWork fills in each other tree's work, last commit and landed-ness") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "unlanded\n", "work only on side")
+            File(tree, "a.txt").appendText("uncommitted\n")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.branch == "side")
+            assert(side.dirtyCount == 1) { "got ${side.dirtyCount}" }
+            assert(side.unmerged == 1) { "got ${side.unmerged}" }
+            assert(side.unlanded)
+            // The row's right-hand column and the strip's "2h" both come off this read, so the scan
+            // path has to fill it — not just the detail panel's load.
+            assert(side.lastRelative.isNotEmpty())
+            assert(side.lastAuthor == "Test") { "got ${side.lastAuthor}" }
+            assert(side.lastEpoch != null && side.lastEpoch > 0)
+            // Its own commit isn't in main, so the branch hasn't landed.
+            assert(!side.branchMerged)
+        }
+
+        test("a branch already contained in mainline reads as merged on the scan path") {
+            val work = repo()
+            val tree = File(root, "wt")
+            // No commits of its own, so main already contains everything on it.
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            // Gates the "merged" badge and whether "Remove + branch" is offered at all, both of which
+            // the table's sub-rows show — so it cannot be a detail-panel-only field.
+            assert(side.branchMerged)
+            assert(!side.unlanded)
+        }
+
+        test("changes lists modified and untracked files, with a diffstat for the tracked ones") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            File(tree, "a.txt").writeText("one\ntwo\nthree\n")   // was "one\n": +2 lines
+            File(tree, "new.txt").writeText("fresh\n")
+
+            val changes = WorktreeOps.changes(tree.path).associateBy { it.path }
+
+            assert(changes.size == 2) { "got ${changes.keys}" }
+            val modified = changes.getValue("a.txt")
+            assert(!modified.untracked)
+            assert(modified.added == 2) { "got +${modified.added}" }
+            assert(modified.deleted == 0) { "got -${modified.deleted}" }
+            // An untracked file has nothing to diff against, so it carries no counts — the row says
+            // "untracked" rather than claiming "+0 −0".
+            val untracked = changes.getValue("new.txt")
+            assert(untracked.untracked)
+            assert(untracked.added == 0 && untracked.deleted == 0)
+        }
+
+        test("changes on a clean worktree is empty, and on a path that isn't one it doesn't throw") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+
+            assert(WorktreeOps.changes(tree.path).isEmpty())
+            assert(WorktreeOps.changes(File(root, "not-a-worktree").path).isEmpty())
         }
 
         test("prune drops the administrative entry for a directory that is gone") {

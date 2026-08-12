@@ -47,6 +47,17 @@ data class RegistryEntry(
     // list is a real answer — "hide nothing here" — and is why this is nullable rather than
     // defaulting to the list: the two need to be tellable apart.
     val hideBranchPatterns: List<String>? = null,
+    // Per-worktree alert overrides and snoozes, keyed by the worktree's absolute path. Lives on the
+    // parent's entry because a worktree has no entry of its own: it is a branch this repository has
+    // checked out somewhere else, not a repository. Entries are dropped when they go back to
+    // all-inherit (see [WorktreeAlerts.isDefault]), so a repo whose worktrees were never touched
+    // stores nothing at all — and a worktree that is removed takes its overrides with it only when
+    // the user says so, which is what makes moving one in the list non-destructive.
+    val worktreeAlerts: Map<String, WorktreeAlerts> = emptyMap(),
+    // Whether this repo's worktree sub-rows are showing in the table view. Persisted per repo
+    // because it's a statement about this project ("I'm working across three branches here"), not a
+    // transient peek like "Show hidden branches".
+    val worktreesExpanded: Boolean = false,
     val snoozeUntilEpoch: Long? = null,
     val reminderText: String = "",
     val reminderDueEpoch: Long? = null,
@@ -87,4 +98,8 @@ data class Settings(
     // Count only issues/PRs you're involved in — you opened it, you're assigned, your review is
     // requested, or the last comment mentions you. Off = every open issue in the repo counts.
     val githubMineOnly: Boolean = false,
+    // Whether the detail pane's Settings disclosure is open. App-wide rather than per repo: it's a
+    // statement about how you use the pane, not about any one project, and having it remember per
+    // repo would mean the pane's length changed as you arrowed down the list.
+    val settingsExpanded: Boolean = false,
 )

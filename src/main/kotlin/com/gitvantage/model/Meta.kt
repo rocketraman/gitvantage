@@ -119,9 +119,19 @@ object Meta {
     fun humanAgo(ms: Long): String = "${humanDuration(ms)} ago"
 
     /** (isSnoozed, humanLabel) — label is a compact "for how long", or "indefinitely". */
-    fun snoozeState(entry: RegistryEntry, now: Long): Pair<Boolean, String?> {
-        val until = entry.snoozeUntilEpoch ?: return false to null
-        if (until <= now) return false to null
+    fun snoozeState(entry: RegistryEntry, now: Long): Pair<Boolean, String?> =
+        snoozeState(entry.snoozeUntilEpoch, now)
+
+    /**
+     * The same answer for a snooze held anywhere else — today, a single worktree's
+     * ([WorktreeAlerts.snoozeUntilEpoch]).
+     *
+     * Shared rather than reimplemented because the expiry rule is the part worth having once: a
+     * snooze whose deadline has passed is *not* snoozed, and a worktree that resolved that
+     * differently from its repo would show a purple "snoozed" banner over live alerts.
+     */
+    fun snoozeState(until: Long?, now: Long): Pair<Boolean, String?> {
+        if (until == null || until <= now) return false to null
         if (until == SNOOZE_FOREVER) return true to "until resumed"
         return true to compactDuration(until - now)
     }

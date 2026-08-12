@@ -633,6 +633,15 @@ object Tokens {
 
     val ansi: List<Color> get() = Theme.palette.ansi
     val noteChip: NsPalette get() = Theme.palette.noteChip
+
+    /**
+     * The indigo worktrees wear everywhere — the count badge on a repo row, the `⑂ WORKTREES · 2`
+     * strip header, the "N customized" chip in the pane.
+     *
+     * Read from the status-filter palette rather than duplicated as its own token, so a worktree
+     * badge and the Worktrees filter chip that selects it can never drift to different colours.
+     */
+    val worktreeChip: NsPalette get() = statusPalette("worktrees")
 }
 
 /** A namespace's (color, tint, border) triple used for tag chips and headings. */

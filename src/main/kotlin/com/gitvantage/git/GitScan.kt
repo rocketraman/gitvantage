@@ -130,9 +130,6 @@ object RepoScanner {
         val worktrees = WorktreeOps.listWithWork(id)
         val currentTree = worktrees.firstOrNull { it.isCurrent }
         val isWorktree = currentTree != null && !currentTree.isMain
-        // A bare main repo isn't a working tree, so it doesn't count towards "how many checkouts".
-        val worktreeCount = worktrees.count { !it.bare }
-        val worktreesUnlanded = worktrees.count { !it.isCurrent && !it.bare && !it.missing && it.unlanded }
         val worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null
         // The other working trees that sit *inside* this one's folder. Only these are ambiguous to
         // the filesystem watcher: a worktree elsewhere on disk is outside the watch root and can't
@@ -182,9 +179,13 @@ object RepoScanner {
             hasSubmodules = File(dir, ".gitmodules").exists(),
             superproject = Git.readOrNull(dir, "rev-parse", "--show-superproject-working-tree")
                 ?.trim()?.takeIf { it.isNotEmpty() },
-            worktreeCount = worktreeCount, isWorktree = isWorktree,
+            isWorktree = isWorktree,
             worktreeMain = worktreeMain,
-            worktreesUnlanded = worktreesUnlanded,
+            // The list the row's sub-rows, the card's strip and the pane's cards all render. This
+            // checkout is left out on purpose: it is the row they hang under, and a tree that
+            // appeared as its own sub-row is exactly the duplication this redesign removes. A bare
+            // main repo goes too — there are no files in it to report on.
+            worktrees = worktrees.filter { !it.isCurrent && !it.bare },
             nestedWorktrees = nestedWorktrees,
             warning = warning, stale = isStale, staleDays = staleDays,
             staleImportant = entry.staleImportant,

@@ -9,6 +9,9 @@ import com.gitvantage.git.model.Commit
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Repo
+import com.gitvantage.model.Worktree
+import com.gitvantage.model.WorktreeAlert
+import com.gitvantage.model.WorktreeAlerts
 
 /**
  * Derived, presentation-ready values. Mirrors the reference component's `view(r)`
@@ -84,6 +87,74 @@ data class GhSummary(
 enum class Emphasis { SUBTLE, MEDIUM, LOUD }
 enum class ViewMode { TABLE, CARDS }
 
+/**
+ * One of a repo's linked worktrees, resolved for display: the git facts plus the answer to "will
+ * this worktree's problems reach the parent row".
+ *
+ * Assembled by [AppState] rather than derived here from [Repo] alone, for the same reason
+ * [GhSummary] is: the override that decides [effective] lives in the registry, which the scanner
+ * neither reads nor preserves.
+ *
+ * [parentAlertsOn] is one flag for all three alerts because at the repo level they *are* one flag —
+ * a repo either has alerts running or is snoozed. That's what makes "Inherit · on" readable without
+ * opening anything: there is a single parent answer to inherit.
+ */
+data class WorktreeView(
+    val wt: Worktree,
+    val repoId: String,
+    val alerts: WorktreeAlerts,
+    /** This worktree's own snooze, independent of the parent's. */
+    val snoozed: Boolean,
+    val snoozedFor: String?,
+    /** Whether the parent checkout's alerts are running — what an inheriting alert resolves to. */
+    val parentAlertsOn: Boolean,
+) {
+    val path get() = wt.path
+    val branch get() = wt.branch
+
+    /** The branch name is this row's identity; a detached worktree has only its folder to go on. */
+    val label: String get() = wt.branch ?: if (wt.bare) wt.name else "${wt.name} (detached)"
+
+    /** Whether [alert] fires for this worktree, after its own snooze, its override, and the parent. */
+    fun effective(alert: WorktreeAlert): Boolean = when {
+        snoozed -> false
+        else -> alerts[alert] ?: parentAlertsOn
+    }
+
+    /** Answers for itself on something — the ⚙ beside its ☾ chip on every surface. */
+    val overridden: Boolean get() = alerts.overridden.isNotEmpty() || snoozed
+
+    /**
+     * Whether this worktree's unlanded work pulls the parent row into Attention.
+     *
+     * The one worktree fact that escapes its own row, and the reason the override exists: a folder
+     * holding work git would delete with it is the parent's problem too, right up until the user
+     * says "not this one".
+     */
+    val rollsUp: Boolean get() = wt.unlanded && effective(WorktreeAlert.UNLANDED)
+
+    /** Dot colour on the sub-row and the card strip: red gone, amber holding work, green clean. */
+    val accent: Color get() = when {
+        wt.missing -> Tokens.red
+        wt.unlanded -> Tokens.amber
+        else -> Tokens.green
+    }
+
+    /** "↑2 vs main" — how far ahead of the ref its unmerged count was measured against. */
+    val vsMainline: String? get() =
+        if (wt.unmerged > 0 && !wt.branchMerged) "↑${wt.unmerged} vs ${wt.mainline?.substringAfterLast('/') ?: "mainline"}"
+        else null
+
+    /** What the ⚙ tooltip spells out: which alerts this worktree answers for itself. */
+    fun overrideSummary(repoName: String): String {
+        val parts = alerts.overridden.map { "${it.label.lowercase()}: ${if (alerts[it] == true) "on" else "off"}" }
+        val snooze = snoozedFor?.let { "snoozed $it" }
+        val all = (listOfNotNull(snooze) + parts).joinToString(" · ")
+        return if (all.isEmpty()) "Inherits everything from $repoName."
+        else "$all · everything else follows $repoName"
+    }
+}
+
 /** Fully-derived view of one repo, ready to render. */
 data class RepoView(
     val repo: Repo,
@@ -107,6 +178,8 @@ data class RepoView(
     val primary: Primary?,   // contextual Commit / Push
     val gh: GhSummary? = null,        // open GitHub issues/PRs, null when not tracked
     val issueLevel: IssueLevel = IssueLevel.NONE,   // gh's level, forced to NONE while snoozed
+    /** This repo's linked worktrees, alert overrides already resolved. Empty for nearly every repo. */
+    val worktrees: List<WorktreeView> = emptyList(),
 ) {
     val id get() = repo.id
     val changed get() = repo.staged + repo.unstaged + repo.untracked
@@ -119,12 +192,24 @@ data class RepoView(
      * this) wherever the real number should still be shown, e.g. the detail panel.
      */
     val openIssues get() = if (snoozed) 0 else (gh?.open ?: 0)
+
+    /**
+     * Worktrees whose unlanded work reaches this row — the effective count, not the scanned one.
+     * [Repo.worktreesUnlanded] counts folders; this counts the ones still allowed to speak up.
+     */
+    val worktreesUnlanded get() = worktrees.count { it.rollsUp }
 }
 
 /** Contextual primary action pill. */
 data class Primary(val label: String, val bg: Color, val color: Color, val border: Color)
 
-fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = null): RepoView {
+fun deriveView(
+    repo: Repo,
+    accent: Color,
+    tags: List<String>,
+    gh: GhSummary? = null,
+    worktrees: List<WorktreeView> = emptyList(),
+): RepoView {
     val C = Tokens
     val staged = repo.staged; val unstaged = repo.unstaged; val untracked = repo.untracked; val stash = repo.stash
     val changed = staged + unstaged + untracked
@@ -138,6 +223,10 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
     // Open issues/PRs contribute to the row's color, but a snooze silences them like every other
     // signal — the counts stay visible in the detail panel, they just stop shouting from the list.
     val issueLevel = if (snoozed) IssueLevel.NONE else (gh?.level ?: IssueLevel.NONE)
+    // Worktrees still holding work that's allowed to reach this row — see [WorktreeView.rollsUp].
+    // Counted here rather than taken from [Repo.worktreesUnlanded] because the scanner can't know
+    // which of them the user has silenced.
+    val unlandedTrees = worktrees.count { it.rollsUp }
 
     val badges = buildList {
         if (staged > 0) add(Badge("$staged staged", C.green, C.tintGreen))
@@ -154,21 +243,23 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
             else add(Badge("stale", accent, C.tintBlue))
         }
         if (aging) add(Badge("aging ${repo.dirtyFor ?: ""}".trim(), C.amber, C.tintAmber))
-        // Working trees. Informational (blue), never part of the accent cascade — extra checkouts
-        // are a workflow, not a problem. A linked worktree says so instead of showing the count:
-        // "you are not on the main checkout" is the fact that changes how you read the row, and
-        // the detail panel carries the full list either way.
-        if (repo.isWorktree) add(Badge("⑂ worktree", accent, C.tintBlue))
-        else if (repo.worktreeCount > 1) add(Badge("⑂ ${repo.worktreeCount} worktrees", accent, C.tintBlue))
+        // Working trees. Structural information, never part of the accent cascade — extra checkouts
+        // are a workflow, not a problem — so this wears the indigo the Worktrees filter chip does
+        // rather than the accent blue, which is spoken for by "behind" and "open issues". A linked
+        // worktree says so instead of showing the count: "you are not on the main checkout" is the
+        // fact that changes how you read the row.
+        val wtPalette = C.worktreeChip
+        if (repo.isWorktree) add(Badge("⑂ worktree", wtPalette.c, wtPalette.t))
+        else if (worktrees.isNotEmpty()) {
+            add(Badge("⑂ ${worktrees.size} ${if (worktrees.size == 1) "worktree" else "worktrees"}", wtPalette.c, wtPalette.t))
+        }
         // The exception to "worktrees are workflow, not a problem": another checkout holding
         // uncommitted or unmerged work. That work is invisible from this row's changed-file counts
         // and a `worktree remove` would take it with it, so it gets its own amber badge rather than
-        // recolouring the blue count — "2 worktrees" and "1 of them has work in it" are different
+        // recolouring the indigo count — "2 worktrees" and "1 of them has work in it" are different
         // facts, the same way the issue count and "awaiting you" are kept apart above. It stays
         // visible while snoozed; only its pull on the row's colour is silenced.
-        if (repo.worktreesUnlanded > 0) {
-            add(Badge("⑂ ${repo.worktreesUnlanded} unlanded", C.amber, C.tintAmber))
-        }
+        if (unlandedTrees > 0) add(Badge("⑂ $unlandedTrees unlanded", C.amber, C.tintAmber))
         // Open issues/PRs. Two badges at most: the count (always, when tracked) and — when some
         // are waiting on you — a separate louder one, because "12 open" and "1 of them needs you"
         // are different facts and collapsing them into one number hides the actionable half.
@@ -227,7 +318,7 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
         // sitting on this machine — even though it isn't sitting in *this* folder. Snoozing drops
         // it out, like every other call to action.
         isDirty || repo.ahead > 0 || staleImportant ||
-            (repo.worktreesUnlanded > 0 && !snoozed) ||
+            (unlandedTrees > 0 && !snoozed) ||
             issueLevel == IssueLevel.IMPORTANT -> { acc = C.amber; accBg = C.tintAmber }
         repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = C.tintBlue }
         else -> { acc = C.green; accBg = C.tintGreen }
@@ -257,8 +348,13 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
 
     // Open issues alone aren't "attention" — a healthy repo always has some. Only the ones
     // actually waiting on you are, which is what everything above IssueLevel.INFO means.
+    // Unlanded work in a linked worktree is attention for the same reason aging is: something is
+    // sitting on this machine that a `worktree remove` would take with it, and the parent row is the
+    // only place it can be said. A worktree whose Unlanded-work alert is Off has already dropped out
+    // of [unlandedTrees], so silencing one silences its pull here too.
     val attention = (
         repo.warning != null || repo.stale || (repo.ahead > 0 && !isDirty) || aging ||
+            unlandedTrees > 0 ||
             issueLevel == IssueLevel.IMPORTANT || issueLevel == IssueLevel.CRITICAL
         ) && !snoozed
 
@@ -284,6 +380,7 @@ fun deriveView(repo: Repo, accent: Color, tags: List<String>, gh: GhSummary? = n
         primary = primary,
         gh = gh,
         issueLevel = issueLevel,
+        worktrees = worktrees,
     )
 }
 

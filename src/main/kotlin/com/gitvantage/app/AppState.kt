@@ -24,7 +24,6 @@ import com.gitvantage.git.model.Commit
 import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
-import com.gitvantage.git.model.Worktree
 import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
 import com.gitvantage.model.RegistryEntry
@@ -33,6 +32,10 @@ import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
 import com.gitvantage.model.Stash
 import com.gitvantage.model.WatchPolicy
+import com.gitvantage.model.Worktree
+import com.gitvantage.model.WorktreeAlert
+import com.gitvantage.model.WorktreeAlerts
+import com.gitvantage.model.WorktreeChange
 import dev.nucleusframework.fswatcher.FsWatchEvent
 import dev.nucleusframework.fswatcher.FsWatchRegistration
 import dev.nucleusframework.fswatcher.FsWatcher
@@ -61,7 +64,30 @@ sealed interface Popup {
     data class Untag(override val ids: Set<String>) : Popup
     data class Snooze(override val ids: Set<String>) : Popup
     data class Remind(override val ids: Set<String>, val text: String, val due: Long?) : Popup
+
+    /**
+     * The working-note editor for one repo.
+     *
+     * A dialog now rather than a text area mounted permanently in the detail pane. The pane shows
+     * what the note *says* in one line, which is what it's read for; a multi-line editor is what it
+     * needs when you're actually writing one, and a dialog is where there's room for that.
+     */
+    data class Note(val id: String) : Popup { override val ids: Set<String> = setOf(id) }
     data class Commit(val id: String) : Popup { override val ids: Set<String> = setOf(id) }
+
+    /**
+     * Commit inside one of [repoId]'s linked worktrees. Carries the worktree's path and the branch
+     * it holds because there is no [Repo] to look either up on — that is the point of the redesign,
+     * and the dialog needs the same two facts a repo commit reads off its row.
+     */
+    data class CommitWorktree(val repoId: String, val path: String, val branch: String) : Popup {
+        override val ids: Set<String> = setOf(repoId)
+    }
+
+    /** Snooze one worktree's alerts, from its Alerts popover. Same duration menu as [Snooze]. */
+    data class SnoozeWorktree(val repoId: String, val path: String, val label: String) : Popup {
+        override val ids: Set<String> = setOf(repoId)
+    }
     /** The appearance picker (Match system / Light / Dark). App-wide, so it owns no repos. */
     data object Appearance : Popup { override val ids: Set<String> = emptySet() }
     data class Confirm(
@@ -73,11 +99,11 @@ sealed interface Popup {
 }
 
 /**
- * Marks a repo that's a linked worktree of another. Stored namespaced because [AppState.addTag]
- * normalizes a bare tag the same way, so this is byte-identical to typing "worktree" into "+ Tag"
- * — it filters, groups, and renders as the plain chip "worktree", with no second class of tag.
+ * The marker the old model stamped on a worktree tracked as a repo of its own, kept only so
+ * [AppState.foldTrackedWorktrees] can strip it on upgrade. Nothing writes it any more: a worktree
+ * isn't a repo, so there is no row left for it to label.
  */
-const val WORKTREE_TAG = "tag:worktree"
+private const val LEGACY_WORKTREE_TAG = "tag:worktree"
 
 /**
  * How long a coalesced registry write waits (see [AppState.persistDebounced]). Long enough that
@@ -640,6 +666,99 @@ class AppState(private val scope: CoroutineScope) {
         persist()
     }
 
+    // ---- worktree alerts and disclosure --------------------------------------------------
+
+    /**
+     * One worktree's overrides, from its parent's registry entry. An absent key is all-inherit, so a
+     * repo whose worktrees were never touched — nearly every repo — answers from a default instance
+     * without storing anything.
+     */
+    fun worktreeAlerts(repoId: String, path: String): WorktreeAlerts =
+        entries[repoId]?.worktreeAlerts?.get(path) ?: WorktreeAlerts()
+
+    /**
+     * Store (or drop) one worktree's overrides.
+     *
+     * An entry that has gone back to all-inherit is removed rather than written as an empty object,
+     * for the same reason [setHideBranchPatterns] collapses a list matching the defaults: otherwise
+     * setting an override and clearing it again leaves the worktree permanently marked as
+     * customised, still wearing its ⚙ and still offering "Reset to inherit".
+     */
+    private fun setWorktreeAlerts(repoId: String, path: String, alerts: WorktreeAlerts) {
+        val e = entries[repoId] ?: return
+        entries[repoId] = e.copy(
+            worktreeAlerts = if (alerts.isDefault) e.worktreeAlerts - path else e.worktreeAlerts + (path to alerts),
+        )
+        persist()
+    }
+
+    /** Set one alert to On (true), Off (false) or Inherit (null) for one worktree. */
+    fun setWorktreeAlert(repoId: String, path: String, alert: WorktreeAlert, value: Boolean?) =
+        setWorktreeAlerts(repoId, path, worktreeAlerts(repoId, path).with(alert, value))
+
+    /**
+     * Drop every alert override on one worktree, leaving its own snooze alone.
+     *
+     * The snooze survives deliberately: it has its own control (the banner's "Resume now") and its
+     * own meaning — "quiet for two days" is a different statement from "answer for yourself", and a
+     * Reset that silently un-snoozed would fire the alerts the user had just asked to stop.
+     */
+    fun resetWorktreeAlerts(repoId: String, path: String) =
+        setWorktreeAlerts(repoId, path, worktreeAlerts(repoId, path).copy(aging = null, unlanded = null, reminders = null))
+
+    /** Snooze (or resume, with null) one worktree's alerts, leaving the rest of the repo running. */
+    fun setWorktreeSnooze(repoId: String, path: String, until: Long?) {
+        setWorktreeAlerts(repoId, path, worktreeAlerts(repoId, path).copy(snoozeUntilEpoch = until))
+        toast(if (until == null) "Resumed ${File(path).name}" else "Snoozed ${File(path).name}")
+    }
+
+    /**
+     * Whether a repo's worktree sub-rows are showing in the table.
+     *
+     * The Worktrees filter forces them open without touching the stored choice: the filter is a
+     * question ("show me what's checked out elsewhere") and answering it by rewriting every matching
+     * repo's preference would leave the list permanently expanded once the filter was cleared.
+     */
+    fun worktreeRowsOpen(id: String): Boolean =
+        status == "worktrees" || entries[id]?.worktreesExpanded == true
+
+    fun toggleWorktreeRows(id: String) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(worktreesExpanded = !worktreeRowsOpen(id))
+        persist()
+    }
+
+    /** Whether the detail pane's Settings disclosure is open (remembered app-wide). */
+    var settingsExpanded by mutableStateOf(Registry.settings().settingsExpanded)
+        private set
+
+    fun toggleSettingsExpanded() {
+        settingsExpanded = !settingsExpanded
+        Registry.saveSettings(Registry.settings().copy(settingsExpanded = settingsExpanded))
+    }
+
+    /**
+     * How many of a repo's settings differ from their defaults — the "N customized" chip on the
+     * collapsed Settings row.
+     *
+     * Counts the settings the disclosure actually contains, so the number and what's behind the
+     * chevron can't disagree. A snooze deliberately doesn't count — it isn't in there any more: it's
+     * a button in the action row that says how long it's silenced for, and its own banner underneath.
+     * Counting it here would put a number on the chip with nothing behind the chevron to explain it.
+     */
+    fun customizedSettings(id: String): Int {
+        val e = entries[id] ?: return 0
+        return listOf(
+            e.staleThresholdDays != null,
+            e.staleImportant,
+            e.issuesTracked != null,
+            e.issuesImportant,
+            e.hideBranchPatterns != null,
+            e.notifyUpstream,
+            e.worktreeAlerts.isNotEmpty(),
+        ).count { it }
+    }
+
     // ---- GitHub issues / PRs -------------------------------------------------------------
 
     /** This repo's own "track open issues" choice, or null when it follows the global default. */
@@ -865,6 +984,8 @@ class AppState(private val scope: CoroutineScope) {
                 val ordered = order.mapNotNull { results[it] }
                 repos.clear()
                 repos.addAll(ordered)
+                // Needs a completed scan to know which entries are worktrees of which; runs once.
+                foldTrackedWorktrees()
                 // Before notifyUpstreamAdvances moves the prevBehind baseline it compares against.
                 if (fetch) stampFetched(ordered, System.currentTimeMillis())
                 notifyUpstreamAdvances(ordered)
@@ -1361,35 +1482,143 @@ class AppState(private val scope: CoroutineScope) {
      * `git worktree remove` — delete a worktree's folder from disk. Destructive; the detail panel
      * confirms first, spelling out any uncommitted work that goes with it.
      *
-     * Removing the worktree you're *viewing* is allowed: the command just has to run from a
-     * different working tree, and afterwards this repo's own entry points at a folder that no
-     * longer exists, so it's untracked too (registry-only — nothing else on disk is touched).
+     * Always runs from the parent checkout — [id] — because a worktree is never the repo being
+     * viewed any more: the lists it appears in are the parent's sub-rows and cards, and git refuses
+     * to delete the directory it is standing in.
      *
      * [removeBranch] also deletes the branch it held — offered only for an agent worktree whose
      * branch has already landed, where the branch is leftover bookkeeping rather than work.
      */
     fun removeWorktree(id: String, wt: Worktree, removeBranch: Boolean = false) {
         if (worktreesBusy) return
-        val runFrom = if (!wt.isCurrent) id
-        else worktrees.firstOrNull { !it.isCurrent && !it.missing }?.path
-        if (runFrom == null) { toast("No other working tree to run the removal from"); return }
-        val trackedId = trackedRepoAt(wt.path)
         worktreesBusy = true
         scope.launch {
             val r = withContext(Dispatchers.IO) {
                 WorktreeOps.remove(
-                    runFrom, wt.path, force = wt.dirtyCount > 0, locked = wt.locked,
+                    id, wt.path, force = wt.dirtyCount > 0, locked = wt.locked,
                     alsoBranch = wt.branch?.takeIf { removeBranch },
                 )
             }
             toast(r.message)
-            if (r.ok) trackedId?.let { removeRepo(it) }
-            // Refresh whichever tracked repo the removal ran from — its worktree count just changed.
-            trackedRepoAt(runFrom)?.let { other ->
-                reloadWorktrees(other)
-                rescanRepos(listOf(other), fetch = false)
+            if (r.ok) {
+                if (wtExpanded == wt.path) { wtExpanded = null; wtChanges = emptyList(); wtCommits = emptyList() }
+                // The overrides were keyed on a folder that no longer exists, so they can never match
+                // again — kept, they would silently apply to a future worktree that happened to be
+                // created at the same path. Deliberately not done when a worktree merely moves in the
+                // list, which is the case the path key exists to survive.
+                entries[id]?.let { e ->
+                    if (wt.path in e.worktreeAlerts) entries[id] = e.copy(worktreeAlerts = e.worktreeAlerts - wt.path)
+                }
             }
+            // The parent's worktree count and unlanded roll-up both just changed.
+            reloadWorktrees(id)
+            rescanRepos(listOf(id), fetch = false)
             worktreesBusy = false
+        }
+    }
+
+    // ---- one worktree's own contents (all reads run `git -C <worktree-path>`) ----
+
+    /** Which worktree card is expanded in the detail pane, by path; null when all are collapsed. */
+    var wtExpanded by mutableStateOf<String?>(null)
+        private set
+
+    /** Which tab that card is showing — "changes" or "log". Remembered across cards on purpose:
+     *  someone comparing two worktrees is asking the same question of both. */
+    var wtTab by mutableStateOf("changes")
+        private set
+
+    var wtChanges by mutableStateOf<List<WorktreeChange>>(emptyList())
+        private set
+    var wtCommits by mutableStateOf<List<Commit>>(emptyList())
+        private set
+    var wtLoading by mutableStateOf(false)
+        private set
+
+    /**
+     * Expand one worktree card (or collapse it, if it was the open one) and load the active tab.
+     *
+     * One at a time. Each body is a pair of git reads inside another checkout, and a section that
+     * opened every card at once would run them for every worktree the repo has before the user had
+     * said which one they were asking about.
+     */
+    fun toggleWorktreeCard(path: String) {
+        if (wtExpanded == path) { wtExpanded = null; wtChanges = emptyList(); wtCommits = emptyList(); return }
+        wtExpanded = path
+        loadWorktreeBody(path)
+    }
+
+    /** Switch the open card between Changes and Log, loading the side that hasn't been read yet. */
+    fun setWorktreeTab(tab: String) {
+        if (wtTab == tab) return
+        wtTab = tab
+        wtExpanded?.let { loadWorktreeBody(it) }
+    }
+
+    /**
+     * Read the open tab's contents for [path].
+     *
+     * Guarded on [wtExpanded] still being [path] when the results land: the reads are subprocesses
+     * in another directory, and collapsing a card or opening a different one mid-read would
+     * otherwise drop the first worktree's files into the second one's body.
+     */
+    private fun loadWorktreeBody(path: String) {
+        wtLoading = true
+        scope.launch {
+            if (wtTab == "log") {
+                val commits = LogOps.loadRange(path, "HEAD")
+                if (wtExpanded == path) wtCommits = commits
+            } else {
+                val changes = WorktreeOps.changes(path)
+                if (wtExpanded == path) wtChanges = changes
+            }
+            if (wtExpanded == path) wtLoading = false
+        }
+    }
+
+    /**
+     * Reach a worktree from a list surface: select its parent and open its card.
+     *
+     * The one navigation a worktree row performs, and deliberately not a *selection* of its own —
+     * there is nothing to select, since the worktree has no repo row behind it. Selecting the parent
+     * and expanding the card is what "scrolled to that worktree" resolves to; the card scrolls itself
+     * into view once it's open (see the pane's worktree cards).
+     */
+    fun openWorktreeInPane(repoId: String, path: String) {
+        selectedId = repoId
+        if (wtExpanded != path) {
+            wtExpanded = path
+            wtChanges = emptyList()
+            wtCommits = emptyList()
+            loadWorktreeBody(path)
+        }
+    }
+
+    /** The working-tree diff of one worktree, in the same overlay a repo's own Diff opens. */
+    fun openWorktreeDiff(path: String) = openDiff(path)
+
+    /** One worktree's commit history. */
+    fun openWorktreeLog(path: String) =
+        openRangeLog(path, "HEAD", "${File(path).name} — commit history")
+
+    /**
+     * Commit inside a worktree, then rescan the *parent*.
+     *
+     * The commit runs against a transient [RegistryEntry] for the worktree's path, because it hasn't
+     * got a registry row and shouldn't gain one — [RepoOps.commit] only ever reads the path off it.
+     * The rescan is the parent's because the parent is the row on screen, and what just changed for
+     * it is how much unlanded work its sub-row is holding.
+     */
+    fun commitInWorktree(repoId: String, path: String, title: String, body: String, stageAll: Boolean) {
+        if (title.isBlank()) return
+        scope.launch {
+            toast("Committing ${File(path).name}…")
+            val result = withContext(Dispatchers.Default) {
+                scanLimiter.withPermit { RepoOps.commit(RegistryEntry(path), title, body, stageAll) }
+            }
+            rescanRepos(listOf(repoId), fetch = false)
+            wtExpanded?.let { if (it == path) loadWorktreeBody(path) }
+            toast(result.message)
         }
     }
 
@@ -1421,24 +1650,61 @@ class AppState(private val scope: CoroutineScope) {
         trackRepoAt(File(parentId, sub.path).absolutePath)
 
     /**
-     * The tags a worktree starts life with when it's tracked as a repo of its own: everything its
-     * main checkout carries, plus a "worktree" marker.
+     * Fold away registry rows for checkouts that are linked worktrees of another tracked repo.
      *
-     * Inheriting matters because the copies are the *same project* — a worktree of a repo tagged
-     * `owner:me lang:kotlin` is still owned by you and still Kotlin, and without the tags it drops
-     * out of every filter and grouping that found the original. The marker is what keeps them
-     * separable again afterwards.
+     * These are the leftovers of the old model, where "Add Repo" on a worktree row gave it a
+     * repository of its own. It never had one: a worktree shares the object store, the refs, the
+     * stashes, the remote and the issue tracker with its parent, so every repo-wide setting on the
+     * duplicate row was a second copy of the parent's answer that could silently disagree with it.
+     * They are now sub-rows of the parent instead, so the duplicate row goes.
      *
-     * Falls back to the repo it was added from when the main checkout isn't tracked; that's the
-     * same repository either way, so its tags are the right ones to copy.
+     * Registry-only, and the least destructive form of it: nothing on disk is touched, the worktree
+     * itself is untouched, and a snooze the row was carrying is carried across as that worktree's
+     * own snooze rather than dropped — the user asked for quiet on that folder, and the new model
+     * has a place to keep it. Tags, notes and reminders on the duplicate are not migrated: they were
+     * always the parent's project's, and merging them would silently rewrite the parent's own.
+     *
+     * Runs once, after the first scan — [Repo.isWorktree] and [Repo.worktreeMain] are scan products,
+     * and asking git again here would be a second `worktree list` per repo for an answer already on
+     * the table.
      */
-    fun worktreeTags(addedFrom: String): List<String> {
-        val source = worktrees.firstOrNull { it.isMain }?.path?.let { trackedRepoAt(it) } ?: addedFrom
-        return (tagsOf(source) + WORKTREE_TAG).distinct()
+    private var worktreeRowsFolded = false
+
+    private fun foldTrackedWorktrees() {
+        if (worktreeRowsFolded) return
+        worktreeRowsFolded = true
+        val folded = repos.filter { it.isWorktree }.mapNotNull { child ->
+            val parentId = child.worktreeMain?.let { trackedRepoAt(it) } ?: return@mapNotNull null
+            val childEntry = entries[child.id] ?: return@mapNotNull null
+            entries[parentId]?.let { parent ->
+                val snooze = childEntry.snoozeUntilEpoch
+                if (snooze != null) {
+                    val kept = worktreeAlerts(parentId, child.id).copy(snoozeUntilEpoch = snooze)
+                    entries[parentId] = parent.copy(worktreeAlerts = parent.worktreeAlerts + (child.id to kept))
+                }
+            }
+            child.id
+        }
+        if (folded.isEmpty()) return
+        folded.forEach { id ->
+            entries.remove(id); order.remove(id); repos.removeAll { it.id == id }
+            if (selectedId == id) selectedId = null
+            bulkSelected = bulkSelected - id
+        }
+        // The inherited marker went with them. Left on the parents it would claim they are worktrees,
+        // which is the confusion the tag existed to resolve and now creates.
+        order.toList().forEach { id ->
+            entries[id]?.let { e -> if (LEGACY_WORKTREE_TAG in e.tags) entries[id] = e.copy(tags = e.tags - LEGACY_WORKTREE_TAG) }
+        }
+        persist(); syncWatches()
+        toast(
+            "${folded.size} tracked worktree${if (folded.size == 1) "" else "s"} " +
+                "now listed under ${if (folded.size == 1) "its" else "their"} main checkout",
+        )
     }
 
-    /** Register a checkout the app already knows about — a submodule, a linked worktree — as a
-     *  tracked repo of its own, then select it. */
+    /** Register a checkout the app already knows about — a submodule — as a tracked repo of its
+     *  own, then select it. Worktrees no longer come through here; see [foldTrackedWorktrees]. */
     fun trackRepoAt(path: String, tags: List<String> = emptyList()) {
         if (entries.containsKey(path)) { toast("Already added"); return }
         scope.launch {
@@ -1873,7 +2139,30 @@ class AppState(private val scope: CoroutineScope) {
 
     // ---- derived views / filtering / grouping ----
 
-    private fun views(): List<RepoView> = repos.map { deriveView(it, accent, tagsOf(it.id), ghSummary(it)) }
+    private fun views(): List<RepoView> =
+        repos.map { deriveView(it, accent, tagsOf(it.id), ghSummary(it), worktreeViews(it.id, it.snoozed, it.worktrees)) }
+
+    /**
+     * Resolve a repo's worktrees against its registry overrides.
+     *
+     * Takes the tree list rather than reading [Repo.worktrees] itself so the detail panel can pass
+     * the richer list it loaded — the scan's copy doesn't know whether a branch has landed, and
+     * "merged" is exactly the badge the pane's cards show. Both callers get the same inheritance
+     * resolution, which is what keeps a sub-row and its card from disagreeing about a ⚙.
+     */
+    fun worktreeViews(repoId: String, repoSnoozed: Boolean, trees: List<Worktree>): List<WorktreeView> {
+        if (trees.isEmpty()) return emptyList()
+        val now = System.currentTimeMillis()
+        return trees.filter { !it.isCurrent && !it.bare }.map { wt ->
+            val alerts = worktreeAlerts(repoId, wt.path)
+            val (snoozed, snoozedFor) = Meta.snoozeState(alerts.snoozeUntilEpoch, now)
+            WorktreeView(
+                wt = wt, repoId = repoId, alerts = alerts,
+                snoozed = snoozed, snoozedFor = snoozedFor,
+                parentAlertsOn = !repoSnoozed,
+            )
+        }
+    }
 
     /** Namespaces in first-seen order across all repo tags. */
     fun namespaces(): List<String> {
@@ -1899,7 +2188,9 @@ class AppState(private val scope: CoroutineScope) {
             "ghopen" to vms.count { it.openIssues > 0 },
             "ghawaiting" to vms.count { it.awaitingYou > 0 },
             "stashes" to vms.count { it.repo.stash > 0 },
-            "worktrees" to vms.count { it.repo.hasWorktrees },
+            // Parents, not worktrees: the filter selects the rows that have sub-rows, and counting
+            // the sub-rows would put a number in the chip that doesn't match the list it produces.
+            "worktrees" to vms.count { it.worktrees.isNotEmpty() },
             "reminders" to vms.count { it.hasReminder },
             "notes" to vms.count { noteOf(it.id).isNotBlank() },
             "snoozed" to vms.count { it.snoozed },
@@ -1926,7 +2217,7 @@ class AppState(private val scope: CoroutineScope) {
         "ghopen" -> v.openIssues > 0
         "ghawaiting" -> v.awaitingYou > 0
         "stashes" -> v.repo.stash > 0
-        "worktrees" -> v.repo.hasWorktrees
+        "worktrees" -> v.worktrees.isNotEmpty()
         "reminders" -> v.hasReminder
         "notes" -> noteOf(v.id).isNotBlank()
         "snoozed" -> v.snoozed
@@ -1955,11 +2246,12 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Sort rank for "attention" order — mirrors the status-dot colours in [deriveView]:
      *  red (problem, or an important repo's issue awaiting you) → amber (dirty, unpushed,
-     *  important-stale, or an issue awaiting you) → blue (behind, stale, or open issues) →
-     *  green (clean). Keep the two in step. */
+     *  important-stale, unlanded work in a linked worktree, or an issue awaiting you) → blue
+     *  (behind, stale, or open issues) → green (clean). Keep the two in step. */
     private fun attentionRank(v: RepoView): Int = when {
         v.repo.warning != null || v.issueLevel == IssueLevel.CRITICAL -> 0
         v.isDirty || v.repo.ahead > 0 || (v.repo.stale && v.repo.staleImportant) ||
+            v.worktreesUnlanded > 0 ||
             v.issueLevel == IssueLevel.IMPORTANT -> 1
         v.repo.behind > 0 || v.repo.stale || v.issueLevel == IssueLevel.INFO -> 2
         else -> 3

@@ -4,7 +4,8 @@
 package com.gitvantage.git
 
 import com.gitvantage.git.model.OpResult
-import com.gitvantage.git.model.Worktree
+import com.gitvantage.model.Worktree
+import com.gitvantage.model.WorktreeChange
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,14 +18,26 @@ import kotlinx.coroutines.withContext
  * Three entry points, deliberately split by cost:
  *  - [list] is one `git worktree list --porcelain` call — just how many working trees there are
  *    and which one this repo is.
- *  - [listWithWork] adds a status + rev-list read inside each *other* worktree, and runs on every
- *    scan (see GitScan.kt): unlanded work in another checkout is invisible from this one, so the
- *    repo row can't warn about it without looking. Repos with no linked worktrees — nearly all of
- *    them — pay nothing, since there is nothing to look into.
- *  - [load] adds each tree's last commit and whether its branch has landed, and only runs when the
- *    detail panel is open — the same lazy shape as [SubmoduleOps].
+ *  - [listWithWork] looks *inside* each other worktree: four reads per tree (status, rev-list,
+ *    last commit, merge-base), and runs on every scan (see GitScan.kt). Repos with no linked
+ *    worktrees — nearly all of them — pay nothing, since there is nothing to look into.
+ *  - [load] is the same over every tree including the current one, off the UI thread, for the
+ *    detail panel.
+ *
+ * Everything is read on the scan path because the *list* views show it now, not only the panel:
+ * a worktree is a sub-row under its repo, and that row's badges are "3 modified", "↑2 vs main",
+ * "merged", its right-hand column is "2 hours ago · Ada Okafor", and whether its branch has landed
+ * is what decides if "Remove + branch" is offered at all. A lazily-loaded field would mean a row
+ * that silently omits a badge and hides an action until something else happened to open the pane.
+ *
+ * That makes a repo with linked worktrees about twice the scan it used to be. It buys the four
+ * questions the row asks, it is bounded by the number of worktrees the repo actually has, and it is
+ * still nothing at all for a repo without any.
  */
 object WorktreeOps {
+
+    /** `%x1f` delimiter between fields of the one-line log read, as GitScan uses for the same job. */
+    private const val LOG_SEP = "\u001F"
 
     /**
      * Parse `git worktree list --porcelain`. Records are blank-line separated and start with a
@@ -84,22 +97,19 @@ object WorktreeOps {
     }
 
     /**
-     * [list] plus, for the *other* working trees still on disk, the work in them this checkout
-     * can't see: uncommitted changes, and commits mainline hasn't got.
+     * [list] plus, for the *other* working trees still on disk, everything this checkout can't see
+     * about them: uncommitted changes, commits mainline hasn't got, the last commit, and whether the
+     * branch they hold has landed.
      *
      * The current tree is skipped on purpose — GitScan already ran `git status` for it, and
-     * re-deriving the same number here would double the cost of every scan. A repo with no linked
-     * worktrees runs no extra commands at all, which is the common case.
+     * re-deriving the same numbers here would cost every scan a duplicate of work it just did. A repo
+     * with no linked worktrees runs no extra commands at all, which is the common case.
      */
-    fun listWithWork(repoPath: String): List<Worktree> = enrich(list(repoPath), repoPath, detail = false)
+    fun listWithWork(repoPath: String): List<Worktree> = enrich(list(repoPath), repoPath, includeCurrent = false)
 
-    /**
-     * [listWithWork] over every tree including the current one, plus each tree's last commit and
-     * whether the branch it holds has already landed on mainline. The extra reads are why this is
-     * the detail panel's call and not the scan's.
-     */
+    /** [listWithWork] over every tree including the current one, off the UI thread. */
     suspend fun load(repoPath: String): List<Worktree> = withContext(Dispatchers.IO) {
-        enrich(list(repoPath), repoPath, detail = true)
+        enrich(list(repoPath), repoPath, includeCurrent = true)
     }
 
     /**
@@ -111,23 +121,26 @@ object WorktreeOps {
      * When neither main nor master exists the counts stay 0 rather than guessing at a baseline —
      * a wrong "3 commits unlanded" is worse than none.
      */
-    private fun enrich(trees: List<Worktree>, repoPath: String, detail: Boolean): List<Worktree> {
-        fun wanted(wt: Worktree) = !wt.bare && (detail || !wt.isCurrent)
+    private fun enrich(trees: List<Worktree>, repoPath: String, includeCurrent: Boolean): List<Worktree> {
+        fun wanted(wt: Worktree) = !wt.bare && (includeCurrent || !wt.isCurrent)
         if (trees.none { wanted(it) }) return trees
         val mainline = mainlineRef(File(repoPath))
         return trees.map { wt ->
             if (!wanted(wt)) return@map wt
             val dir = File(wt.path)
             if (!dir.isDirectory) return@map wt.copy(missing = true)
+            val log = Git.read(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct").trim().split(LOG_SEP)
             wt.copy(
                 dirtyCount = Git.read(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
                 unmerged = mainline?.let { count(dir, "$it..HEAD") } ?: 0,
                 mainline = mainline,
-                lastRelative = if (detail) Git.read(dir, "log", "-1", "--format=%cr").trim() else "",
+                lastRelative = log.getOrNull(0)?.trim().orEmpty(),
+                lastAuthor = log.getOrNull(1)?.trim().orEmpty(),
+                lastEpoch = log.getOrNull(2)?.trim()?.toLongOrNull(),
                 // A branch can only be "merged" against something, and never against itself: mainline
                 // is trivially its own ancestor, and calling the main checkout's branch merged would
                 // offer to delete it.
-                branchMerged = detail && wt.branch != null && mainline != null &&
+                branchMerged = wt.branch != null && mainline != null &&
                     wt.branch != mainline.substringAfter('/') &&
                     Git.exitCode(dir, "merge-base", "--is-ancestor", wt.branch, mainline) == 0,
             )
@@ -141,6 +154,48 @@ object WorktreeOps {
 
     private fun count(dir: File, range: String): Int =
         Git.read(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
+
+    /**
+     * What's uncommitted inside the worktree at [path], with a per-file diffstat — the inline
+     * "Changes" list on a worktree card.
+     *
+     * Two reads rather than one, because neither command answers the whole question. `status
+     * --porcelain` is the only one that lists untracked files, and `diff --numstat HEAD` is the only
+     * one that counts lines; the file list comes from the first so an untracked file still gets a
+     * row, and the counts are joined on from the second, which is why they come back 0 for one.
+     *
+     * `--numstat` reports `-` for a binary file: a real answer ("this changed, and lines aren't the
+     * unit"), not a parse failure, and 0/0 is how the row renders it.
+     *
+     * Empty when the path isn't a working tree, so a worktree that vanished between the list and
+     * the click shows an empty body rather than failing.
+     */
+    suspend fun changes(path: String): List<WorktreeChange> = withContext(Dispatchers.IO) {
+        val dir = File(path)
+        if (!dir.isDirectory) return@withContext emptyList()
+        val stat = Git.read(dir, "diff", "--numstat", "HEAD").lineSequence()
+            .mapNotNull { line ->
+                val parts = line.split('\t')
+                if (parts.size < 3) return@mapNotNull null
+                parts[2] to (parts[0].toIntOrNull().orZero() to parts[1].toIntOrNull().orZero())
+            }.toMap()
+        Git.read(dir, "status", "--porcelain").lineSequence()
+            .filter { it.length > 3 }
+            .map { line ->
+                // "XY <path>"; a rename reads "R  old -> new", and the new name is the one on disk.
+                val file = line.substring(3).trim().substringAfterLast(" -> ")
+                val counts = stat[file]
+                WorktreeChange(
+                    path = file,
+                    untracked = line.startsWith("??"),
+                    added = counts?.first ?: 0,
+                    deleted = counts?.second ?: 0,
+                )
+            }
+            .toList()
+    }
+
+    private fun Int?.orZero() = this ?: 0
 
     /**
      * `git worktree remove` — deletes the worktree's folder and its files. The branch it held is

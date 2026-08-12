@@ -7,6 +7,7 @@ import androidx.compose.foundation.PointerMatcher
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -33,9 +34,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
@@ -495,6 +503,102 @@ fun CopyTarget(
         modifier.pointerHoverIcon(PointerIcon.Hand)
             .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
     ) { content(copied) }
+}
+
+/**
+ * A tinted state badge on a list row — "merged", "current", "agent", "in ⑂ feat/x".
+ *
+ * Rounder and quieter than [BadgeView]: those are git *counts* in mono, these are one-word verdicts
+ * about a ref, and the two sit on the same rows.
+ */
+@Composable
+fun BranchBadge(label: String, color: Color, bg: Color, modifier: Modifier = Modifier) {
+    Pill(
+        label, color, bg, fontSize = 10.5.sp, weight = FontWeight.SemiBold, radius = 10,
+        padding = PaddingValues(horizontal = 7.dp, vertical = 2.dp), modifier = modifier,
+    )
+}
+
+/**
+ * The state a row is *expected* to be in — "up to date", "mainline", "linked", "tracked" — said in
+ * plain muted text rather than a tinted pill.
+ *
+ * These labels are true of nearly every row in their list, so as pills they were a repeating
+ * pattern rather than information, and the badges that do report something (merged, stale, behind,
+ * missing, locked, agent) had to fight them for attention. Dropping them entirely would be worse:
+ * "up to date" is an answer, and an empty space isn't. So they're kept, and de-emphasised.
+ */
+@Composable
+fun QuietBadge(label: String) {
+    Txt(label, 10.5.sp, Tokens.muted2, FontWeight.Medium)
+}
+
+/**
+ * A click-to-apply choice in a set of them — the stale-threshold presets, the issue-severity pair,
+ * a worktree's Inherit/On/Off.
+ *
+ * The idiom is that there is no Save: the pills *are* the setting, and clicking one applies it. That
+ * is why they are pills and not radio buttons, and why the alerts popover can drop its footer
+ * entirely — everything in it is already one of these.
+ */
+@Composable
+fun PresetPill(
+    label: String,
+    on: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    dimmed: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    val alpha = if (dimmed) 0.45f else 1f
+    Box(
+        modifier.clip(shape)
+            .background((if (on) Tokens.tintBlue else Tokens.surface).copy(alpha = alpha), shape)
+            .border(1.dp, (if (on) Tokens.accentBorder else Tokens.borderE2).copy(alpha = alpha), shape)
+            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Txt(
+            label, 11.5.sp,
+            (if (on) accent else Tokens.secondary).copy(alpha = alpha),
+            if (on) FontWeight.Bold else FontWeight.Medium,
+        )
+    }
+}
+
+/**
+ * A read-only action in the detail pane: a flat accent link, no border.
+ *
+ * The other half of the pane's action split — a bordered button changes something, a flat accent
+ * link only shows you something. Same rule the list rows' [RowAction] already followed, which is why
+ * this is the same colour at a slightly larger size rather than a new look.
+ */
+@Composable
+fun FlatAction(label: String, danger: Boolean = false, size: TextUnit = 12.5.sp, onClick: () -> Unit) {
+    Txt(
+        label, size, if (danger) Tokens.redText else Tokens.accent, FontWeight.SemiBold,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap(onClick),
+    )
+}
+
+/**
+ * Esc closes this popover.
+ *
+ * A popover's own [androidx.compose.ui.window.PopupProperties] `focusable` flag lets the *window*
+ * take focus, which is what makes a click outside dismiss it — but nothing inside it holds keyboard
+ * focus, so the key event has nowhere to land and Esc does nothing. This takes focus on the way in
+ * and handles the key itself, which is what the click-away half already promised: the two dismissals
+ * are supposed to be interchangeable, and one of them silently not working is worse than neither.
+ */
+@Composable
+fun Modifier.dismissOnEscape(onDismiss: () -> Unit): Modifier {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    return this.focusRequester(focus).focusable()
+        .onPreviewKeyEvent { ev ->
+            if (ev.type == KeyEventType.KeyDown && ev.key == Key.Escape) { onDismiss(); true } else false
+        }
 }
 
 /** A small filled circle of the given diameter. */

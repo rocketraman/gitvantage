@@ -46,8 +46,9 @@ val NestedWorktreeScanning by testSuite {
             val scanned = RepoScanner.scan(entry(work), fetch = false)
 
             assert(scanned.nestedWorktrees.isEmpty()) { "got ${scanned.nestedWorktrees}" }
-            // Still a worktree of this repo, just not one under its folder.
-            assert(scanned.worktreeCount == 2)
+            // Still a worktree of this repo, just not one under its folder — so it's a sub-row of it.
+            assert(scanned.worktrees.size == 1) { "got ${scanned.worktrees.map { it.path }}" }
+            assert(scanned.worktrees.single().branch == "side")
         }
 
         test("the repo never lists itself, so its own files are never filtered out") {

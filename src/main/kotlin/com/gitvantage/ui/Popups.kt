@@ -71,8 +71,11 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Tag -> TagPopup(state, popup.ids)
         is Popup.Untag -> UntagPopup(state, popup.ids)
         is Popup.Snooze -> SnoozePopup(state, popup.ids)
+        is Popup.SnoozeWorktree -> SnoozeWorktreePopup(state, popup)
         is Popup.Remind -> RemindPopup(state, popup.ids, popup.text, popup.due)
+        is Popup.Note -> NotePopup(state, popup.id)
         is Popup.Commit -> CommitPopup(state, popup.id)
+        is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
         is Popup.Confirm -> ConfirmPopup(state, popup)
         is Popup.Appearance -> AppearancePopup(state)
     }
@@ -153,6 +156,68 @@ private fun SnoozePopup(state: AppState, ids: Set<String>) {
             Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp).height(1.dp).background(Tokens.borderEd))
             MenuRow("Resume now (clear snooze)", accent = true) {
                 state.setSnoozeUntil(ids, null)
+                state.popup = null
+            }
+        }
+    }
+}
+
+/**
+ * The working-note editor.
+ *
+ * Writes through on every keystroke, with no OK button — [AppState.setNote] coalesces the disk write,
+ * and the note has no "invalid" state to validate before accepting, so a Save would only be a way to
+ * lose what you typed by closing the wrong way. Clear is the one destructive move and it's the one
+ * button here.
+ */
+@Composable
+private fun NotePopup(state: AppState, id: String) {
+    val name = remember(id) { java.io.File(id).name }
+    Modal({ state.popup = null }, width = 560) {
+        ModalHeader("Note — $name", "What's in progress or waiting here. Saved as you type.")
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            MultilineInput(
+                state.noteOf(id), { state.setNote(id, it) },
+                "What's in progress / TODO", state.accent,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                if (state.noteOf(id).isNotEmpty()) {
+                    FlatAction("Clear", danger = true, size = 12.sp) { state.setNote(id, "") }
+                }
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.accentFill)
+                        .onTap { state.popup = null }.padding(horizontal = 14.dp, vertical = 7.dp),
+                ) { Txt("Done", 12.5.sp, Tokens.onAccent, FontWeight.Bold) }
+            }
+        }
+    }
+}
+
+/**
+ * Snooze one worktree — the same duration menu the repo snooze offers, scoped to a single folder.
+ *
+ * Same presets deliberately: "quiet for a day" means the same thing whichever checkout it's about,
+ * and a second, shorter list would be a distinction without a reason. What differs is the blast
+ * radius, which the header states, because the repo-level menu looks identical.
+ */
+@Composable
+private fun SnoozeWorktreePopup(state: AppState, p: Popup.SnoozeWorktree) {
+    Modal({ state.popup = null }) {
+        ModalHeader(
+            "Snooze ⑂ ${p.label}",
+            "Silences this worktree's alerts only. The rest of the repo keeps reporting.",
+        )
+        Column(Modifier.padding(vertical = 6.dp)) {
+            Meta.SNOOZE_PRESETS.forEach { (label, ms) ->
+                MenuRow(label) {
+                    state.setWorktreeSnooze(p.repoId, p.path, ms?.let { System.currentTimeMillis() + it } ?: Meta.SNOOZE_FOREVER)
+                    state.popup = null
+                }
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp).height(1.dp).background(Tokens.borderEd))
+            MenuRow("Resume now (clear snooze)", accent = true) {
+                state.setWorktreeSnooze(p.repoId, p.path, null)
                 state.popup = null
             }
         }
@@ -288,25 +353,62 @@ private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String, 
 private fun CommitPopup(state: AppState, id: String) {
     val repo = state.repos.find { it.id == id }
     if (repo == null) { state.popup = null; return }
-    var title by remember(id) { mutableStateOf("") }
-    var body by remember(id) { mutableStateOf("") }
-    var stageAll by remember(id) { mutableStateOf(repo.staged == 0) }   // nothing staged → stage all by default
-    val titleLen = title.trim().length
-    val titleLong = titleLen > 50
-    val longBodyLines = body.lineSequence().count { it.length > 72 }
-    fun commit() {
-        if (title.isBlank()) return
-        state.commit(id, title, body, stageAll)
-        state.popup = null
-    }
     val changes = buildList {
         if (repo.staged > 0) add("${repo.staged} staged")
         if (repo.unstaged > 0) add("${repo.unstaged} modified")
         if (repo.untracked > 0) add("${repo.untracked} untracked")
     }.joinToString(" · ").ifEmpty { "working tree clean" }
+    CommitForm(
+        state, key = id,
+        heading = "Commit — ${repo.name}",
+        subheading = "⎇ ${repo.branch}   ·   $changes",
+        // Nothing staged → stage all by default, which is what a dashboard commit almost always means.
+        stageAllDefault = repo.staged == 0,
+    ) { title, body, stageAll -> state.commit(id, title, body, stageAll) }
+}
+
+/**
+ * The same dialog for a commit inside one of the repo's linked worktrees.
+ *
+ * Shares [CommitForm] rather than reimplementing it, because committing is the same act wherever the
+ * files are: the summary rules, the 72-column body guide and the stage-all bargain don't change
+ * because the working tree is in another folder. What differs is only what it can say about the
+ * subject — a worktree has no [com.gitvantage.model.Repo] to read counts off, so the heading names
+ * the branch and leaves the tally to the card that opened this.
+ */
+@Composable
+private fun CommitWorktreePopup(state: AppState, p: Popup.CommitWorktree) {
+    CommitForm(
+        state, key = p.path,
+        heading = "Commit — ⑂ ${p.branch}",
+        subheading = "in ${p.path}",
+        stageAllDefault = true,
+    ) { title, body, stageAll -> state.commitInWorktree(p.repoId, p.path, title, body, stageAll) }
+}
+
+@Composable
+private fun CommitForm(
+    state: AppState,
+    key: String,
+    heading: String,
+    subheading: String,
+    stageAllDefault: Boolean,
+    onCommit: (title: String, body: String, stageAll: Boolean) -> Unit,
+) {
+    var title by remember(key) { mutableStateOf("") }
+    var body by remember(key) { mutableStateOf("") }
+    var stageAll by remember(key) { mutableStateOf(stageAllDefault) }
+    val titleLen = title.trim().length
+    val titleLong = titleLen > 50
+    val longBodyLines = body.lineSequence().count { it.length > 72 }
+    fun commit() {
+        if (title.isBlank()) return
+        onCommit(title, body, stageAll)
+        state.popup = null
+    }
 
     Modal({ state.popup = null }, width = 640) {   // wide enough for the 72-col body guide
-        ModalHeader("Commit — ${repo.name}", "⎇ ${repo.branch}   ·   $changes")
+        ModalHeader(heading, subheading)
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             // Summary line
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
