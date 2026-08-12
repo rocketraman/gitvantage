@@ -259,6 +259,22 @@ tasks.register("packageGraalvmDistributionForCurrentOS") {
 }
 
 /**
+ * Where `packageGraalvmNative` leaves the app bundle the installer packagers then wrap.
+ *
+ * The plugin computes this internally and exposes no accessor, so the three gates below have to
+ * name it. Keep it in one place: 2.4.0 moved it, and having the literal in three task bodies meant
+ * the move produced three identical failures to chase instead of one.
+ *
+ * The 2.1.9 layout was `compose/tmp/main/graalvm/output` — a staging directory under `tmp`. 2.4.0
+ * derives it from `nativeDistributions.outputBaseDir` instead (default `build/compose/binaries`),
+ * so the bundle is now a sibling of the `graalvm-deb` / `graalvm-rpm` / `graalvm-dmg` / `graalvm-msi`
+ * directories the packagers write, rather than an intermediate. Only the location changed; it is
+ * still produced by `packageGraalvmNative` and still consumed by the packagers, so gating on it
+ * between the two is as sound as before.
+ */
+val graalvmAppDir = layout.buildDirectory.dir("compose/binaries/main/graalvm-app")
+
+/**
  * Release gate: the bundle handed to the installer packagers must actually be a native image.
  *
  * The two pipelines produce bundles of the same shape in the same place, differing mainly in
@@ -278,9 +294,9 @@ val verifyGraalvmNativeImage = tasks.register("verifyGraalvmNativeImage") {
     dependsOn("packageGraalvmNative")
     outputs.upToDateWhen { false }   // cheap, and must never be skipped on a release build
 
-    // appTmpDir for the default build type; the macOS bundle root is `GitVantage.app`, the Linux
-    // and Windows ones a plain directory, so address the shared parent rather than the leaf.
-    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    // The macOS bundle root is `GitVantage.app`, the Linux and Windows ones a plain directory, so
+    // address the shared parent rather than the leaf.
+    val outputDir = graalvmAppDir
     val imageName = "GitVantage"
 
     doLast {
@@ -362,7 +378,7 @@ val smokeTestNativeImage = tasks.register("smokeTestNativeImage") {
     dependsOn(verifyGraalvmNativeImage)
     outputs.upToDateWhen { false }
 
-    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    val outputDir = graalvmAppDir
     val imageName = "GitVantage"
     val isLinux = System.getProperty("os.name").lowercase().contains("linux")
     val hasXvfb = isLinux &&
@@ -429,7 +445,7 @@ val smokeTestNativeImageSubsystems = tasks.register("smokeTestNativeImageSubsyst
     dependsOn(verifyGraalvmNativeImage)
     outputs.upToDateWhen { false }
 
-    val outputDir = layout.buildDirectory.dir("compose/tmp/main/graalvm/output")
+    val outputDir = graalvmAppDir
     val imageName = "GitVantage"
 
     doLast {
