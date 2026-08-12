@@ -758,6 +758,8 @@ class AppState(private val scope: CoroutineScope) {
             e.staleImportant,
             e.issuesTracked != null,
             e.issuesImportant,
+            e.repoRole != null,
+            e.ignoreLabels.isNotEmpty(),
             e.hideBranchPatterns != null,
             e.notifyUpstream,
             e.worktreeAlerts.isNotEmpty(),
@@ -800,6 +802,71 @@ class AppState(private val scope: CoroutineScope) {
         if (tracked != false) refreshGitHub()
     }
 
+    /**
+     * This repo's stated role — [ROLE_MINE], [ROLE_CONTRIBUTING], or null for "work it out from
+     * my push access". See [RegistryEntry.repoRole].
+     */
+    fun repoRole(id: String): String? = entries[id]?.repoRole
+
+    /**
+     * Which way an unstated repo was read from your push access — true for maintained, false for
+     * contributed, null when nothing has been fetched for it yet. Only meaningful while
+     * [repoRole] is null; the UI uses it to say what "Auto" currently resolves to.
+     */
+    fun repoRoleInferred(repo: Repo): Boolean? =
+        GitHub.coordOf(repo.webBase)?.let { GitHub.inferredMine(it) }
+
+    /** [repoRole] as the fetch layer wants it: true/false when stated, null to infer. */
+    private fun repoRoleIsMine(id: String): Boolean? = when (repoRole(id)) {
+        Meta.ROLE_MINE -> true
+        Meta.ROLE_CONTRIBUTING -> false
+        else -> null
+    }
+
+    /**
+     * Set (or clear, with null) what this repo is to you. Refetches, because the role decides
+     * which items are asked for at all — unlike the presentational toggles, the cached data for
+     * the other role simply isn't there to re-derive from.
+     */
+    fun setRepoRole(id: String, role: String?) {
+        val e = entries[id] ?: return
+        if (e.repoRole == role) return
+        entries[id] = e.copy(repoRole = role)
+        // The cached items were fetched under the old role, so they're the wrong set entirely —
+        // a maintained repo's full tracker, or a contributed repo's handful. Drop them rather
+        // than leave them on screen looking authoritative until the refetch lands.
+        githubState.remove(id)
+        persist()
+        refreshGitHub()
+    }
+
+    /** Labels whose issues and PRs this repo leaves out. See [RegistryEntry.ignoreLabels]. */
+    fun ignoreLabels(id: String): List<String> = entries[id]?.ignoreLabels ?: emptyList()
+
+    /**
+     * Every label seen on this repo's fetched items, for the ignore-list autocomplete. Drawn from
+     * what came back rather than from the repo's full label set: it costs no extra request, and
+     * the labels actually in use on open items are the ones worth offering — a tracker's label
+     * list is mostly historical.
+     */
+    fun knownLabels(repo: Repo): List<String> {
+        val st = githubState[repo.id] ?: return emptyList()
+        return (st.issues + st.prs).flatMap { it.labels }.distinct().sortedBy { it.lowercase() }
+    }
+
+    /**
+     * Replace the ignored-label list. No refetch: labels come back with every item, so this
+     * re-derives from what's already cached — which is what makes editing the list feel immediate
+     * rather than costing a round trip per keystroke.
+     */
+    fun setIgnoreLabels(id: String, labels: List<String>) {
+        val e = entries[id] ?: return
+        val cleaned = labels.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (e.ignoreLabels == cleaned) return
+        entries[id] = e.copy(ignoreLabels = cleaned)
+        persist()
+    }
+
     /** Whether open issues escalate one attention level (blue→amber, amber→red) for this repo. */
     fun issuesImportant(id: String): Boolean = entries[id]?.issuesImportant ?: false
 
@@ -830,12 +897,18 @@ class AppState(private val scope: CoroutineScope) {
             return GhSummary(0, 0, 0, emptyList(), important = important, error = st.error)
         }
         val mine = githubMineOnly
-        val issues = st.issues.filter { !mine || it.involvesYou }
-        val prs = st.prs.filter { !mine || it.involvesYou }
+        val ignored = ignoreLabels(repo.id)
+        // Label filtering happens before the "only mine" one and applies whatever it's set to:
+        // an ignored label says "this category is never mine to answer", which is a statement
+        // about the item, not about which view you're looking at.
+        val kept = { it: GitHub.Item -> !it.hasAnyLabel(ignored) && (!mine || it.involvesYou) }
+        val issues = st.issues.filter(kept)
+        val prs = st.prs.filter(kept)
         // GitHub's totalCount is authoritative for "how many are open", but it can't be filtered
-        // client-side — so with "only mine" on, the fetched-and-filtered list *is* the count.
-        val openIssues = if (mine) issues.size else st.issueTotal
-        val openPrs = if (mine) prs.size else st.prTotal
+        // client-side — so once anything *is* filtered, the fetched-and-filtered list is the count.
+        val filtering = mine || ignored.isNotEmpty()
+        val openIssues = if (filtering) issues.size else st.issueTotal
+        val openPrs = if (filtering) prs.size else st.prTotal
         // More were open than one fetch inspects. Independent of `mine`: the cap is applied by
         // the fetch, before any filtering, so an unexamined item could have involved you either
         // way — which also makes the filtered "only mine" counts floors rather than totals.
@@ -846,7 +919,7 @@ class AppState(private val scope: CoroutineScope) {
             awaiting = (issues + prs).count { it.awaitingYou },
             items = (issues + prs).sortedByDescending { it.updatedAt },
             truncated = capped,
-            countIsFloor = mine && capped,
+            countIsFloor = filtering && capped,
             important = important,
         )
     }
@@ -879,7 +952,9 @@ class AppState(private val scope: CoroutineScope) {
                 // on the first pass and only pick them up a refresh cycle later.
                 githubHosts = status.hosts
                 val coords = repos.filter { issuesTracked(it) }
-                    .mapNotNull { r -> GitHub.coordOf(r.webBase)?.let { r.id to it } }
+                    .mapNotNull { r ->
+                        GitHub.coordOf(r.webBase)?.let { r.id to it.copy(mine = repoRoleIsMine(r.id)) }
+                    }
                     .toMap()
                 if (coords.isEmpty()) { githubState.clear(); return@launch }
                 val fetched = GitHub.fetch(coords)
@@ -2252,13 +2327,21 @@ class AppState(private val scope: CoroutineScope) {
     /** Sort rank for "attention" order — mirrors the status-dot colours in [deriveView]:
      *  red (problem, or an important repo's issue awaiting you) → amber (dirty, unpushed,
      *  important-stale, unlanded work in a linked worktree, or an issue awaiting you) → blue
-     *  (behind, stale, or open issues) → green (clean). Keep the two in step. */
+     *  (behind, stale, or open issues) → green (clean). Keep the two in step.
+     *
+     *  Exception, deliberate: a snooze pulls a repo down the ranking further than it dims the dot.
+     *  Staleness reads through [RepoView.isStale], which is already 0 while snoozed, so a snoozed
+     *  stale repo ranks green here while its dot stays blue — the alternative was ranking it as
+     *  stale while [statusPredicate] and the "stale" chip count both drop it from the Stale filter,
+     *  which is a contradiction rather than a trade-off. Dirty/unpushed/problem are read raw and
+     *  keep their rank while snoozed: those are facts about the working tree, not calls to action,
+     *  and a snooze can't make them untrue. [sorted] sinks them within their rank instead. */
     private fun attentionRank(v: RepoView): Int = when {
         v.repo.warning != null || v.issueLevel == IssueLevel.CRITICAL -> 0
-        v.isDirty || v.repo.ahead > 0 || (v.repo.stale && v.repo.staleImportant) ||
+        v.isDirty || v.repo.ahead > 0 || (v.isStale && v.repo.staleImportant) ||
             v.worktreesUnlanded > 0 ||
             v.issueLevel == IssueLevel.IMPORTANT -> 1
-        v.repo.behind > 0 || v.repo.stale || v.issueLevel == IssueLevel.INFO -> 2
+        v.repo.behind > 0 || v.isStale || v.issueLevel == IssueLevel.INFO -> 2
         else -> 3
     }
 
@@ -2266,8 +2349,14 @@ class AppState(private val scope: CoroutineScope) {
         "commit" -> vs.sortedWith(
             compareByDescending<RepoView> { it.repo.lastCommitEpoch ?: Long.MIN_VALUE }
                 .thenBy { it.repo.name.lowercase() })
+        // Snoozed repos sink within their rank. A snooze can't clear a dirty working tree, so the
+        // repo keeps its amber rank (and its amber dot) — but "not now" has to buy something, and
+        // what it buys is that the rows still asking for you outrank the ones you've muted.
+        // [groups] partitions this order without re-sorting, so sections inherit the same tail.
         "attention" -> vs.sortedWith(
-            compareBy<RepoView> { attentionRank(it) }.thenBy { it.repo.name.lowercase() })
+            compareBy<RepoView> { attentionRank(it) }
+                .thenBy { if (it.snoozed) 1 else 0 }
+                .thenBy { it.repo.name.lowercase() })
         else -> vs.sortedBy { it.repo.name.lowercase() }
     }
 

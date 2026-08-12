@@ -1502,6 +1502,50 @@ private fun IssuesSettings(state: AppState, rv: RepoView) {
             )
         }
 
+        // What the repo is to you. Above the severity choice because it decides what is *fetched*
+        // rather than how loudly it's drawn — everything below it applies to whatever this leaves.
+        if (tracked) {
+            val role = state.repoRole(rv.id)
+            Row(
+                Modifier.padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Txt("This repo is", 12.5.sp, Tokens.text, FontWeight.Bold)
+                InfoTip(
+                    "On a repo you maintain, every open issue and PR is fetched, and anyone's " +
+                        "unanswered comment counts as awaiting you — including a new issue nobody " +
+                        "has replied to yet. On one you only contribute to, just the issues and " +
+                        "PRs you opened are fetched at all, which is also far cheaper on a large " +
+                        "tracker. Reacting to the latest comment retires it either way. " +
+                        "Auto reads your push access: it's yours if you can push to it.",
+                )
+            }
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                PresetPill("Mine", role == Meta.ROLE_MINE, state.accent) {
+                    state.setRepoRole(rv.id, Meta.ROLE_MINE)
+                }
+                PresetPill("Contributing", role == Meta.ROLE_CONTRIBUTING, state.accent) {
+                    state.setRepoRole(rv.id, Meta.ROLE_CONTRIBUTING)
+                }
+                PresetPill("Auto", role == null, state.accent) { state.setRepoRole(rv.id, null) }
+                if (role == null) {
+                    // Nothing fetched yet reads as neither — saying "contributing" there would be
+                    // a guess about a repo the classify pass hasn't reached.
+                    val label = when (state.repoRoleInferred(rv.repo)) {
+                        true -> "· reading as mine"
+                        false -> "· reading as contributing"
+                        null -> "· not classified yet"
+                    }
+                    Txt(label, 11.sp, Tokens.muted2, modifier = Modifier.align(Alignment.CenterVertically))
+                }
+            }
+        }
+
         // How loud open issues are here. Same two-way choice as staleness, and hidden for the
         // same reason — with tracking off there is nothing for the severity to apply to.
         if (tracked) {
@@ -1527,6 +1571,8 @@ private fun IssuesSettings(state: AppState, rv: RepoView) {
                 PresetPill("Important", important, state.accent) { state.setIssuesImportant(rv.id, true) }
             }
         }
+
+        if (tracked) IgnoredLabelsRow(state, rv)
 
         // The "only mine" filter is app-wide, but this is the only screen where its effect is
         // visible, so it's reachable from here rather than buried in a preferences dialog.
@@ -1649,6 +1695,80 @@ private fun StaleThresholdRow(state: AppState, rv: RepoView) {
  * changed here, matching how the stale threshold above distinguishes an override from the default.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/**
+ * Labels this repo's issue list leaves out entirely.
+ *
+ * Chips rather than a comma-separated field, mirroring [HiddenBranchesRow] — but filtered rather
+ * than hidden-behind-a-toggle, because the case this exists for is a category that is open by
+ * design and never waiting on you. A "Show ignored" switch would just reintroduce the number the
+ * filter was set up to remove.
+ */
+@Composable
+private fun IgnoredLabelsRow(state: AppState, rv: RepoView) {
+    var adding by remember(rv.id) { mutableStateOf(false) }
+    val ignored = state.ignoreLabels(rv.id)
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Row(
+            Modifier.padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Ignore labels", 12.5.sp, Tokens.text, FontWeight.Bold)
+            InfoTip(
+                "Issues and pull requests carrying any of these labels are left out of this " +
+                    "repo's list and counts altogether — for the categories that stay open by " +
+                    "design and aren't waiting on you, like requests where the next move is the " +
+                    "submitter's.\n\n" +
+                    "Matched against the label name, ignoring case. Suggestions come from the " +
+                    "labels currently on this repo's open items.",
+            )
+        }
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ignored.forEach { name ->
+                val shape = RoundedCornerShape(12.dp)
+                Row(
+                    Modifier.clip(shape).background(Tokens.surface, shape)
+                        .border(1.dp, Tokens.borderE2, shape)
+                        .padding(start = 9.dp, end = 5.dp, top = 3.dp, bottom = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Txt(name, 11.5.sp, Tokens.secondary, FontWeight.SemiBold)
+                    Txt("×", 13.sp, Tokens.secondary.copy(alpha = 0.7f), modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .onTap { state.setIgnoreLabels(rv.id, ignored - name) })
+                }
+            }
+            if (!adding) {
+                val shape = RoundedCornerShape(12.dp)
+                Box(
+                    Modifier.clip(shape).border(1.dp, Tokens.borderCb, shape)
+                        .pointerHoverIcon(PointerIcon.Hand).onTap { adding = true }
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                ) { Txt("+ Label", 11.5.sp, Tokens.secondary, FontWeight.SemiBold) }
+            } else {
+                // Suggestions are the labels on items already fetched, minus the ones already
+                // ignored — offering a label back that's currently filtering is just noise.
+                val known = state.knownLabels(rv.repo) - ignored.toSet()
+                TagAutocompleteField(
+                    accent = state.accent,
+                    suggest = { typed ->
+                        known.filter { typed.isBlank() || it.contains(typed, ignoreCase = true) }
+                    },
+                    onCommit = { state.setIgnoreLabels(rv.id, ignored + it); adding = false },
+                    onCancel = { adding = false },
+                    resetKey = rv.id,
+                    placeholder = "utility request",
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HiddenBranchesRow(state: AppState, rv: RepoView) {
     var adding by remember(rv.id) { mutableStateOf(false) }

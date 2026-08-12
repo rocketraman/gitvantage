@@ -21,6 +21,12 @@ object Meta {
     /** A repo/branch is "not worked on in a long time" once its last commit is older than this. */
     const val STALE_DAYS = 30L
 
+    /** [RegistryEntry.repoRole]: a repo you maintain — its whole tracker is yours to answer. */
+    const val ROLE_MINE = "mine"
+
+    /** [RegistryEntry.repoRole]: a repo you only file into — just your own items matter. */
+    const val ROLE_CONTRIBUTING = "contributing"
+
     /**
      * Per-repo stale threshold meaning "never flag this repo as stale" — for archived mirrors,
      * vendored deps and anything else that is *supposed* to sit untouched. Kept as a sentinel in

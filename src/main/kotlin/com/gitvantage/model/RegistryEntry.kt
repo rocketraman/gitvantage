@@ -42,6 +42,20 @@ data class RegistryEntry(
     // Escalate open issues one level — informational (blue) becomes important (amber), and
     // "awaiting you" (amber) becomes critical (red). For the repos you're actually on the hook for.
     val issuesImportant: Boolean = false,
+    // What this repo is to you, which decides how much of its tracker is even fetched:
+    // "mine" = one you maintain, so every open issue and PR is fetched and anyone's unanswered
+    // comment counts as awaiting you; "contributing" = one you only file into, so only the items
+    // you authored are fetched at all. null = infer it from whether the token can push here.
+    // Inferred rather than defaulted because the answer is already knowable, and asking someone
+    // to hand-classify forty repos before the dashboard is useful is a poor trade.
+    val repoRole: String? = null,
+    // Labels whose issues and PRs this repo's list leaves out entirely — matched case-insensitively
+    // against the label's name. For the categories that are open by design and aren't waiting on
+    // you: a tracker where every user request sits open until *they* act would otherwise bury the
+    // handful of items that are actually yours to answer. Unlike hideBranchPatterns these are
+    // filtered rather than hidden-behind-a-toggle, because the count is the point — an "awaiting
+    // you" number you have to mentally discount isn't worth showing.
+    val ignoreLabels: List<String> = emptyList(),
     // Regexes for branches this repo's lists hide behind the "Show hidden" toggle: null = use
     // Meta.DEFAULT_HIDE_BRANCH_PATTERNS (bot branches), a list = this repo's own choice. An empty
     // list is a real answer — "hide nothing here" — and is why this is nullable rather than
