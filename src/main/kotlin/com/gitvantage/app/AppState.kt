@@ -457,6 +457,7 @@ class AppState(private val scope: CoroutineScope) {
                 "${r.name}: marked stale",
                 if (r.staleImportant) "No commit in over ${r.staleDays} days — flagged as important"
                 else "No commit in over ${r.staleDays} days — expected if the code is stable",
+                kind = if (r.staleImportant) Notify.Kind.ALERT else Notify.Kind.INFO,
                 onClick = { selectedId = r.id },
             )
         }
@@ -518,17 +519,21 @@ class AppState(private val scope: CoroutineScope) {
         }
     }
 
-    /** Fire a reminder notification with Done (clear it) / Ok (dismiss; re-reminds in 1h) actions.
+    /** Fire a reminder notification with Done (clear it) / Snooze 1h (re-fire an hour from the
+     *  click) actions. Firing already rescheduled to +1h, but the button re-stamps from *now* so
+     *  its label stays true however long the notification sat unread — otherwise "Snooze 1h" would
+     *  mean 20 minutes to someone who came back to it 40 minutes late.
      *  Action callbacks arrive on a notification thread, so they marshal back onto [scope]. */
     private fun fireReminder(e: RegistryEntry) {
         val id = e.path
         Notify.show(
             title = "Reminder — ${File(id).name}",
             message = e.reminderText,
+            kind = Notify.Kind.REMINDER,
             onClick = { scope.launch { selectedId = id }; Unit },
             buttons = listOf<Pair<String, () -> Unit>>(
                 "Done" to { scope.launch { clearReminder(listOf(id)) }; Unit },
-                "Ok" to { /* dismiss only — already rescheduled for +1h */ },
+                "Snooze 1h" to { scope.launch { remindAt[id] = System.currentTimeMillis() + remindAgainMs }; Unit },
             ),
         )
     }
