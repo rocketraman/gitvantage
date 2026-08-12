@@ -340,7 +340,7 @@ private fun StatusChip(label: String, count: Int, on: Boolean, p: NsPalette, onC
     }
 }
 
-/** Tag filter bar: TAGS · per-namespace value chips · Clear tags. */
+/** Tag filter bar: TAGS · Clear Tag Filters · per-namespace value chips. */
 @Composable
 fun TagBar(state: AppState) {
     Row(
@@ -352,6 +352,9 @@ fun TagBar(state: AppState) {
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Txt("TAGS", 11.sp, Tokens.muted2, FontWeight.Bold, letterSpacing = 0.5.sp)
+        if (state.tagFilter.isNotEmpty() || state.tagExclude.isNotEmpty()) {
+            Txt("Clear Tag Filters", 12.sp, state.accent, FontWeight.SemiBold, modifier = Modifier.onTap { state.clearTags() })
+        }
         state.namespaceGroups().forEach { (ns, chips) ->
             val p = nsPalette(ns)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -384,10 +387,6 @@ fun TagBar(state: AppState) {
                     }
                 }
             }
-        }
-        Spacer(Modifier.weight(1f).widthIn(min = 8.dp))
-        if (state.tagFilter.isNotEmpty() || state.tagExclude.isNotEmpty()) {
-            Txt("Clear tags", 12.sp, state.accent, FontWeight.SemiBold, modifier = Modifier.onTap { state.clearTags() })
         }
     }
 }
