@@ -88,22 +88,21 @@ Other forges are a "not yet", not a "no" — unlike the VCS question above, noth
 ## Installation
 
 Grab the installer for your platform from the [latest release](https://github.com/rocketraman/gitvantage/releases/latest): `.deb` and `.rpm` (Linux), `.dmg` (macOS), `.msi` (Windows), each built for x86-64 and arm64.
-The commands below assume version `1.0.0` and that you downloaded into the current directory — substitute the version and architecture of the asset you actually have.
 
 Optionally, install the [GitHub CLI](https://cli.github.com) and run `gh auth login` to enable the issues and pull-request features.
 
 ### Linux
 
-Debian / Ubuntu — use `apt` rather than `dpkg -i`, so dependencies are resolved:
+Debian / Ubuntu — use `apt` rather than `dpkg -i`, so dependencies are resolved (:
 
 ```bash
-sudo apt install ./gitvantage-1.0.0-linux-amd64.deb
+sudo apt install ./gitvantage-*.deb
 ```
 
 Fedora / RHEL:
 
 ```bash
-sudo dnf install ./gitvantage-1.0.0-linux-x86_64.rpm
+sudo dnf install ./gitvantage-*.rpm
 ```
 
 ### macOS
@@ -111,11 +110,11 @@ sudo dnf install ./gitvantage-1.0.0-linux-x86_64.rpm
 Open the `.dmg` and drag GitVantage into `/Applications` as usual, or from the command line — mount the disk image, copy the app across, and unmount:
 
 ```bash
-hdiutil attach gitvantage-*-mac-arm64.dmg
-sudo cp -R /Volumes/GitVantage\ *-arm64/GitVantage.app /Applications/
+hdiutil attach gitvantage-*-mac-*.dmg
+sudo cp -R /Volumes/GitVantage\ */GitVantage.app /Applications/
 # workaround https://github.com/rocketraman/gitvantage/issues/1
 sudo xattr -dr com.apple.quarantine /Applications/GitVantage.app
-hdiutil unmount /Volumes/GitVantage\ *-arm64
+hdiutil unmount /Volumes/GitVantage\ *
 ```
 
 The releases aren't signed or notarized yet, so either way Gatekeeper quarantines the installed bundle and refuses to open it.
