@@ -1,0 +1,106 @@
+{
+  "reflection": [
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$Companion",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$MacOSFilePickerMode",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$MacOSFilePickerMode$SingleFile",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$MacOSFilePickerMode$MultipleFiles",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$MacOSFilePickerMode$Directories",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$callNativeMacOSPicker$2",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.MacOSFilePicker$openFileSaver$2",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$NSAutoreleasePool",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$NSString",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$NSArray",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$NSDictionary",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$NSDictionary$Companion",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.Foundation$RunnableInfo",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.FoundationLibrary$Companion",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "io.github.vinceglb.filekit.dialogs.platform.mac.foundation.ID$Companion",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true
+    }
+  ]
+}

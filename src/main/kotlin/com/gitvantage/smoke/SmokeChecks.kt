@@ -348,6 +348,31 @@ private fun checkXdgFileChooserProxy() {
  * The honest limit, same as the Linux check: a working callback proves the bridge is intact, not
  * that FileKit's own call path through `NSOpenPanel` returns a directory. Only opening a real
  * dialog would prove that, and that needs a person to click something.
+ *
+ * **Why the by-name access needs metadata of its own.** `Class.forName` in a native image answers
+ * "is this class registered for reflection?", not "is this class in the image?" — and those come
+ * apart badly here. The app reaches `Foundation` through ordinary static references from
+ * `MacOSFilePicker`, which need no metadata, so the chooser can work perfectly while every lookup
+ * in this check fails. The v1.2.0 release proved it: both macOS runners failed step 2 with
+ * `ClassNotFoundException` on `Foundation`, on a bridge there is no evidence was broken.
+ *
+ * The Linux image is the control, and it is unambiguous: `LinuxFilePicker` and `XdgFilePickerPortal`
+ * are just as unresolvable by name, both names are embedded in the binary, and a directory pick
+ * runs straight through them. Unresolvable by name says nothing about whether the code works.
+ *
+ * So the classes this check names are registered in
+ * `src/main/resources/META-INF/native-image/com.gitvantage/gitvantage/reachability-metadata.json`.
+ * Read that as an enabler rather than a fix: it is what lets steps 2 and 3 run at all. Step 1 is
+ * consequently tautological — we are the ones who registered the class it looks for — and only
+ * steps 2 and 3 still assert anything about the shipped artifact, because a JNA load and a callback
+ * round-trip have to genuinely happen. Reaching them statically instead is not an option: these
+ * types are `internal` to FileKit, so Kotlin cannot name them from this module.
+ *
+ * The file registers the whole macOS closure, one entry per class, rather than leaning on
+ * `allDeclaredMethods` on the two entry points to drag the rest along — registering a method makes
+ * it reflectively callable, it does not make its body an analysis root. Registering
+ * `MacOSFilePicker` alone still left `MacOSFilePickerMode$Directories` — the mode
+ * `openDirectoryPicker` passes — unresolvable.
  */
 private fun checkMacOsFileChooserBridge() {
     val name = "FileKit macOS file chooser bridge"
@@ -360,7 +385,9 @@ private fun checkMacOsFileChooserBridge() {
     if (runCatching { Class.forName("$pkg.mac.MacOSFilePicker") }.isFailure) {
         record(
             Status.FAIL, name,
-            "$pkg.mac.MacOSFilePicker is not in the image — \"Add repo\" has no chooser to call",
+            "$pkg.mac.MacOSFilePicker is not reflectively reachable — its reachability metadata " +
+                "registration is missing or stale. That blinds this check; on its own it does not " +
+                "mean the chooser is broken, because the app reaches the picker statically",
         )
         return
     }
@@ -370,10 +397,19 @@ private fun checkMacOsFileChooserBridge() {
         val cls = Class.forName("$pkg.mac.foundation.Foundation")
         cls.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null) to cls
     }.getOrElse {
+        // Distinguish the two failures sharply: they call for opposite responses. A missing
+        // registration is a hole in our metadata and proves nothing about the artifact; an
+        // initialiser failure is the real defect this step exists to catch.
         record(
             Status.FAIL, name,
-            "JNA could not load the Foundation framework ($it) — every native dialog on this " +
-                "platform will fail before it opens",
+            if (it is ClassNotFoundException) {
+                "$pkg.mac.foundation.Foundation is not reflectively reachable ($it) — its " +
+                    "reachability metadata registration is missing or stale, so this check cannot " +
+                    "see the bridge. That is a hole in the check, not evidence the chooser is broken"
+            } else {
+                "JNA could not load the Foundation framework ($it) — every native dialog on this " +
+                    "platform will fail before it opens"
+            },
         )
         return
     }

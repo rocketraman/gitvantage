@@ -66,6 +66,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     // Cross-platform native directory picker (XDG portal on Linux, native on macOS/Windows).
     // Brings PlatformFile via its filekit-core dependency.
+    //
+    // Its macOS bridge needs reachability metadata we ship ourselves — see
+    // src/main/resources/META-INF/native-image/com.gitvantage/gitvantage/reachability-metadata.json.
     implementation("io.github.vinceglb:filekit-dialogs:0.14.2")
     // OS desktop notifications (reminders + alerts) and a filesystem watcher (live rescans).
     implementation("dev.nucleusframework:nucleus.notification-common:2.4.0")
