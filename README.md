@@ -111,11 +111,11 @@ sudo dnf install ./gitvantage-1.0.0-linux-x86_64.rpm
 Open the `.dmg` and drag GitVantage into `/Applications` as usual, or from the command line — mount the disk image, copy the app across, and unmount:
 
 ```bash
-hdiutil attach gitvantage-1.0.0-mac-arm64.dmg
-sudo cp -R /Volumes/GitVantage\ 1.0.0-arm64/GitVantage.app /Applications/
+hdiutil attach gitvantage-*-mac-arm64.dmg
+sudo cp -R /Volumes/GitVantage\ *-arm64/GitVantage.app /Applications/
 # workaround https://github.com/rocketraman/gitvantage/issues/1
 sudo xattr -dr com.apple.quarantine /Applications/GitVantage.app
-hdiutil umount /Volumes/GitVantage\ 1.0.0-arm64
+hdiutil unmount /Volumes/GitVantage\ *-arm64
 ```
 
 The releases aren't signed or notarized yet, so either way Gatekeeper quarantines the installed bundle and refuses to open it.
