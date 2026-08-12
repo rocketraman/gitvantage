@@ -355,9 +355,13 @@ fun TagBar(state: AppState) {
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Txt("TAGS", 11.sp, Tokens.muted2, FontWeight.Bold, letterSpacing = 0.5.sp)
-        if (state.tagFilter.isNotEmpty() || state.tagExclude.isNotEmpty()) {
-            Txt("Clear Tag Filters", 12.sp, state.accent, FontWeight.SemiBold, modifier = Modifier.onTap { state.clearTags() })
-        }
+        // Always laid out — only the colour changes — so selecting a tag can't shift the chips
+        // sideways under a cursor that's mid-way through picking several of them.
+        val canClear = state.tagFilter.isNotEmpty() || state.tagExclude.isNotEmpty()
+        Txt(
+            "Clear Tag Filters", 12.sp, if (canClear) state.accent else Tokens.muted2, FontWeight.SemiBold,
+            modifier = if (canClear) Modifier.onTap { state.clearTags() } else Modifier,
+        )
         state.namespaceGroups().forEach { (ns, chips) ->
             val p = nsPalette(ns)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
