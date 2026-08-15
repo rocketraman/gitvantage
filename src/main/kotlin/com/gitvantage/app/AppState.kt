@@ -531,7 +531,7 @@ class AppState(private val scope: CoroutineScope) {
             message = e.reminderText,
             kind = Notify.Kind.REMINDER,
             onClick = { scope.launch { selectedId = id } },
-            buttons = listOf<Pair<String, () -> Unit>>(
+            buttons = listOf(
                 "Done" to { scope.launch { clearReminder(listOf(id)) } },
                 "Snooze 1h" to { scope.launch { remindAt[id] = System.currentTimeMillis() + remindAgainMs } },
             ),
