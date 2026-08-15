@@ -530,10 +530,10 @@ class AppState(private val scope: CoroutineScope) {
             title = "Reminder — ${File(id).name}",
             message = e.reminderText,
             kind = Notify.Kind.REMINDER,
-            onClick = { scope.launch { selectedId = id }; Unit },
+            onClick = { scope.launch { selectedId = id } },
             buttons = listOf<Pair<String, () -> Unit>>(
-                "Done" to { scope.launch { clearReminder(listOf(id)) }; Unit },
-                "Snooze 1h" to { scope.launch { remindAt[id] = System.currentTimeMillis() + remindAgainMs }; Unit },
+                "Done" to { scope.launch { clearReminder(listOf(id)) } },
+                "Snooze 1h" to { scope.launch { remindAt[id] = System.currentTimeMillis() + remindAgainMs } },
             ),
         )
     }
