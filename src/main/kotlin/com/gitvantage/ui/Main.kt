@@ -50,6 +50,7 @@ import kotlin.system.exitProcess
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * `--smoke-test` runs the subsystem checks in [runSmokeChecks] and exits, without opening a window.
@@ -87,7 +88,7 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     // Driven from the application scope (not the window content) so it fires even while hidden.
     var windowVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        delay(48)
+        delay(48.milliseconds)
         windowVisible = true
     }
     // Hands the title bar (which Nucleus draws, and which supplies the native window controls)
@@ -147,7 +148,7 @@ fun GitVantageApp(app: AppState) {
     LaunchedEffect(Theme.mode) {
         while (Theme.mode == ThemeMode.SYSTEM) {
             Theme.refreshSystemPreferenceAsync()
-            delay(60_000)
+            delay(60_000.milliseconds)
         }
     }
     Box(Modifier.fillMaxSize()) {
