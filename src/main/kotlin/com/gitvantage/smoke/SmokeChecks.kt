@@ -18,6 +18,7 @@ import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.exceptions.AddressResolvingException
 import org.freedesktop.dbus.exceptions.InvalidBusAddressException
 import org.freedesktop.dbus.interfaces.Properties
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Functional checks for the subsystems that fail silently.
@@ -114,23 +115,23 @@ private fun checkFsWatcher() = runBlocking {
     val collector = launch(Dispatchers.IO) {
         runCatching { watcher.events.collect { events++ } }
     }
-    delay(300)
+    delay(300.milliseconds)
     val registration = runCatching { watcher.watch(dir, true, "smoke") }.getOrNull()
     if (registration == null) {
         collector.cancel()
         record(Status.FAIL, name, "watch() returned null / threw")
         return@runBlocking
     }
-    delay(300)
+    delay(300.milliseconds)
     repeat(3) { i ->
         Files.writeString(dir.resolve("smoke$i.txt"), "smoke $i")
-        delay(200)
+        delay(200.milliseconds)
     }
     // Native events arrive asynchronously; give them room before declaring failure. The old 2s
     // budget was tuned on inotify, which is effectively immediate. macOS FSEvents coalesces and
     // can sit on a change for seconds, so a slow delivery there is indistinguishable from none —
     // hence the wider window. It only costs wall-clock on a run that is already failing.
-    repeat(100) { if (events == 0) delay(100) }
+    repeat(100) { if (events == 0) delay(100.milliseconds) }
     collector.cancel()
     runCatching { registration.close() }
     runCatching { dir.toFile().deleteRecursively() }
@@ -183,7 +184,7 @@ private fun checkFsWatcherThroughSymlink() = runBlocking {
     val collector = launch(Dispatchers.IO) {
         runCatching { watcher.events.collect { events++ } }
     }
-    delay(300)
+    delay(300.milliseconds)
     // Resolve exactly as AppState.watchRootFor does — the whole point is that this is what makes a
     // symlinked repo work. Watching `link` unresolved is what silently fails on macOS.
     val registration = runCatching { watcher.watch(link.toRealPath(), true, "smoke-link") }.getOrNull()
@@ -193,13 +194,13 @@ private fun checkFsWatcherThroughSymlink() = runBlocking {
         runCatching { base.toFile().deleteRecursively() }
         return@runBlocking
     }
-    delay(300)
+    delay(300.milliseconds)
     // Write *through the symlink*, the way a user's tooling would.
     repeat(3) { i ->
         Files.writeString(link.resolve("smoke$i.txt"), "smoke $i")
-        delay(200)
+        delay(200.milliseconds)
     }
-    repeat(100) { if (events == 0) delay(100) }
+    repeat(100) { if (events == 0) delay(100.milliseconds) }
     collector.cancel()
     runCatching { registration.close() }
     runCatching { base.toFile().deleteRecursively() }

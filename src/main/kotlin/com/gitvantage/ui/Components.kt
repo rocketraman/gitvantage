@@ -65,6 +65,7 @@ import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 /** A 1px bottom hairline, like CSS `border-bottom`. */
 fun Modifier.drawBottomBorder(color: Color): Modifier = this.drawBehind {
@@ -378,7 +379,7 @@ fun InfoTip(text: String, modifier: Modifier = Modifier) {
 fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(value) { mutableStateOf(false) }
-    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     val shape = RoundedCornerShape(6.dp)
     Box(
         modifier.clip(shape)
@@ -465,7 +466,7 @@ fun RowAction(label: String, danger: Boolean = false, onClick: () -> Unit) {
 fun CopyAction(value: String, label: String = "Copy") {
     val clipboard = LocalClipboardManager.current
     var copied by remember(value) { mutableStateOf(false) }
-    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     Txt(
         if (copied) "✓ Copied" else label, 11.5.sp,
         if (copied) Tokens.addFg else Tokens.accent, FontWeight.Medium,
@@ -497,7 +498,7 @@ fun CopyTarget(
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(value) { mutableStateOf(false) }
-    LaunchedEffect(copied) { if (copied) { delay(1200); copied = false } }
+    LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     HoverTip(
         tip,
         modifier.pointerHoverIcon(PointerIcon.Hand)

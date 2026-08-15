@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlin.time.Duration.Companion.milliseconds
 
 /** A transient modal driven by [AppState.popup]; targets the given repo [ids]. */
 sealed interface Popup {
@@ -412,7 +413,7 @@ class AppState(private val scope: CoroutineScope) {
         val deadline = watchDeadline.getOrPut(id) { WatchPolicy.deadlineFor(now) }
         watchDebounce[id]?.cancel()
         watchDebounce[id] = scope.launch {
-            delay(WatchPolicy.delayMs(now, deadline))
+            delay(WatchPolicy.delayMs(now, deadline).milliseconds)
             // Cleared as the scan starts, so the next event opens a fresh burst window rather than
             // inheriting a deadline that has already passed (which would scan on every event).
             watchDeadline.remove(id)
@@ -514,7 +515,7 @@ class AppState(private val scope: CoroutineScope) {
                         }
                     }
                 }
-                delay(30_000)
+                delay(30_000.milliseconds)
             }
         }
     }
@@ -1029,7 +1030,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun persistDebounced() {
         saveJob?.cancel()
         saveJob = scope.launch {
-            delay(SAVE_DEBOUNCE_MS)
+            delay(SAVE_DEBOUNCE_MS.milliseconds)
             saveJob = null
             writeRegistry()
         }
@@ -1249,7 +1250,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun toast(msg: String, sticky: Boolean = false) {
         opStatus = msg
         toastJob?.cancel()
-        toastJob = if (sticky) null else scope.launch { delay(4500); opStatus = null }
+        toastJob = if (sticky) null else scope.launch { delay(4500.milliseconds); opStatus = null }
     }
     fun dismissToast() { toastJob?.cancel(); opStatus = null }
     private fun plural(n: Int) = if (n == 1) "repo" else "repos"
@@ -2092,7 +2093,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun startGitHubRefresh(intervalSeconds: Long = 300) {
         scope.launch {
             while (isActive) {
-                delay(intervalSeconds * 1000)
+                delay((intervalSeconds * 1000).milliseconds)
                 refreshGitHub()   // no-ops harmlessly when no repo has a tracked GitHub remote
             }
         }
@@ -2120,7 +2121,7 @@ class AppState(private val scope: CoroutineScope) {
                 selectionFetchJob?.cancel()
                 if (id == null || entries[id] == null) return@collect
                 selectionFetchJob = scope.launch {
-                    delay(500)
+                    delay(500.milliseconds)
                     rescanRepos(listOf(id), fetch = true)
                 }
             }
@@ -2142,7 +2143,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun startAutoRefresh(intervalSeconds: Long = 300) {
         scope.launch {
             while (isActive) {
-                delay(intervalSeconds * 1000)
+                delay((intervalSeconds * 1000).milliseconds)
                 val now = System.currentTimeMillis()
                 val due = order.filter { id -> id == selectedId || isFetchDue(id, now) }
                 if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false)
