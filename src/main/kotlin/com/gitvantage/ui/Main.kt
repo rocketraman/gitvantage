@@ -27,6 +27,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
@@ -103,6 +111,7 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
             visible = windowVisible,
             title = "GitVantage",
             icon = painterResource("app-icon.png"),   // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
+            onPreviewKeyEvent = ::zoomShortcut,
         ) {
             // Everything the window draws — the Nucleus-drawn title bar included — sizes itself
             // against one density. Wrapping only the app content would let the two halves
@@ -134,6 +143,33 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
                 GitVantageApp(app)
             }
         }
+    }
+}
+
+/**
+ * Ctrl+Shift+= / Ctrl+Shift+- step the zoom, so the size of the UI can be corrected without first
+ * finding the Appearance dialog — which is the awkward case, since the reason to reach for zoom at
+ * all is usually that the UI is too small to comfortably read the dialog's own contents.
+ *
+ * A window-level *preview* handler, deliberately: it is the only placement that answers everywhere,
+ * including while a modal holds focus and before anything has been clicked at all (nothing in the
+ * window is focused when it opens, so a handler further in would simply not be reached). Nothing
+ * else in the app claims this chord, so previewing it steals no keystroke from a focused field.
+ *
+ * Three keys map to "in" because which one arrives is the platform's business, not ours. Under Tao
+ * on Linux a shifted `=` is delivered as [Key.Equals] — the physical key, with Shift reported as a
+ * modifier — which is what this was verified against; a path that reports the `+` the key *produces*
+ * instead would arrive as [Key.Plus], and the numpad's own `+` is the same request by a third key.
+ * Accepting all three costs nothing, and none of them means anything else in this app. Meta
+ * alongside Ctrl for macOS, the same pairing [onTap] already uses for modifier-clicks.
+ */
+private fun zoomShortcut(ev: KeyEvent): Boolean {
+    if (ev.type != KeyEventType.KeyDown) return false
+    if (!(ev.isCtrlPressed || ev.isMetaPressed) || !ev.isShiftPressed) return false
+    return when (ev.key) {
+        Key.Equals, Key.Plus, Key.NumPadAdd -> { UiScale.zoomIn(); true }
+        Key.Minus, Key.NumPadSubtract -> { UiScale.zoomOut(); true }
+        else -> false
     }
 }
 

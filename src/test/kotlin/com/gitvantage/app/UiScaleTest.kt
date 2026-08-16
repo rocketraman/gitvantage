@@ -46,4 +46,28 @@ val UiScaleZoom by testSuite {
         assert(UiScale.effectiveDensity(1.0f, 0) == UiScale.MIN_PERCENT / 100f)
         assert(UiScale.effectiveDensity(1.0f, 10_000) == UiScale.MAX_PERCENT / 100f)
     }
+
+    test("the keyboard shortcut walks the same steps the picker offers") {
+        // Ctrl+Shift+= and Ctrl+Shift+- must land on picker rows, not on some parallel set of
+        // zooms reachable only from the keyboard.
+        UiScale.STEPS.zipWithNext().forEach { (step, next) ->
+            assert(UiScale.stepFrom(step, up = true) == next)
+            assert(UiScale.stepFrom(next, up = false) == step)
+        }
+    }
+
+    test("stepping past either end of the list stays put") {
+        // The shortcut has no disabled state to show, so the end of the range has to be a no-op
+        // rather than a wrap around to the opposite extreme.
+        assert(UiScale.stepFrom(UiScale.STEPS.last(), up = true) == UiScale.STEPS.last())
+        assert(UiScale.stepFrom(UiScale.STEPS.first(), up = false) == UiScale.STEPS.first())
+    }
+
+    test("stepping from a zoom between two steps moves to the neighbouring one") {
+        // Reachable without the picker: MAX_PERCENT is above the largest step, and registry.json
+        // is hand-editable. Whatever arrives, a step must still move by one notch.
+        assert(UiScale.stepFrom(105, up = true) == 110)
+        assert(UiScale.stepFrom(105, up = false) == 100)
+        assert(UiScale.stepFrom(UiScale.MAX_PERCENT, up = false) == UiScale.STEPS.last())
+    }
 }

@@ -51,6 +51,27 @@ object UiScale {
         Registry.saveSettings(Registry.settings().copy(uiScalePercent = next))
     }
 
+    /** One [STEPS] notch up, for the Ctrl+Shift+= shortcut. */
+    fun zoomIn() = zoomTo(stepFrom(percent, up = true))
+
+    /** One [STEPS] notch down, for the Ctrl+Shift+- shortcut. */
+    fun zoomOut() = zoomTo(stepFrom(percent, up = false))
+
+    /**
+     * The offered step one notch [up] (or down) from [from], or [from] itself when there is none.
+     *
+     * Stepping walks [STEPS] rather than adding a fixed percentage, so the shortcut and the picker
+     * land on exactly the same set of zooms — pressing the shortcut twice and clicking two chips
+     * along are the same thing, and no zoom is reachable one way but not the other.
+     *
+     * It reads [from] as a *bound* rather than as a member of the list, because it need not be one:
+     * [MAX_PERCENT] is above the largest step, and registry.json is hand-editable, so anything in
+     * range can arrive here. From 105% the next step up is 110 and the next down is 100, which is
+     * the only sensible answer to give an in-between value.
+     */
+    fun stepFrom(from: Int, up: Boolean): Int =
+        if (up) STEPS.firstOrNull { it > from } ?: from else STEPS.lastOrNull { it < from } ?: from
+
     /**
      * Keeps a zoom inside the range the app stays usable at, wherever the value came from — the
      * picker, or a hand-edited registry.json, which is the one that can hold anything at all.

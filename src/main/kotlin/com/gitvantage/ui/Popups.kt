@@ -285,6 +285,10 @@ private fun AppearancePopup(state: AppState) {
             ) {
                 Txt("Zoom", 13.sp, Tokens.text, FontWeight.SemiBold)
                 Txt("· ${UiScale.percent}%", 11.5.sp, Tokens.muted2)
+                // The chords step through the same list as the chips below (see UiScale.stepFrom),
+                // and this dialog is where someone looking for zoom ends up — so it is the one
+                // place the shortcut can be discovered rather than guessed at.
+                Txt("· Ctrl+Shift+= / −", 11.5.sp, Tokens.muted2)
                 Spacer(Modifier.weight(1f))
                 if (UiScale.percent != 100) {
                     Txt("Reset", 11.5.sp, Tokens.accent, FontWeight.SemiBold,
