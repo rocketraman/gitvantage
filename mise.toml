@@ -1,4 +1,3 @@
-# Project-scoped toolchain. The Gradle daemon must run on JDK <= 21 (see gradle.properties);
-# pin JDK 21 here so mise/asdf users pick it up automatically in this directory.
+# Project-scoped toolchain.
 [tools]
-java = "temurin-21"
+java = "temurin-25"
