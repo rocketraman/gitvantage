@@ -4,6 +4,7 @@
 package com.gitvantage.git
 
 import com.gitvantage.git.model.Branch
+import com.gitvantage.git.model.BranchStatus
 import com.gitvantage.git.model.StatusResult
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.DETACHED_BRANCH
@@ -59,35 +60,37 @@ object RepoScanner {
         // Best-effort: ignore offline/errors. Logged only when the user asked for it (see [scan]).
         if (fetch) Git.run(dir, listOf("fetch"), Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
 
-        // Whether the repo has ANY remote configured. Gates Push/Fetch/Fast-forward:
-        // a branch can be pushable (via `push -u origin`) even without a tracking upstream,
-        // as long as a remote exists.
-        val hasRemote = Git.readOrNull(dir, "remote")?.lineSequence()?.any { it.isNotBlank() } ?: false
-        // Remote web base (for GitHub commit/issue/PR/actions links). Prefer origin.
-        val remoteUrl = Git.readOrNull(dir, "remote", "get-url", "origin")?.trim()?.takeIf { it.isNotEmpty() }
+        // Whether the repo has ANY remote configured, and origin's URL for the web links. Gates
+        // Push/Fetch/Fast-forward: a branch can be pushable (via `push -u origin`) even without a
+        // tracking upstream, as long as a remote exists.
+        val (hasRemote, remoteUrl) = parseRemotes(Git.readOrNull(dir, "remote", "-v").orEmpty())
         val (webBase, isGitHub) = Meta.webBase(remoteUrl)
         val hasWorkflows = File(dir, ".github/workflows").isDirectory
 
-        // Branch (empty/null when detached)
-        val symbolic = Git.readOrNull(dir, "symbolic-ref", "--short", "-q", "HEAD")?.trim().orEmpty()
+        // One command for the working tree *and* the branch it sits on — see [parseBranch] for what
+        // that folds in and why it is worth folding.
+        val statusOut = Git.readOrNull(dir, "status", "--porcelain", "--branch").orEmpty()
+        val status = parseStatus(statusOut)
+        val head = parseBranch(statusOut)
+        val symbolic = head?.branch.orEmpty()
         val detached = symbolic.isEmpty()
         val branch = if (detached) DETACHED_BRANCH else symbolic
 
-        // Upstream + ahead/behind. Prefer a configured @{upstream}; else fall back to
-        // origin/<branch> if it exists (a branch that was pushed but never `-u`-tracked).
-        var upstream = Git.readOrNull(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-            ?.trim()?.takeIf { it.isNotEmpty() && !it.endsWith("@{upstream}") }
+        // Upstream + ahead/behind come with the header when one is configured. Only the fallback
+        // still costs anything: a branch pushed but never `-u`-tracked has no upstream to report,
+        // and origin/<branch> is the one git would have used had it been asked.
+        var upstream = head?.upstream
+        var ahead = head?.ahead ?: 0
+        var behind = head?.behind ?: 0
         if (upstream == null && !detached) {
             val implied = "origin/$symbolic"
-            if (Git.readOrNull(dir, "rev-parse", "--verify", "-q", implied) != null) upstream = implied
-        }
-        var ahead = 0
-        var behind = 0
-        if (upstream != null) {
-            Git.readOrNull(dir, "rev-list", "--left-right", "--count", "HEAD...$upstream")?.trim()?.let { line ->
-                val parts = line.split(Regex("\\s+"))
-                ahead = parts.getOrNull(0)?.toIntOrNull() ?: 0
-                behind = parts.getOrNull(1)?.toIntOrNull() ?: 0
+            if (Git.readOrNull(dir, "rev-parse", "--verify", "-q", implied) != null) {
+                upstream = implied
+                Git.readOrNull(dir, "rev-list", "--left-right", "--count", "HEAD...$implied")?.trim()?.let { line ->
+                    val parts = line.split(Regex("\\s+"))
+                    ahead = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                    behind = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                }
             }
         }
 
@@ -96,8 +99,6 @@ object RepoScanner {
             upstream == null -> "No upstream"
             else -> null
         }
-
-        val status = parseStatus(Git.readOrNull(dir, "status", "--porcelain").orEmpty())
         // "Dirty for how long": the registry records when the tree first went dirty; keep it only
         // while still dirty (AppState reconciles/persists the timestamp after each scan).
         val dirtyNow = status.staged + status.unstaged + status.untracked > 0
@@ -127,7 +128,10 @@ object RepoScanner {
         // when there are others it also looks inside them, because work sitting in another
         // checkout is invisible from here and the row has no other way to learn of it. The rest of
         // the per-worktree detail (last commits, merged-ness) stays lazy — see WorktreeOps.load.
-        val worktrees = WorktreeOps.listWithWork(id)
+        // Skipped entirely when the filesystem already says there is nothing to find — see
+        // [WorktreeOps.mayHaveOtherWorktrees]. An empty list then means "this checkout, and nothing
+        // else", which is exactly what every derivation below reads out of it anyway.
+        val worktrees = if (WorktreeOps.mayHaveOtherWorktrees(dir)) WorktreeOps.listWithWork(id) else emptyList()
         val currentTree = worktrees.firstOrNull { it.isCurrent }
         val isWorktree = currentTree != null && !currentTree.isMain
         val worktreeMain = if (isWorktree) worktrees.firstOrNull { it.isMain }?.path else null
@@ -209,11 +213,83 @@ object RepoScanner {
         return p != r && generateSequence(p.parentFile) { it.parentFile }.any { it == r }
     }
 
+    /**
+     * Parse the `## ` header of `git status --porcelain --branch`, or null if there isn't one.
+     *
+     * This one line answers what `symbolic-ref`, `rev-parse @{upstream}` and `rev-list --count`
+     * were three separate subprocesses to ask, and it comes attached to a `status` the scan already
+     * runs. On a machine where spawning is cheap that is a tidy-up; on a Mac with an endpoint
+     * security agent, where every `exec` is a synchronous callout to a scanner, it is most of the
+     * scan's cost.
+     *
+     * The shapes git actually emits, all of which have to be told apart:
+     *
+     * ```
+     * ## main                                  no upstream configured
+     * ## main...origin/main                    tracking, in sync
+     * ## main...origin/main [ahead 1]          one side only
+     * ## main...origin/main [ahead 1, behind 2]
+     * ## main...origin/main [gone]             tracking a branch that no longer exists
+     * ## HEAD (no branch)                      detached
+     * ## No commits yet on main                a branch with no commits on it yet
+     * ```
+     *
+     * `[gone]` reads as **no upstream**, which is not obvious and is what keeps this faithful to the
+     * commands it replaces: `rev-parse @{upstream}` fails outright for a deleted upstream, so the
+     * repo has always shown "No upstream" for it. Reporting the dead branch's name instead would be
+     * a quieter dashboard and a wronger one.
+     *
+     * `...` is safe as the separator because git forbids consecutive dots in a ref name, so it can
+     * never appear inside either half.
+     */
+    fun parseBranch(out: String): BranchStatus? {
+        val line = out.lineSequence().firstOrNull { it.startsWith("## ") }?.removePrefix("## ") ?: return null
+        if (line == "HEAD (no branch)") return BranchStatus(branch = null, upstream = null)
+        NO_COMMITS.matchEntire(line)?.let { return BranchStatus(branch = it.groupValues[1], upstream = null) }
+        if ("..." !in line) return BranchStatus(branch = line, upstream = null)
+
+        val branch = line.substringBefore("...")
+        val rest = line.substringAfter("...")
+        val upstream = rest.substringBefore(" [")
+        val tracking = rest.substringAfter(" [", "").removeSuffix("]")
+        if (tracking == "gone") return BranchStatus(branch = branch, upstream = null)
+        return BranchStatus(
+            branch = branch,
+            upstream = upstream,
+            ahead = TRACK.find(tracking, "ahead"),
+            behind = TRACK.find(tracking, "behind"),
+        )
+    }
+
+    private val NO_COMMITS = Regex("No commits yet on (.+)")
+    private val TRACK = Regex("(ahead|behind) (\\d+)")
+
+    /** The count [which] reports in a `[ahead 1, behind 2]` clause, or 0 when it isn't mentioned. */
+    private fun Regex.find(tracking: String, which: String): Int =
+        findAll(tracking).firstOrNull { it.groupValues[1] == which }?.groupValues?.get(2)?.toIntOrNull() ?: 0
+
+    /**
+     * Whether `origin` is configured, and its fetch URL, from one `git remote -v`.
+     *
+     * Replaces a `remote` (is there any?) and a `remote get-url origin` (what is it?) with the one
+     * command that answers both. Lines read `origin\t<url> (fetch)`, and the fetch URL is taken
+     * because that is the one `get-url` hands back by default.
+     */
+    fun parseRemotes(out: String): Pair<Boolean, String?> {
+        val lines = out.lineSequence().filter { it.isNotBlank() }.toList()
+        val origin = lines.firstOrNull { it.startsWith("origin\t") && it.endsWith("(fetch)") }
+            ?.substringAfter('\t')?.substringBeforeLast(" (fetch)")?.trim()?.takeIf { it.isNotEmpty() }
+        return lines.isNotEmpty() to origin
+    }
+
     /** Parse `git status --porcelain` (v1). X = index (staged), Y = worktree (unstaged). */
     fun parseStatus(out: String): StatusResult {
         val files = mutableListOf<ChangedFile>()
         var staged = 0; var unstaged = 0; var untracked = 0
         out.lineSequence().forEach { raw ->
+            // The `--branch` header, when the caller asked for one. Left to [parseBranch]; counted
+            // here it would read as an index *and* worktree change to a file called "main...".
+            if (raw.startsWith("## ")) return@forEach
             if (raw.length < 3) return@forEach
             val x = raw[0]; val y = raw[1]
             var path = raw.substring(3)

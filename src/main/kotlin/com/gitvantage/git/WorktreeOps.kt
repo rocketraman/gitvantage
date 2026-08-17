@@ -107,6 +107,26 @@ object WorktreeOps {
      */
     fun listWithWork(repoPath: String): List<Worktree> = enrich(list(repoPath), repoPath, includeCurrent = false)
 
+    /**
+     * Whether the checkout at [dir] might have working trees other than itself — false only when the
+     * filesystem rules it out, which it can do without spawning anything.
+     *
+     * git records every linked worktree as a directory under the main checkout's `.git/worktrees`.
+     * So a `.git` that is a real directory with no such entries has exactly one working tree, and
+     * `git worktree list` can only confirm what the stat already established. That is the common
+     * case — nearly every repo — and it runs on every scan of every repo.
+     *
+     * A `.git` that is a *file* is not covered: it means this checkout is itself a linked worktree
+     * or a submodule, and where the real gitdir sits, and what else hangs off it, is git's question
+     * to answer. Absence of proof, so this answers true and the caller pays for the command.
+     */
+    fun mayHaveOtherWorktrees(dir: File): Boolean {
+        val dotGit = File(dir, ".git")
+        if (!dotGit.isDirectory) return true          // a gitfile — this checkout is linked to something
+        val admin = File(dotGit, "worktrees").list() ?: return false
+        return admin.isNotEmpty()
+    }
+
     /** [listWithWork] over every tree including the current one, off the UI thread. */
     suspend fun load(repoPath: String): List<Worktree> = withContext(Dispatchers.IO) {
         enrich(list(repoPath), repoPath, includeCurrent = true)
