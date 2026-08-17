@@ -396,7 +396,8 @@ private fun ChangedFilesSection(state: AppState, rv: RepoView) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Txt("Changed files", 12.5.sp, Tokens.text, FontWeight.Bold)
-            Txt("— ${repo.files.size}", 11.sp, Tokens.muted2)
+            // The repo's own count, not the list's: the list is capped and the count never is.
+            Txt("— ${repo.changedCount}", 11.sp, Tokens.muted2)
             Spacer(Modifier.weight(1f))
             FlatAction("Open diff →", size = 11.5.sp) { state.openDiff(repo.id) }
         }
@@ -409,6 +410,15 @@ private fun ChangedFilesSection(state: AppState, rv: RepoView) {
                 FileGroupLabel("Not staged", rest.size, Tokens.modifiedHdr, Tokens.modifiedDot, top = 10)
                 rest.forEach { ChangedFileRow(it, repo.dirtyFor) }
             }
+        }
+        // Said plainly, because these rows are composed eagerly — one per entry, no lazy list — and
+        // the cap is what keeps a repo with an un-ignored build directory from composing forty
+        // thousand of them. Silence here would read as "that is all of them", which it is not.
+        if (repo.filesTruncated) {
+            Txt(
+                "… and ${repo.changedCount - repo.files.size} more — open the diff to see them all",
+                11.sp, Tokens.muted2, modifier = Modifier.padding(top = 8.dp),
+            )
         }
     }
 }

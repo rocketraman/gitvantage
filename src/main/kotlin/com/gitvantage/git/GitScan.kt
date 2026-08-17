@@ -107,13 +107,23 @@ object RepoScanner {
         // Newest working-tree change, for the "Recently Modified" filter. Uses the mtime of the
         // currently-changed files rather than "when it first went dirty" (dirtySince), so a repo
         // you're actively editing stays "recently modified" even if the tree went dirty days ago.
-        // Deleted paths no longer exist on disk and simply drop out of the max.
+        //
+        // One `stat` per distinct path, where this used to cost two per *entry*. `exists()` was the
+        // first of them and bought nothing: `lastModified()` already answers 0 for a file that isn't
+        // there, which is the same "drop it from the max" the filter below performs — a deleted path
+        // simply has no mtime to contribute. And a file that is both staged and modified appears
+        // once per section, so it was being stat'd twice over on top of that.
+        //
+        // Bounded by [MAX_FILES] along with the list itself. Above that the answer is the newest of
+        // the files examined, which can only under-report how recently the repo was touched — and a
+        // repo with five hundred changed files is not one the "recently modified" filter is telling
+        // anybody anything they don't know.
         val modifiedAt = status.files.asSequence()
-            .map { File(dir, it.path) }
-            .filter { it.exists() }
-            .map { it.lastModified() }
+            .map { it.path }
+            .distinct()
+            .map { File(dir, it).lastModified() }
+            .filter { it > 0 }
             .maxOrNull()
-            ?.takeIf { it > 0 }
 
         val stashes = Git.readOrNull(dir, "stash", "list").orEmpty()
             .lineSequence().filter { it.isNotBlank() }
@@ -282,10 +292,36 @@ object RepoScanner {
         return lines.isNotEmpty() to origin
     }
 
-    /** Parse `git status --porcelain` (v1). X = index (staged), Y = worktree (unstaged). */
-    fun parseStatus(out: String): StatusResult {
+    /**
+     * How many changed files a scan keeps.
+     *
+     * The counts are always exact — they are what the row's badges and every filter read, and a
+     * wrong one is a wrong dashboard. It is the *list* that is bounded, and the list is only ever
+     * read to be looked at: the detail panel prints a row per entry, and past a few hundred nobody
+     * is reading them, they are just being paid for.
+     *
+     * Paid for three times over, in fact, which is why the cap sits here rather than at the point of
+     * use. Every entry is an object retained in observable state for as long as the repo is tracked;
+     * it is a `stat` in [scan]'s newest-change scan; and it is a row composed eagerly, so a repo with
+     * tens of thousands of them stops being slow and starts being a hang.
+     *
+     * Tens of thousands is not far-fetched. `git status` lists untracked files one per line, and
+     * whether it descends into an untracked directory at all is decided by the user's *global*
+     * `status.showUntrackedFiles` — so a single un-ignored `node_modules` can turn one line into
+     * forty thousand, on a setting most people do not remember choosing.
+     */
+    const val MAX_FILES = 500
+
+    /**
+     * Parse `git status --porcelain` (v1). X = index (staged), Y = worktree (unstaged).
+     *
+     * Counting and collecting are deliberately separate: every line is counted, only the first
+     * [maxFiles] are kept. See [MAX_FILES].
+     */
+    fun parseStatus(out: String, maxFiles: Int = MAX_FILES): StatusResult {
         val files = mutableListOf<ChangedFile>()
         var staged = 0; var unstaged = 0; var untracked = 0
+        fun keep(f: ChangedFile) { if (files.size < maxFiles) files += f }
         out.lineSequence().forEach { raw ->
             // The `--branch` header, when the caller asked for one. Left to [parseBranch]; counted
             // here it would read as an index *and* worktree change to a file called "main...".
@@ -298,16 +334,16 @@ object RepoScanner {
 
             if (x == '?' && y == '?') {
                 untracked++
-                files += ChangedFile("?", "untracked", path)
+                keep(ChangedFile("?", "untracked", path))
                 return@forEach
             }
             if (x != ' ' && x != '?') {   // staged (index) change
                 staged++
-                files += ChangedFile(x.toString(), "staged", path)
+                keep(ChangedFile(x.toString(), "staged", path))
             }
             if (y != ' ' && y != '?') {   // unstaged (worktree) change
                 unstaged++
-                files += ChangedFile(y.toString(), "unstaged", path)
+                keep(ChangedFile(y.toString(), "unstaged", path))
             }
         }
         return StatusResult(files, staged, unstaged, untracked)

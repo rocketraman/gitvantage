@@ -3,6 +3,7 @@
 
 package com.gitvantage.git
 
+import com.gitvantage.model.Repo
 import de.infix.testBalloon.framework.core.testSuite
 
 /**
@@ -85,6 +86,67 @@ val StatusBranchHeader by testSuite {
         assert(s.unstaged == 1)
         assert(s.untracked == 1)
         assert(s.files.map { it.path } == listOf("src/App.kt", "new.txt"))
+    }
+}
+
+/**
+ * The bound on how many changed files a scan keeps.
+ *
+ * The split that matters: the *counts* drive every badge and filter and are never capped, while the
+ * *list* is only ever read to be looked at and is. A repo with an un-ignored `node_modules` can
+ * produce tens of thousands of status lines — each one an object retained in observable state, a
+ * `stat`, and a row composed eagerly into a non-lazy column.
+ */
+val ChangedFileCap by testSuite {
+
+    /** [n] untracked entries, as `git status --porcelain` would list them. */
+    fun untracked(n: Int) = (1..n).joinToString("\n") { "?? node_modules/pkg$it/index.js" }
+
+    test("the counts are exact however many files there are") {
+        val s = RepoScanner.parseStatus(untracked(5_000), maxFiles = 10)
+        assert(s.untracked == 5_000) { "the count was capped along with the list: ${s.untracked}" }
+        assert(s.staged == 0 && s.unstaged == 0)
+    }
+
+    test("the list is capped") {
+        val s = RepoScanner.parseStatus(untracked(5_000), maxFiles = 10)
+        assert(s.files.size == 10) { "kept ${s.files.size}" }
+        // The ones kept are the ones git listed first, not an arbitrary slice.
+        assert(s.files.first().path == "node_modules/pkg1/index.js")
+    }
+
+    test("a repo under the cap keeps everything, and reports no truncation") {
+        val s = RepoScanner.parseStatus(untracked(3), maxFiles = 10)
+        assert(s.files.size == 3)
+        val repo = Repo(id = "/r", name = "r", branch = "main", untracked = s.untracked, files = s.files)
+        assert(repo.changedCount == 3)
+        assert(!repo.filesTruncated)
+    }
+
+    test("a capped repo reports the shortfall the panel prints") {
+        val s = RepoScanner.parseStatus(untracked(5_000), maxFiles = 10)
+        val repo = Repo(id = "/r", name = "r", branch = "main", untracked = s.untracked, files = s.files)
+        assert(repo.changedCount == 5_000)
+        assert(repo.filesTruncated)
+        assert(repo.changedCount - repo.files.size == 4_990)
+    }
+
+    /**
+     * A file staged *and* modified is two entries, and both are counted — that is what the badges
+     * have always shown. It is also why the newest-change scan de-duplicates by path before it
+     * stats: the same file twice is the same `stat` twice.
+     */
+    test("a file both staged and modified counts once per section") {
+        val s = RepoScanner.parseStatus("MM src/App.kt\n")
+        assert(s.staged == 1 && s.unstaged == 1)
+        assert(s.files.map { it.path } == listOf("src/App.kt", "src/App.kt"))
+        assert(s.files.map { it.path }.distinct().size == 1)
+    }
+
+    test("the default cap is the one the scanner ships") {
+        val s = RepoScanner.parseStatus(untracked(RepoScanner.MAX_FILES + 25))
+        assert(s.files.size == RepoScanner.MAX_FILES)
+        assert(s.untracked == RepoScanner.MAX_FILES + 25)
     }
 }
 

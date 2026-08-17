@@ -81,6 +81,10 @@ data class Repo(
     val modifiedAt: Long? = null,   // epoch millis of the newest change in the working tree (mtime)
     val reminder: Reminder? = null,
     val note: String? = null,
+    /**
+     * The changed files, **capped** — see `RepoScanner.MAX_FILES`. Use [changedCount] for how many
+     * there are; this is the sample kept to be shown, not the tally.
+     */
     val files: List<ChangedFile> = emptyList(),
     val stashes: List<Stash> = emptyList(),
 ) {
@@ -90,4 +94,14 @@ data class Repo(
      * meaningless to copy or hand back to git.
      */
     val hasNamedBranch get() = isGitRepo && branch != DETACHED_BRANCH
+
+    /**
+     * How many changed entries the working tree actually has — always exact, where [files] may have
+     * been capped. One entry per file *per section*, matching [files]: a file both staged and
+     * modified is counted in each, because that is how it is listed.
+     */
+    val changedCount get() = staged + unstaged + untracked
+
+    /** Whether [files] is a sample rather than the whole list, so a reader can be told as much. */
+    val filesTruncated get() = files.size < changedCount
 }
