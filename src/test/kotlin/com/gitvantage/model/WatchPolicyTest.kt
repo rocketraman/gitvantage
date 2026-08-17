@@ -105,3 +105,66 @@ val WatchEventRouting by testSuite {
         assert(WatchPolicy.concernsRepo(nested, emptyList()))
     }
 }
+
+/**
+ * What each event is turned into — and above all, that a dropped-events signal survives the trip.
+ *
+ * The bug this pins: the watcher reports an overflow with *no source*, because it is speaking for
+ * itself rather than for any one registration. The collector routed every event by its source's
+ * name, so that one fell off the end — the app lost events and lost the only notice that it had.
+ * The repo then sat unrefreshed until the next poll with nothing on screen to explain it.
+ *
+ * The negative cases are the ones that matter here. Asserting an ordinary event still routes proves
+ * nothing about a signal that arrives shaped differently from every other event.
+ */
+val WatchActionRouting by testSuite {
+
+    val id = "/src/gitvantage"
+    val nested = listOf("/src/gitvantage/.claude/worktrees/feat")
+    val inNested = listOf(Path.of("/src/gitvantage/.claude/worktrees/feat/App.kt"))
+    val inRepo = listOf(Path.of("/src/gitvantage/src/main/App.kt"))
+
+    test("an overflow with no source rescans everything — it cannot say which repo it lost") {
+        val action = WatchPolicy.actionFor(id = null, needsRescan = true, nested = emptyList()) { emptyList() }
+        assert(action == WatchAction.RescanAll) { "a dropped-events signal was swallowed: $action" }
+    }
+
+    test("a rescan signal that does name a repo rescans that repo") {
+        val action = WatchPolicy.actionFor(id, needsRescan = true, nested = emptyList()) { emptyList() }
+        assert(action == WatchAction.Rescan(id))
+    }
+
+    test("a rescan signal is not filtered by the nested-worktree rule, whatever paths it carries") {
+        // The filter answers "did this write change the repo". A rescan signal says events were
+        // *lost*, so the paths it happens to carry say nothing about what went missing — routing it
+        // through the filter would drop it for naming a session's worktree, which is the busiest
+        // tree in the repo and so the likeliest one attached to an overflow.
+        val action = WatchPolicy.actionFor(id, needsRescan = true, nested = nested) { inNested }
+        assert(action == WatchAction.Rescan(id)) { "a rescan signal was filtered like a path event: $action" }
+    }
+
+    test("an ordinary event with no source is ignored — it names nothing to scan") {
+        val action = WatchPolicy.actionFor(id = null, needsRescan = false, nested = emptyList()) { inRepo }
+        assert(action == WatchAction.Ignore)
+    }
+
+    test("an ordinary event in the repo's own tree rescans it") {
+        assert(WatchPolicy.actionFor(id, needsRescan = false, nested = nested) { inRepo } == WatchAction.Rescan(id))
+    }
+
+    test("an ordinary event inside a nested worktree is ignored") {
+        assert(WatchPolicy.actionFor(id, needsRescan = false, nested = nested) { inNested } == WatchAction.Ignore)
+    }
+
+    test("a repo with no nested worktrees never builds the path list") {
+        // The common case runs once per filesystem event, so it must not allocate to reach an answer
+        // it already has. Proven by a lambda that fails the test if it is ever called.
+        var called = false
+        val action = WatchPolicy.actionFor(id, needsRescan = false, nested = emptyList()) {
+            called = true
+            inRepo
+        }
+        assert(action == WatchAction.Rescan(id))
+        assert(!called) { "the common path allocated an event's path list to reach a known answer" }
+    }
+}

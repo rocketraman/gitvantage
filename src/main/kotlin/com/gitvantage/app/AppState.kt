@@ -31,17 +31,22 @@ import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
 import com.gitvantage.model.Stash
+import com.gitvantage.model.WatchAction
 import com.gitvantage.model.WatchPolicy
 import com.gitvantage.model.Worktree
 import com.gitvantage.model.WorktreeAlert
 import com.gitvantage.model.WorktreeAlerts
 import com.gitvantage.model.WorktreeChange
+import dev.nucleusframework.fswatcher.FsWatchDeliveryMode
+import dev.nucleusframework.fswatcher.FsWatchError
 import dev.nucleusframework.fswatcher.FsWatchEvent
 import dev.nucleusframework.fswatcher.FsWatchRegistration
 import dev.nucleusframework.fswatcher.FsWatcher
+import dev.nucleusframework.fswatcher.FsWatcherConfig
 import dev.nucleusframework.fswatcher.FsWatchers
 import java.io.File
 import java.nio.file.Path
+import java.time.Duration
 import com.gitvantage.git.model.GitCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -302,6 +307,8 @@ class AppState(private val scope: CoroutineScope) {
     private val watchRegs = HashMap<String, FsWatchRegistration>()  // repo id -> registration
     private val watchDebounce = HashMap<String, Job>()             // repo id -> pending rescan
     private val watchDeadline = HashMap<String, Long>()             // repo id -> when its burst must scan
+    private var fullRescanJob: Job? = null                          // pending sweep after an overflow
+    private var fullRescanDeadline: Long? = null                    // when that sweep must run
 
     init {
         // Load only what the user has curated. A missing/empty registry stays empty —
@@ -323,18 +330,57 @@ class AppState(private val scope: CoroutineScope) {
     // ---- filesystem watcher: rescan a repo shortly after its files change ----
 
     private fun startFsWatcher() {
-        if (!runCatching { FsWatchers.isSupported() }.getOrDefault(false)) return
-        val w = runCatching { FsWatchers.create() }.getOrNull() ?: return
+        // Not the library defaults: a dashboard watching every tracked repo recursively overruns a
+        // 64-event buffer on any build, and what it loses when it does is silent. See [WatchPolicy].
+        val config = FsWatcherConfig(
+            eventBufferCapacity = WatchPolicy.EVENT_BUFFER,
+            deliveryMode = FsWatchDeliveryMode.Debounced(Duration.ofMillis(WatchPolicy.NATIVE_DEBOUNCE_MS)),
+        )
+        if (!runCatching { FsWatchers.isSupported(config) }.getOrDefault(false)) return
+        val w = runCatching { FsWatchers.create(config) }.getOrNull() ?: return
         fsWatcher = w
         // Collect BEFORE registering paths (events are a hot flow with no replay).
         scope.launch {
             runCatching {
                 w.events.collect { ev ->
-                    ev.source?.name?.let { if (concernsRepo(it, ev)) scheduleWatchRescan(it) }
+                    when (val action = actionFor(ev)) {
+                        is WatchAction.Rescan -> scheduleWatchRescan(action.id)
+                        WatchAction.RescanAll -> scheduleFullRescan()
+                        WatchAction.Ignore -> Unit
+                    }
                 }
             }
         }
+        // The watcher's own failures, which nothing used to read. A watch that dies takes the repo's
+        // live refresh with it, and the dashboard then goes quietly stale — the same class of silent
+        // loss as the dropped overflow, and just as invisible without somewhere for it to surface.
+        scope.launch { runCatching { w.errors.collect(::reportWatchError) } }
         syncWatches()
+    }
+
+    /** Set once a watcher failure has been surfaced, so a failing watch reports once, not per event. */
+    private var watchErrorReported = false
+
+    /**
+     * Report a watcher failure.
+     *
+     * Recoverable ones go to stderr only — the watcher is saying it hit something and carried on,
+     * and a toast for each would train the user to dismiss the one that matters. stderr for the same
+     * reason [pickAndAddRepo] uses it: the app deliberately carries no logging framework, and a
+     * terminal run is where this is worth having.
+     *
+     * An unrecoverable one is worth interrupting for, because the symptom otherwise is a dashboard
+     * that simply stops noticing changes. Said once: a broken watch can report per event, and a
+     * toast per event is not a report.
+     */
+    private fun reportWatchError(e: FsWatchError) {
+        val kind = if (e.recoverable) "warning" else "error"
+        System.err.println(
+            "GitVantage: filesystem watch $kind${e.source?.name?.let { " on $it" }.orEmpty()} — ${e.message}",
+        )
+        if (e.recoverable || watchErrorReported) return
+        watchErrorReported = true
+        toast("Live refresh stopped for one or more repos — reopen GitVantage to restore it")
     }
 
     /**
@@ -375,23 +421,24 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /**
-     * Whether [ev] is a change to [id]'s own checkout rather than to a worktree nested inside it —
-     * see [WatchPolicy.concernsRepo] for why those are not this repo's business.
+     * What [ev] asks of the app — see [WatchPolicy.actionFor].
      *
-     * Filtering them out is worth more than the scans it saves. A coding session writes more or less
-     * continuously, and each of those events used to push the parent's debounce back another quiet
-     * period, so the parent stopped being rescanned for as long as the session ran and the user's
-     * own uncommitted changes never reached the detail panel. [WatchPolicy] bounds that on its own
-     * now; this keeps the pointless scans from being scheduled at all.
+     * The filtering half of that decision is worth more than the scans it saves. A coding session in
+     * a worktree nested under a repo writes more or less continuously, and each of those events used
+     * to push the parent's debounce back another quiet period, so the parent stopped being rescanned
+     * for as long as the session ran and the user's own uncommitted changes never reached the detail
+     * panel. [WatchPolicy] bounds that on its own now; this keeps the pointless scans from being
+     * scheduled at all.
      *
      * Only worktrees a scan has already found are filtered, so one that has just appeared still gets
      * through and triggers the scan that discovers it.
      */
-    private fun concernsRepo(id: String, ev: FsWatchEvent): Boolean {
-        val nested = repos.firstOrNull { it.id == id }?.nestedWorktrees ?: return true
-        if (nested.isEmpty()) return true   // the common case, before any Path is allocated
-        return WatchPolicy.concernsRepo(nested.map(Path::of), eventPaths(ev))
-    }
+    private fun actionFor(ev: FsWatchEvent): WatchAction = WatchPolicy.actionFor(
+        id = ev.source?.name,
+        needsRescan = ev.needsRescan,
+        nested = ev.source?.name?.let { id -> repos.firstOrNull { it.id == id }?.nestedWorktrees }.orEmpty(),
+        paths = { eventPaths(ev) },
+    )
 
     /** The paths an [FsWatchEvent] concerns; empty for an Overflow, which names none. */
     private fun eventPaths(ev: FsWatchEvent): List<Path> = when (ev) {
@@ -419,6 +466,35 @@ class AppState(private val scope: CoroutineScope) {
             watchDeadline.remove(id)
             watchDebounce.remove(id)
             rescanRepos(listOf(id), fetch = false)
+        }
+    }
+
+    /**
+     * Rescan every tracked repo, after the watcher reported dropping events without saying whose.
+     *
+     * Debounced on the same terms as a per-repo burst, and for a sharper reason: an overflow only
+     * happens when the app is already failing to keep up, and answering each one with an immediate
+     * sweep of every repo is how a dropped event turns into a scan storm that guarantees the next
+     * one. The [WatchPolicy] ceiling matters here too — a tree churning hard enough to overflow
+     * repeatedly would otherwise postpone the sweep it is the whole reason for.
+     *
+     * One batched [rescanRepos] rather than one per repo, so the sweep costs a single pass through
+     * [scanLimiter] instead of queueing a scan per repo behind it.
+     *
+     * Not a fetch: the watcher is reporting local filesystem churn, and a sweep that opened a
+     * network connection per repo would make an overload worse in a way the user pays for twice.
+     */
+    private fun scheduleFullRescan() {
+        val now = System.currentTimeMillis()
+        val deadline = fullRescanDeadline ?: WatchPolicy.deadlineFor(now).also { fullRescanDeadline = it }
+        fullRescanJob?.cancel()
+        fullRescanJob = scope.launch {
+            delay(WatchPolicy.delayMs(now, deadline).milliseconds)
+            // Cleared as the sweep starts, so the next overflow opens a fresh window rather than
+            // inheriting a deadline that has already passed — see [scheduleWatchRescan].
+            fullRescanDeadline = null
+            fullRescanJob = null
+            rescanRepos(order.toList(), fetch = false, userInitiated = false)
         }
     }
 

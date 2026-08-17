@@ -5,6 +5,18 @@ package com.gitvantage.model
 
 import java.nio.file.Path
 
+/** What one filesystem event asks the app to do. See [WatchPolicy.actionFor]. */
+sealed interface WatchAction {
+    /** Nothing the repo cares about happened — a write inside a checkout nested in its folder. */
+    data object Ignore : WatchAction
+
+    /** Rescan the one repo the event was delivered under. */
+    data class Rescan(val id: String) : WatchAction
+
+    /** Rescan every tracked repo: events were dropped, and nothing says which repo they were for. */
+    data object RescanAll : WatchAction
+}
+
 /**
  * How long the filesystem watcher waits before rescanning a repo whose files changed.
  *
@@ -30,6 +42,35 @@ object WatchPolicy {
 
     /** Ceiling: the longest a burst can postpone the scan past its first event. */
     const val MAX_WAIT_MS = 5_000L
+
+    /**
+     * How many events the watcher may buffer before it starts dropping them.
+     *
+     * The library's default is 64, which is sized for an app watching a handful of roots. This one
+     * watches every tracked repo recursively, and a single `npm ci` or Gradle build outruns 64
+     * events in well under a second — at which point the watcher drops what it cannot hand over and
+     * reports a rescan instead (see [actionFor]). A dropped event costs a repo its live refresh
+     * until the next poll, so the buffer is sized to absorb a build rather than to be economical:
+     * the events are small, and 8192 of them is noise against a dashboard holding every repo's file
+     * list.
+     *
+     * This raises the ceiling; it does not remove it. A collector that cannot keep up will still
+     * overflow eventually, which is why [actionFor] has to handle the signal rather than assume it
+     * never arrives.
+     */
+    const val EVENT_BUFFER = 8192
+
+    /**
+     * The window the watcher's own native debounce coalesces over, before an event is handed to the
+     * JVM at all.
+     *
+     * The library defaults to 150ms. Coalescing is per path, so this collapses the repeated writes
+     * one editor save or one compiler output makes to the same file — the bulk of ordinary churn —
+     * without touching a build that writes ten thousand *distinct* files. Worth raising anyway: it
+     * is the only reduction available before the event crosses into the JVM and reaches the
+     * collector, and the collector is the part under pressure.
+     */
+    const val NATIVE_DEBOUNCE_MS = 500L
 
     /**
      * How long to wait before rescanning, for an event seen at [now] in a burst whose scan must
@@ -61,5 +102,39 @@ object WatchPolicy {
         // Compared component-wise rather than as strings, so a sibling that merely shares a name
         // prefix ("…/worktrees/feat-two" against "…/worktrees/feat") is not read as nested.
         return paths.any { p -> nested.none { p.startsWith(it) } }
+    }
+
+    /**
+     * What to do about one event: [id] is the repo it was delivered under (null when the watcher is
+     * speaking for itself rather than for a registration), [needsRescan] is the watcher saying it
+     * dropped events, and [nested] are the checkouts inside [id]'s folder that [concernsRepo]
+     * filters against.
+     *
+     * **A rescan signal is not a path event and must not be filtered like one.** It means "events
+     * were lost, go and look" — so it bypasses [concernsRepo] entirely, whatever paths happen to be
+     * attached. And when it names no repo, the only honest answer is to rescan all of them: the
+     * watcher is reporting a loss it cannot attribute, and picking a repo would be a guess.
+     *
+     * This is the case that used to fall through the floor. A watcher-level overflow arrives with no
+     * source, the collector reached for the source's name to route it, and the whole event vanished
+     * — so the app dropped events *and* dropped the one signal that says events were dropped. The
+     * repo then sat unrefreshed until the next poll with nothing on screen to say why, which is
+     * precisely the failure [concernsRepo]'s empty-paths case was written to prevent and could not,
+     * because it was never reached.
+     *
+     * [paths] is a lambda so an ordinary event on a repo with no nested checkouts — nearly every
+     * event — costs no allocation at all. This runs once per filesystem event.
+     */
+    fun actionFor(
+        id: String?,
+        needsRescan: Boolean,
+        nested: List<String>,
+        paths: () -> List<Path>,
+    ): WatchAction = when {
+        id == null -> if (needsRescan) WatchAction.RescanAll else WatchAction.Ignore
+        needsRescan -> WatchAction.Rescan(id)
+        nested.isEmpty() -> WatchAction.Rescan(id)
+        concernsRepo(nested.map(Path::of), paths()) -> WatchAction.Rescan(id)
+        else -> WatchAction.Ignore
     }
 }
