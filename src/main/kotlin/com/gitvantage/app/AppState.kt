@@ -51,16 +51,23 @@ import com.gitvantage.git.model.GitCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
 
 /** A transient modal driven by [AppState.popup]; targets the given repo [ids]. */
@@ -117,6 +124,15 @@ private const val LEGACY_WORKTREE_TAG = "tag:worktree"
  * before the user does anything else about it.
  */
 private const val SAVE_DEBOUNCE_MS = 500L
+
+/**
+ * The [AppState.watchBursts] key standing for "every tracked repo", used when the watcher reports
+ * dropping events without saying which repo they belonged to.
+ *
+ * A NUL is the one character a filesystem path cannot contain, so this can never collide with a
+ * repo id — which is what lets the sweep share the per-repo debounce instead of needing its own.
+ */
+private const val ALL_REPOS = "\u0000all-repos"
 
 /**
  * Observable app state (README § State Management) plus the derived filtering,
@@ -185,7 +201,20 @@ class AppState(private val scope: CoroutineScope) {
         private set
     fun resizeDetailPane(w: Float) { detailPaneWidth = w.coerceIn(360f, 1000f) }
     fun persistDetailPaneWidth() { Registry.saveSettings(Registry.settings().copy(detailPaneWidth = detailPaneWidth.toInt())) }
-    fun saveWindowSize(w: Int, h: Int) { Registry.saveSettings(Registry.settings().copy(windowWidth = w, windowHeight = h)) }
+    /**
+     * Remember the window size. Recorded now, written soon — the one settings write that lands
+     * repeatedly during a single interaction.
+     *
+     * It is driven by a `snapshotFlow` over the window size debounced at 600ms (see `Main.kt`), so a
+     * drag-resize is a run of these, each of which used to encode the registry and `fsync` it on the
+     * UI thread — inside the very gesture whose smoothness is the thing being judged. The others
+     * (`setSort`, the settings toggles) fire once per deliberate click and keep writing inline,
+     * where an immediate answer is worth more than the microseconds it costs.
+     */
+    fun saveWindowSize(w: Int, h: Int) {
+        Registry.recordSettings { it.copy(windowWidth = w, windowHeight = h) }
+        writeQueue.trySend(Unit)
+    }
 
     // Branches for the currently-open detail panel (loaded lazily on selection).
     var branchesRepo by mutableStateOf<String?>(null)
@@ -303,12 +332,78 @@ class AppState(private val scope: CoroutineScope) {
     private val remindAgainMs = 60 * 60_000L
 
     // Filesystem watcher (real-time rescans on disk changes).
+    /**
+     * Where every part of the watcher runs: receiving events, registering and closing watches, and
+     * the loop that decides when a burst has ended.
+     *
+     * Not [scope]. That is the composition's UI dispatcher, and the whole of this used to run on it
+     * — an event arrives for every file written anywhere under any tracked repo, so a build, an
+     * `npm ci` or a dev server put tens of thousands of them through the UI thread, each one
+     * cancelling and allocating a coroutine. Registration ran there too, and takes a lock the
+     * watcher's own callback thread holds while delivering events, so opening the app with every
+     * repo to register contended directly against the firehose.
+     *
+     * Only the scan a burst finally earns goes back to [scope], because that is the part that writes
+     * observable state.
+     */
+    private val watchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Where the registry is actually written. Its own scope because the write outlives [scope] by
+     * design — see [flushPendingWrites], which runs as the composition is being torn down.
+     */
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Requests to get what has been recorded onto disk. Carries nothing, because there is nothing to
+     * carry: [Registry] holds the document, so a request is only ever "it changed, write it".
+     *
+     * Conflated for the same reason. Two pending requests would write the same file twice, so the
+     * second is not work still owed — it is work the first will already have done.
+     */
+    private val writeQueue = Channel<Unit>(Channel.CONFLATED)
+
+    // Both live up here, away from the persistence functions that use them, because `init` starts
+    // the writer and Kotlin runs initializers in declaration order: declared alongside [persist]
+    // they are still null when `init` reaches them, and the app dies constructing its own state.
+
+    /** Volatile because [syncWatches] now reads it from [watchScope] rather than from the caller. */
+    @Volatile
     private var fsWatcher: FsWatcher? = null
     private val watchRegs = HashMap<String, FsWatchRegistration>()  // repo id -> registration
-    private val watchDebounce = HashMap<String, Job>()             // repo id -> pending rescan
-    private val watchDeadline = HashMap<String, Long>()             // repo id -> when its burst must scan
-    private var fullRescanJob: Job? = null                          // pending sweep after an overflow
-    private var fullRescanDeadline: Long? = null                    // when that sweep must run
+    /** Serializes [syncWatches]; [watchRegs] is touched from watch registration alone. */
+    private val watchMutex = Mutex()
+
+    /**
+     * Repos with a burst in progress, and when each one is due to be scanned.
+     *
+     * A map plus one loop, rather than the coroutine-per-event this replaces: an event now costs a
+     * hash write and a wakeup nudge instead of a [Job] cancellation and allocation, which is what
+     * makes the cost of a burst proportional to the repos in it rather than to the files written.
+     * Concurrent because the watcher's collector writes it while [watchDrainLoop] reads it.
+     */
+    private val watchBursts = ConcurrentHashMap<String, WatchBurst>()
+
+    /**
+     * The wakeup nudge for [watchDrainLoop]. Conflated on purpose: it carries no information beyond
+     * "the map changed, look again", so a burst of events collapses to a single pending signal and
+     * an event never blocks on a full channel.
+     */
+    private val watchWake = Channel<Unit>(Channel.CONFLATED)
+
+    /** One repo's in-progress burst: the ceiling it must scan by, and when it is currently due. */
+    private class WatchBurst(val deadline: Long, @Volatile var dueAt: Long)
+
+    /**
+     * Each repo's nested worktrees, as [actionFor] needs them — kept beside [repos] rather than read
+     * out of it.
+     *
+     * [repos] is Compose state and a list, so consulting it per event meant a linear scan of every
+     * tracked repo on whichever thread the event landed on. This is one hash lookup, off the
+     * snapshot system entirely, which is what lets the collector run without touching UI state at
+     * all.
+     */
+    private val nestedByRepo = ConcurrentHashMap<String, List<String>>()
 
     init {
         // Load only what the user has curated. A missing/empty registry stays empty —
@@ -319,6 +414,7 @@ class AppState(private val scope: CoroutineScope) {
         // An empty list because the registry wouldn't parse looks identical to an empty list
         // because you haven't added anything yet. Say which one this is, and don't time it out.
         Registry.loadFailure?.let { toast(it, sticky = true) }
+        startRegistryWriter()
         refreshAll(fetch = false)   // fast initial scan (no network)
         startAutoRefresh()
         startGitHubRefresh()
@@ -340,11 +436,11 @@ class AppState(private val scope: CoroutineScope) {
         val w = runCatching { FsWatchers.create(config) }.getOrNull() ?: return
         fsWatcher = w
         // Collect BEFORE registering paths (events are a hot flow with no replay).
-        scope.launch {
+        watchScope.launch {
             runCatching {
                 w.events.collect { ev ->
                     when (val action = actionFor(ev)) {
-                        is WatchAction.Rescan -> scheduleWatchRescan(action.id)
+                        is WatchAction.Rescan -> noteWatchEvent(action.id)
                         WatchAction.RescanAll -> scheduleFullRescan()
                         WatchAction.Ignore -> Unit
                     }
@@ -354,7 +450,8 @@ class AppState(private val scope: CoroutineScope) {
         // The watcher's own failures, which nothing used to read. A watch that dies takes the repo's
         // live refresh with it, and the dashboard then goes quietly stale — the same class of silent
         // loss as the dropped overflow, and just as invisible without somewhere for it to surface.
-        scope.launch { runCatching { w.errors.collect(::reportWatchError) } }
+        watchScope.launch { runCatching { w.errors.collect(::reportWatchError) } }
+        watchScope.launch { watchDrainLoop() }
         syncWatches()
     }
 
@@ -372,6 +469,9 @@ class AppState(private val scope: CoroutineScope) {
      * An unrecoverable one is worth interrupting for, because the symptom otherwise is a dashboard
      * that simply stops noticing changes. Said once: a broken watch can report per event, and a
      * toast per event is not a report.
+     *
+     * Arrives on the watcher's thread, so the toast is handed to [scope] — it is the one line here
+     * that writes state the UI renders.
      */
     private fun reportWatchError(e: FsWatchError) {
         val kind = if (e.recoverable) "warning" else "error"
@@ -380,7 +480,7 @@ class AppState(private val scope: CoroutineScope) {
         )
         if (e.recoverable || watchErrorReported) return
         watchErrorReported = true
-        toast("Live refresh stopped for one or more repos — reopen GitVantage to restore it")
+        scope.launch { toast("Live refresh stopped for one or more repos — reopen GitVantage to restore it") }
     }
 
     /**
@@ -404,19 +504,36 @@ class AppState(private val scope: CoroutineScope) {
         return runCatching { raw.toRealPath() }.getOrDefault(raw)
     }
 
-    /** Register/unregister repo watches so they match the tracked set. */
+    /**
+     * Register/unregister repo watches so they match the tracked set.
+     *
+     * Every part of this is slow or contended and none of it belongs on the UI thread: [watchRootFor]
+     * touches the filesystem, and `watch` walks the tree while holding the same lock the watcher's
+     * callback thread takes to deliver events. Doing it for every repo at startup was a stall
+     * proportional to how many repos the user tracks, which is exactly the axis that was reported.
+     *
+     * The tracked set is read on the caller's thread — it is [order], which is Compose state — and
+     * the registration itself is handed to [watchScope], serialized by [watchMutex] so overlapping
+     * calls from `init`, an add and a remove cannot interleave over [watchRegs].
+     */
     private fun syncWatches() {
-        val w = fsWatcher ?: return
         val want = order.toSet()
-        want.forEach { id ->
-            if (id !in watchRegs) {
-                runCatching { watchRegs[id] = w.watch(watchRootFor(id), true, id) }  // name = id, for event mapping
+        // Pruned here because every path that stops tracking a repo comes through this function,
+        // so one line covers them all and cannot be forgotten by the next one that does.
+        nestedByRepo.keys.retainAll(want)
+        watchScope.launch {
+            watchMutex.withLock {
+                val w = fsWatcher ?: return@withLock
+                want.forEach { id ->
+                    if (id !in watchRegs) {
+                        runCatching { watchRegs[id] = w.watch(watchRootFor(id), true, id) }  // name = id, for event mapping
+                    }
+                }
+                (watchRegs.keys - want).forEach { id ->
+                    runCatching { watchRegs.remove(id)?.close() }
+                    watchBursts.remove(id)
+                }
             }
-        }
-        (watchRegs.keys - want).forEach { id ->
-            runCatching { watchRegs.remove(id)?.close() }
-            watchDebounce.remove(id)?.cancel()
-            watchDeadline.remove(id)
         }
     }
 
@@ -436,7 +553,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun actionFor(ev: FsWatchEvent): WatchAction = WatchPolicy.actionFor(
         id = ev.source?.name,
         needsRescan = ev.needsRescan,
-        nested = ev.source?.name?.let { id -> repos.firstOrNull { it.id == id }?.nestedWorktrees }.orEmpty(),
+        nested = ev.source?.name?.let(nestedByRepo::get).orEmpty(),
         paths = { eventPaths(ev) },
     )
 
@@ -451,52 +568,76 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /**
-     * Debounced per-repo rescan: coalesces a burst of file events into one scan, without letting a
-     * long enough burst postpone that scan forever. See [WatchPolicy] for why the ceiling is there.
+     * Record that [id] saw a file event, pushing its scan out to the end of the quiet period.
+     *
+     * All an event costs now. The debounce it feeds is the same one [WatchPolicy] has always
+     * described — quiet period, with a ceiling so a burst cannot postpone its scan forever — but the
+     * waiting is done once by [watchDrainLoop] instead of by a coroutine per event that cancels the
+     * one before it. That is the difference between a burst costing what its repos cost and a burst
+     * costing what its *files* cost, which is what a build made unaffordable.
+     *
+     * Runs on the watcher's thread and touches no Compose state: [nestedByRepo] carries what
+     * [actionFor] needs, and whether the repo is still tracked is settled by [watchDrainLoop] on
+     * the way out, where [entries] can be read safely.
      */
-    private fun scheduleWatchRescan(id: String) {
-        if (entries[id] == null) return
+    private fun noteWatchEvent(id: String) {
         val now = System.currentTimeMillis()
-        val deadline = watchDeadline.getOrPut(id) { WatchPolicy.deadlineFor(now) }
-        watchDebounce[id]?.cancel()
-        watchDebounce[id] = scope.launch {
-            delay(WatchPolicy.delayMs(now, deadline).milliseconds)
-            // Cleared as the scan starts, so the next event opens a fresh burst window rather than
+        val burst = watchBursts.computeIfAbsent(id) { WatchBurst(WatchPolicy.deadlineFor(now), now) }
+        burst.dueAt = WatchPolicy.dueAt(now, burst.deadline)
+        watchWake.trySend(Unit)
+    }
+
+    /**
+     * The one loop that turns bursts into scans: sleep until the earliest repo is due, scan whatever
+     * has come due, sleep again.
+     *
+     * It sleeps rather than ticks — with nothing pending it blocks on [watchWake] and costs nothing
+     * at all, which matters for an app that sits open all day. A new event only has to nudge it
+     * awake to be taken into account, because the map already holds the answer.
+     *
+     * Due repos are scanned as one batch, so a checkout that touches ten repos is one pass through
+     * [scanLimiter] rather than ten queued behind it. The hop to [scope] is deliberate and is the
+     * only one: [rescanRepos] writes the repo list, the registry and the open detail panel, all of
+     * which the UI renders.
+     */
+    private suspend fun watchDrainLoop() {
+        while (currentCoroutineContext().isActive) {
+            val now = System.currentTimeMillis()
+            val due = watchBursts.entries.filter { now >= it.value.dueAt }.map { it.key }
+            // Removed as the scan starts, so the next event opens a fresh burst window rather than
             // inheriting a deadline that has already passed (which would scan on every event).
-            watchDeadline.remove(id)
-            watchDebounce.remove(id)
-            rescanRepos(listOf(id), fetch = false)
+            due.forEach { watchBursts.remove(it) }
+            if (due.isNotEmpty()) {
+                // Untracked repos are dropped here rather than at the event, because `entries` is
+                // Compose state and this is the point at which we are back on its thread anyway.
+                withContext(scope.coroutineContext) {
+                    val ids =
+                        if (ALL_REPOS in due) order.toList()
+                        else due.filter { entries[it] != null }
+                    if (ids.isNotEmpty()) rescanRepos(ids, fetch = false)
+                }
+            }
+            when (val next = watchBursts.values.minOfOrNull { it.dueAt }) {
+                null -> watchWake.receive()                                        // idle: wait for an event
+                else -> withTimeoutOrNull(next - System.currentTimeMillis()) { watchWake.receive() }
+            }
         }
     }
 
     /**
      * Rescan every tracked repo, after the watcher reported dropping events without saying whose.
      *
-     * Debounced on the same terms as a per-repo burst, and for a sharper reason: an overflow only
-     * happens when the app is already failing to keep up, and answering each one with an immediate
-     * sweep of every repo is how a dropped event turns into a scan storm that guarantees the next
-     * one. The [WatchPolicy] ceiling matters here too — a tree churning hard enough to overflow
-     * repeatedly would otherwise postpone the sweep it is the whole reason for.
-     *
-     * One batched [rescanRepos] rather than one per repo, so the sweep costs a single pass through
-     * [scanLimiter] instead of queueing a scan per repo behind it.
+     * A burst like any other, under a key no repo path can take, so it inherits the debounce, the
+     * ceiling and the batching from [watchDrainLoop] rather than restating them. That matters more
+     * here than for a single repo: an overflow only happens when the app is already failing to keep
+     * up, and answering each one with an immediate sweep of every repo is how a dropped event turns
+     * into a scan storm that guarantees the next one. The ceiling still applies, so a tree churning
+     * hard enough to overflow repeatedly cannot postpone the sweep it is the whole reason for.
      *
      * Not a fetch: the watcher is reporting local filesystem churn, and a sweep that opened a
      * network connection per repo would make an overload worse in a way the user pays for twice.
      */
-    private fun scheduleFullRescan() {
-        val now = System.currentTimeMillis()
-        val deadline = fullRescanDeadline ?: WatchPolicy.deadlineFor(now).also { fullRescanDeadline = it }
-        fullRescanJob?.cancel()
-        fullRescanJob = scope.launch {
-            delay(WatchPolicy.delayMs(now, deadline).milliseconds)
-            // Cleared as the sweep starts, so the next overflow opens a fresh window rather than
-            // inheriting a deadline that has already passed — see [scheduleWatchRescan].
-            fullRescanDeadline = null
-            fullRescanJob = null
-            rescanRepos(order.toList(), fetch = false, userInitiated = false)
-        }
-    }
+    private fun scheduleFullRescan() = noteWatchEvent(ALL_REPOS)
 
     /** Fire a desktop notification for any repo whose upstream advanced since the last scan
      *  (i.e. new commits to pull). Opt-in per repo (default off) and skipped while snoozed;
@@ -1081,25 +1222,48 @@ class AppState(private val scope: CoroutineScope) {
     /** In flight [persistDebounced] timer, if any. Not observable — nothing renders it. */
     private var saveJob: Job? = null
 
-    /** Encode + rewrite the whole registry, reporting a failure rather than dropping it. */
-    private fun writeRegistry() {
-        Registry.save(order.mapNotNull { entries[it] })
-            .onFailure { toast("Couldn't save ${Registry.file.name}: ${it.message ?: it::class.simpleName}") }
+    private fun startRegistryWriter() {
+        writeScope.launch {
+            for (request in writeQueue) {
+                Registry.flush().onFailure { e ->
+                    // Off the UI thread now, and a toast is state the UI renders.
+                    scope.launch { toast("Couldn't save ${Registry.file.name}: ${e.message ?: e::class.simpleName}") }
+                }
+            }
+        }
+    }
+
+    /** Record the current registry and ask for it to reach disk. See [persist] for the why. */
+    private fun requestWrite() {
+        Registry.recordRepos(order.mapNotNull { entries[it] })
+        writeQueue.trySend(Unit)
     }
 
     /**
      * Write now. Cancels any deferred write first: this encodes the entire registry from the
      * current [entries], so whatever that timer was going to write is already included.
+     *
+     * "Now" means the edit is recorded now, not that the disk write happens before this returns.
+     * Building the document and calling `fsync` on it used to happen inline on the UI thread, which
+     * meant every tag, every snooze and — through [reconcileDirtySince] — every scan that found a
+     * tree had gone dirty stalled the interface for as long as the filesystem took to answer. That
+     * is unbounded on a busy or networked disk, and it fires many times a minute across a dashboard
+     * of active repos.
+     *
+     * Reading [entries] stays here, because it is Compose state and this is its thread.
      */
     private fun persist() {
         saveJob?.cancel(); saveJob = null
-        writeRegistry()
+        requestWrite()
     }
 
     /**
      * Same, but coalesced — for state that changes on every keystroke. [entries] is still updated
-     * synchronously (the UI reads it straight back), only the disk write waits, and each call
-     * restarts the timer so a burst of typing costs one write instead of one per character.
+     * synchronously (the UI reads it straight back), only the snapshot waits, and each call restarts
+     * the timer so a burst of typing costs one write instead of one per character.
+     *
+     * Still worth having on top of the conflated queue: this keeps the document from being *built*
+     * per keystroke, where the queue only keeps it from being written.
      *
      * A write left pending when the window closes is flushed by [flushPendingWrites].
      */
@@ -1108,16 +1272,29 @@ class AppState(private val scope: CoroutineScope) {
         saveJob = scope.launch {
             delay(SAVE_DEBOUNCE_MS.milliseconds)
             saveJob = null
-            writeRegistry()
+            persist()
         }
     }
 
     /**
-     * Flush a deferred write synchronously. Called from the window's close handler, where [scope]
-     * is about to be cancelled along with the composition — a pending timer would never fire, and
-     * the note the user just typed would be lost.
+     * Flush pending writes synchronously. Called from the window's close handler, where [scope] is
+     * about to be cancelled along with the composition — a pending timer would never fire, and the
+     * note the user just typed would be lost.
+     *
+     * This one really does write before it returns, and on the caller's thread: the process is about
+     * to exit, so handing the work to [writeScope] would be a way of not doing it. A queued write
+     * still in flight is harmless — both write the same recorded document.
+     *
+     * Unconditional, where it used to run only for a pending debounce. Now that [persist] only
+     * records the edit and asks for a write, an ordinary change made in the last moments before
+     * closing can still be waiting on that queue — so "nothing was typed recently" no longer means
+     * "nothing is unwritten".
      */
-    fun flushPendingWrites() { if (saveJob != null) persist() }
+    fun flushPendingWrites() {
+        saveJob?.cancel(); saveJob = null
+        Registry.recordRepos(order.mapNotNull { entries[it] })
+        Registry.flush()
+    }
 
     // ---- scanning ----
 
@@ -1141,6 +1318,7 @@ class AppState(private val scope: CoroutineScope) {
                 val ordered = order.mapNotNull { results[it] }
                 repos.clear()
                 repos.addAll(ordered)
+                rememberNested(ordered)
                 // Needs a completed scan to know which entries are worktrees of which; runs once.
                 foldTrackedWorktrees()
                 // Before notifyUpstreamAdvances moves the prevBehind baseline it compares against.
@@ -1268,7 +1446,19 @@ class AppState(private val scope: CoroutineScope) {
             added.map { e -> async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() } } }.awaitAll()
         }.filterNotNull()
         repos.addAll(scanned)
+        rememberNested(scanned)
         added.firstOrNull()?.let { selectedId = it.path }   // open detail on the first added
+    }
+
+    /**
+     * Keep [nestedByRepo] level with what the last scan found.
+     *
+     * Called wherever a scan result reaches [repos], because that is the only thing that can change
+     * a repo's nested worktrees. Entries for repos that stop being tracked are dropped by
+     * [syncWatches], which every untracking path already goes through.
+     */
+    private fun rememberNested(scanned: List<Repo>) {
+        scanned.forEach { nestedByRepo[it.id] = it.nestedWorktrees }
     }
 
     /** "Remove Repo": stop tracking a repo (does not touch the repo on disk). */
@@ -2124,6 +2314,7 @@ class AppState(private val scope: CoroutineScope) {
             if (idx >= 0) repos[idx] = s else repos.add(s)
             prevBehind[s.id] = s.behind   // keep baseline current so auto-refresh won't false-alert
         }
+        rememberNested(scanned)
         reconcileDirtySince(scanned)
         // Keep the open detail panel's branch, submodule + worktree lists in sync — a rescan (from
         // a git action or an fs-watcher event, including submodule updates made outside the app)
@@ -2218,11 +2409,24 @@ class AppState(private val scope: CoroutineScope) {
      */
     private fun startAutoRefresh(intervalSeconds: Long = 300) {
         scope.launch {
+            var running = false
             while (isActive) {
                 delay((intervalSeconds * 1000).milliseconds)
-                val now = System.currentTimeMillis()
-                val due = order.filter { id -> id == selectedId || isFetchDue(id, now) }
-                if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false)
+                // A round that outlasts the tick must not have the next one stacked on top of it.
+                // Each round fetches every due repo, and a fetch is allowed ninety seconds, so on a
+                // slow link or a large dashboard a round can take longer than the interval — and
+                // rounds that overlap queue their whole repo list behind the same eight permits,
+                // which makes every one after it slower still. Skipping costs nothing: [isFetchDue]
+                // is answered from the clock, so whatever was due stays due at the next tick.
+                if (running) continue
+                running = true
+                try {
+                    val now = System.currentTimeMillis()
+                    val due = order.filter { id -> id == selectedId || isFetchDue(id, now) }
+                    if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false)
+                } finally {
+                    running = false
+                }
             }
         }
     }

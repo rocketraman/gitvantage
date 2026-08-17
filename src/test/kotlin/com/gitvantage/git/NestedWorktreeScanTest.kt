@@ -5,10 +5,13 @@ package com.gitvantage.git
 
 import com.gitvantage.model.WatchPolicy
 import de.infix.testBalloon.framework.core.testSuite
+import dev.nucleusframework.fswatcher.FsWatchDeliveryMode
 import dev.nucleusframework.fswatcher.FsWatchEvent
+import dev.nucleusframework.fswatcher.FsWatcherConfig
 import dev.nucleusframework.fswatcher.FsWatchers
 import java.io.File
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -132,6 +135,42 @@ val NestedWorktreeWatching by testSuite {
                     WatchPolicy.concernsRepo(nested, eventPathsOf(ev))
                 }
                 assert(leaked.isEmpty()) { "session writes still counted as the repo changing: $leaked" }
+            } finally {
+                scope.cancel()
+                runCatching { w.close() }
+            }
+        }
+
+        /**
+         * The app does not take the watcher's defaults — it raises the event buffer and widens the
+         * native debounce window (see [WatchPolicy]). Those numbers are handed to a native library
+         * that validates them, so a value it rejects is a watcher that fails to start and an app
+         * that silently stops noticing file changes. Nothing else here would catch that: the config
+         * compiles either way, and every other test builds a watcher with the defaults.
+         */
+        test("the app's own watcher configuration is accepted and still delivers events") {
+            val config = FsWatcherConfig(
+                eventBufferCapacity = WatchPolicy.EVENT_BUFFER,
+                deliveryMode = FsWatchDeliveryMode.Debounced(Duration.ofMillis(WatchPolicy.NATIVE_DEBOUNCE_MS)),
+            )
+            if (!runCatching { FsWatchers.isSupported(config) }.getOrDefault(false)) return@test
+            val work = repo()
+
+            val w = FsWatchers.create(config)
+            val events = CopyOnWriteArrayList<FsWatchEvent>()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            try {
+                scope.launch { runCatching { w.events.collect { if (it.source?.name == "MAIN") events += it } } }
+                Thread.sleep(300)
+                w.watch(Path.of(work.canonicalPath), true, "MAIN")
+                Thread.sleep(500)
+
+                File(work, "changed.kt").writeText("fun main() {}\n")
+                // Longer than the default wait: the window this configures is the one being proven,
+                // so the test has to outlast it rather than assume the old 150ms.
+                Thread.sleep(2_500)
+
+                assert(events.isNotEmpty()) { "the app's watcher configuration delivered nothing" }
             } finally {
                 scope.cancel()
                 runCatching { w.close() }

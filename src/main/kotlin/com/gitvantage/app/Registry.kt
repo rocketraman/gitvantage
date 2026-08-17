@@ -33,6 +33,17 @@ object Registry {
     private var loaded = false
 
     /**
+     * Guards [current], [loaded] and the write itself.
+     *
+     * Everything here used to run on the UI thread, which serialized it for free. Repo writes now
+     * happen on a background thread (see `AppState.persist`) while settings writes still come from
+     * the UI, so the two can genuinely overlap — and both read-modify-write [current] and then race
+     * for the same fixed-name temp file. Two writers interleaving there is how the file this whole
+     * class is careful about ends up half-written after all.
+     */
+    private val lock = Any()
+
+    /**
      * What [read] did about a registry file that was there but couldn't be understood, phrased for
      * the user; null after a clean load, including a first run with no file at all. [AppState]
      * reads it once at startup and says so — a load that quietly comes back empty is exactly how
@@ -142,24 +153,57 @@ object Registry {
      * with: the quarantined file is gone by then, so the second read succeeds and [loadFailure]
      * resets to null, losing the one chance to tell the user their registry didn't load.
      */
-    fun load(): List<RegistryEntry> {
+    fun load(): List<RegistryEntry> = synchronized(lock) {
         ensureLoaded()
-        return current.repos
+        current.repos
     }
 
-    fun save(entries: List<RegistryEntry>): Result<Unit> {
-        ensureLoaded()
-        current = current.copy(repos = entries)
-        return write()
-    }
+    fun settings(): Settings = synchronized(lock) { ensureLoaded(); current.settings }
 
-    fun settings(): Settings { ensureLoaded(); return current.settings }
-
-    fun saveSettings(s: Settings): Result<Unit> {
+    fun saveSettings(s: Settings): Result<Unit> = synchronized(lock) {
         ensureLoaded()
         current = current.copy(settings = s)
-        return write()
+        write()
     }
+
+    // ---- deferred writes ---------------------------------------------------------------------
+    //
+    // Recording and writing are separate so a caller can update the document now and pay for the
+    // disk later. `write` ends in an fsync, which is unbounded on a busy or networked filesystem,
+    // and the callers that matter here run on the UI thread: every scan that finds a tree has gone
+    // dirty, and every frame of a window resize. See `AppState.persist`.
+    //
+    // The split is what makes deferring safe. Were a caller to defer by capturing a document and
+    // writing it later, any change made in between would be captured from the stale copy and lost;
+    // recording keeps [current] authoritative at all times, so a deferred write is only ever late,
+    // never wrong.
+
+    /** Record the repo list in memory. The disk write is the caller's to ask for, via [flush]. */
+    fun recordRepos(entries: List<RegistryEntry>) = synchronized(lock) {
+        ensureLoaded()
+        current = current.copy(repos = entries)
+    }
+
+    /**
+     * Apply [edit] to the settings in memory, leaving the disk write to [flush].
+     *
+     * Takes a function rather than a [Settings] on purpose: read-modify-write through
+     * [settings] leaves a window in which another writer's change can be read, discarded and
+     * written back over. Applying the edit under the lock closes it.
+     */
+    fun recordSettings(edit: (Settings) -> Settings) = synchronized(lock) {
+        ensureLoaded()
+        current = current.copy(settings = edit(current.settings))
+    }
+
+    /**
+     * Write whatever has been recorded to disk.
+     *
+     * Idempotent, and safe to call concurrently with itself or any of the recording functions: it
+     * writes [current] rather than anything it was handed, so two flushes racing write the same
+     * document and neither can be the stale one.
+     */
+    fun flush(): Result<Unit> = synchronized(lock) { ensureLoaded(); write() }
 
     /**
      * Discover git repos at or under [root] for the "Add repo" chooser. Any directory

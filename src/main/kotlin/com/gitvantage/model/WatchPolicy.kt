@@ -85,6 +85,16 @@ object WatchPolicy {
     fun deadlineFor(now: Long): Long = now + MAX_WAIT_MS
 
     /**
+     * When a burst whose latest event arrived at [lastEventAt], and whose ceiling is [deadline],
+     * must be scanned — the same answer as [delayMs] stated as a moment rather than a wait.
+     *
+     * Defined in terms of [delayMs] rather than alongside it so the two cannot drift: a scheduler
+     * that sleeps until a due time and one that waits out a delay have to agree about when a burst
+     * ends, and expressing that twice is how they stop agreeing.
+     */
+    fun dueAt(lastEventAt: Long, deadline: Long): Long = lastEventAt + delayMs(lastEventAt, deadline)
+
+    /**
      * Whether a change to [paths] is a change to the repo itself, rather than to one of the
      * checkouts [nested] inside its folder.
      *

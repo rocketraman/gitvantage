@@ -58,6 +58,44 @@ val WatchDebounce by testSuite {
         val deadline = WatchPolicy.deadlineFor(now)
         assert(WatchPolicy.delayMs(deadline + 5_000, deadline) == 0L)
     }
+
+    /**
+     * The same debounce stated as a moment rather than a wait, for the scheduler that sleeps until
+     * the earliest repo is due instead of waiting out a timer per event. The two have to agree about
+     * when a burst ends or repos scan early, late, or — the case that bites — never.
+     */
+    test("a lone event is due one quiet period after itself") {
+        val deadline = WatchPolicy.deadlineFor(now)
+        assert(WatchPolicy.dueAt(now, deadline) == now + WatchPolicy.QUIET_MS)
+    }
+
+    test("each event pushes the due time out, but never past the burst's ceiling") {
+        val deadline = WatchPolicy.deadlineFor(now)
+        assert(WatchPolicy.dueAt(now + 1_000, deadline) == now + 1_000 + WatchPolicy.QUIET_MS)
+        // Late in the burst the quiet period would overshoot, so the ceiling wins.
+        assert(WatchPolicy.dueAt(deadline - 300, deadline) == deadline)
+        assert(WatchPolicy.dueAt(deadline + 5_000, deadline) == deadline + 5_000)
+    }
+
+    test("a burst that never goes quiet becomes due at the ceiling, not never") {
+        val deadline = WatchPolicy.deadlineFor(now)
+        // Events every 10ms: the due time must stop moving once it reaches the ceiling, which is
+        // what stops a continuous stream from postponing its scan forever.
+        var t = now
+        while (t <= now + WatchPolicy.MAX_WAIT_MS) {
+            assert(WatchPolicy.dueAt(t, deadline) <= deadline)
+            t += 10
+        }
+    }
+
+    test("the due time and the wait describe the same instant") {
+        val deadline = WatchPolicy.deadlineFor(now)
+        // Stated twice in the code, so pin them together: a scheduler that sleeps to dueAt and one
+        // that waits delayMs must not be able to disagree.
+        listOf(now, now + 1_000, deadline - 300, deadline, deadline + 5_000).forEach { t ->
+            assert(WatchPolicy.dueAt(t, deadline) == t + WatchPolicy.delayMs(t, deadline))
+        }
+    }
 }
 
 /**
