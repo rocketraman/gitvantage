@@ -18,6 +18,7 @@ import com.gitvantage.git.LogOps
 import com.gitvantage.git.RepoOps
 import com.gitvantage.git.RepoScanner
 import com.gitvantage.git.SubmoduleOps
+import com.gitvantage.git.WatchRoots
 import com.gitvantage.git.WorktreeOps
 import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.Commit
@@ -370,7 +371,17 @@ class AppState(private val scope: CoroutineScope) {
     /** Volatile because [syncWatches] now reads it from [watchScope] rather than from the caller. */
     @Volatile
     private var fsWatcher: FsWatcher? = null
-    private val watchRegs = HashMap<String, FsWatchRegistration>()  // repo id -> registration
+    /**
+     * Repo id -> its registrations. A list, not one: a repo is watched as a shallow root plus a
+     * recursive watch per directory git isn't ignoring, so that the build output beside the code
+     * never gets walked. See [WatchRoots].
+     */
+    private val watchRegs = HashMap<String, List<FsWatchRegistration>>()
+
+    /** Repo id -> the top-level directory names its watch set was built from, so [refreshWatchRoots]
+     *  can tell "a new source directory appeared" from "nothing has moved" with one readdir. */
+    private val watchChildren = HashMap<String, Set<String>>()
+
     /** Serializes [syncWatches]; [watchRegs] is touched from watch registration alone. */
     private val watchMutex = Mutex()
 
@@ -524,15 +535,46 @@ class AppState(private val scope: CoroutineScope) {
         watchScope.launch {
             watchMutex.withLock {
                 val w = fsWatcher ?: return@withLock
-                want.forEach { id ->
-                    if (id !in watchRegs) {
-                        runCatching { watchRegs[id] = w.watch(watchRootFor(id), true, id) }  // name = id, for event mapping
-                    }
-                }
+                want.forEach { id -> if (id !in watchRegs) register(w, id) }
                 (watchRegs.keys - want).forEach { id ->
-                    runCatching { watchRegs.remove(id)?.close() }
+                    runCatching { watchRegs.remove(id)?.forEach { it.close() } }
+                    watchChildren.remove(id)
                     watchBursts.remove(id)
                 }
+            }
+        }
+    }
+
+    /** Register [id]'s watch set. Caller holds [watchMutex]. */
+    private fun register(w: FsWatcher, id: String) {
+        // Recorded before registering, so a layout that changes underneath us is noticed next time
+        // rather than being remembered as whatever it happened to be afterwards.
+        watchChildren[id] = WatchRoots.childDirNames(id)
+        watchRegs[id] = WatchRoots.forRepo(id).mapNotNull { root ->
+            // Every registration carries the repo id as its name, which is what event routing reads
+            // — so splitting one watch into several is invisible to [actionFor].
+            runCatching { w.watch(watchRootFor(root.path), root.recursive, id) }.getOrNull()
+        }
+    }
+
+    /**
+     * Re-register a repo whose top-level layout changed.
+     *
+     * The shallow root watch reports a new directory appearing, but nothing inside it is watched
+     * until something registers it — so without this, creating a source folder would mean that
+     * folder silently not refreshing until the app restarted.
+     *
+     * Guarded on the directory names alone, which is one readdir: [WatchRoots.forRepo] asks git what
+     * is ignored, and paying a subprocess after every burst would give back what the pruning saves.
+     */
+    private suspend fun refreshWatchRoots(ids: Collection<String>) {
+        val w = fsWatcher ?: return
+        watchMutex.withLock {
+            ids.forEach { id ->
+                if (id !in watchRegs) return@forEach
+                if (WatchRoots.childDirNames(id) == watchChildren[id]) return@forEach
+                watchRegs.remove(id)?.forEach { runCatching { it.close() } }
+                register(w, id)
             }
         }
     }
@@ -610,12 +652,16 @@ class AppState(private val scope: CoroutineScope) {
             if (due.isNotEmpty()) {
                 // Untracked repos are dropped here rather than at the event, because `entries` is
                 // Compose state and this is the point at which we are back on its thread anyway.
-                withContext(scope.coroutineContext) {
+                val ids = withContext(scope.coroutineContext) {
                     val ids =
                         if (ALL_REPOS in due) order.toList()
                         else due.filter { entries[it] != null }
                     if (ids.isNotEmpty()) rescanRepos(ids, fetch = false)
+                    ids
                 }
+                // A directory appearing at the top of a repo is a root-level event, so this is the
+                // point at which a new source folder becomes watchable — see [refreshWatchRoots].
+                if (ids.isNotEmpty()) refreshWatchRoots(ids)
             }
             when (val next = watchBursts.values.minOfOrNull { it.dueAt }) {
                 null -> watchWake.receive()                                        // idle: wait for an event

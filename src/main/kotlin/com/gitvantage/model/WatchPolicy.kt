@@ -25,11 +25,17 @@ sealed interface WatchAction {
  * reset-only debounce, and a reset-only debounce can be starved: while events keep arriving closer
  * together than the quiet period, the scan is postponed again every time and never runs at all.
  *
- * That is not hypothetical. A repo's watch is recursive, so it also covers directories git ignores
- * — `build/`, `.gradle/`, `node_modules/`, and the `.claude/worktrees/` a coding session works in.
- * Anything writing there continuously holds the repo's scan off indefinitely, and the detail panel
- * then shows the repo as it was when the churn started: changes made since are missing, and with
- * the counts stuck at zero so is the Diff button.
+ * That is not hypothetical. A repo's watch used to be one recursive registration on its folder,
+ * covering the directories git ignores along with everything else — `build/`, `.gradle/`,
+ * `node_modules/`, and the `.claude/worktrees/` a coding session works in. Anything writing there
+ * continuously held the repo's scan off indefinitely, and the detail panel then showed the repo as
+ * it was when the churn started: changes made since missing, and with the counts stuck at zero so
+ * was the Diff button.
+ *
+ * `WatchRoots` has since stopped the ignored directories being watched at all, which removes most
+ * of that churn at the source. The ceiling stays, for the churn it does not remove: a worktree in a
+ * directory git isn't ignoring, a generated file that is tracked, or a build configured to write
+ * somewhere committed.
  *
  * [MAX_WAIT_MS] is the ceiling that makes starvation impossible — the scan runs that long after the
  * *first* event of a burst however busy the tree stays. Pure and clock-injected, so both halves can
