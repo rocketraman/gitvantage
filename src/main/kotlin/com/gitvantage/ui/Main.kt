@@ -77,8 +77,32 @@ fun main(args: Array<String>) {
     runApp()
 }
 
+/**
+ * Give the composition thread a context class loader, if the platform left it without one.
+ *
+ * On macOS the Tao event loop has to own process thread 0 (AppKit's), so the native side calls
+ * back into the JVM rather than being driven from it — the crash report that prompted this has no
+ * Java frame below `TaoApplication$EventDispatcher.onEvent`. A thread that enters the JVM through
+ * JNI gets a *null* context class loader, and Compose's resource loader dereferences that
+ * unconditionally (`Thread.currentThread().contextClassLoader!!`, Resources.desktop.kt:59 —
+ * their own TODO, CMP-6099). So the window icon and the bundled Cantarell/JetBrains Mono faces
+ * NPE before the first frame ever paints.
+ *
+ * Linux and Windows drive the same loop from the JVM's own main thread, and a GraalVM native image
+ * never has a null loader — which is why this only ever bit `./gradlew run` on a Mac, and never the
+ * shipped binary. Setting it here also covers every thread later spawned from this one, which would
+ * otherwise inherit the null, and anything else that reads it (ServiceLoader lookups, SLF4J).
+ */
+private fun adoptContextClassLoader() {
+    val thread = Thread.currentThread()
+    if (thread.contextClassLoader == null) {
+        thread.contextClassLoader = AppState::class.java.classLoader
+    }
+}
+
 @OptIn(FlowPreview::class)
 private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
+    adoptContextClassLoader()
     val saved = Registry.settings()
     // Before the first frame, so the window is painted in the right theme rather than flashing
     // light and correcting itself.
