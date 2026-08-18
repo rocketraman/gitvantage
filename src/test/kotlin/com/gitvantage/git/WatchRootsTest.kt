@@ -4,99 +4,52 @@
 package com.gitvantage.git
 
 import de.infix.testBalloon.framework.core.testSuite
-import java.io.File
 
 /**
- * Which directories a repo gets watched through.
+ * How many watch registrations a repo costs.
  *
- * The point of the split is that build output never gets walked: registering a recursive watch means
- * walking the tree it covers, and in a working repo almost every file on disk is an artefact. On this
- * project it was 5,113 ignored files out of 5,209, essentially all in `build/`.
+ * This is a resource test, not a behaviour test, and it exists because getting it wrong did real
+ * damage outside the app. Every registration is a native watcher, and on Linux a native watcher is
+ * an `inotify_init()` drawn from a limit shared with every other process on the machine. Splitting a
+ * repo's watch into one per non-ignored top-level directory took 36 repos from 36 instances to 258
+ * of 512, and the desktop began warning that file monitoring was about to fail — for everything, not
+ * only for this app.
  *
- * Asked of real repos with real ignore rules rather than a stubbed matcher, because the answer comes
- * from `git check-ignore` and the whole point is to inherit git's rules rather than reimplement them.
+ * So the count is the thing worth pinning. A future change that makes the watch set cleverer has to
+ * come with a way of sharing one instance across registrations, or it will do this again quietly.
  */
 val RepoWatchRoots by testSuite {
     testFixture { Sandbox() } asContextForEach {
 
-        test("an ignored directory is not watched, and the rest of the repo still is") {
+        test("a repo costs exactly one registration, however many directories it has") {
             val work = repo()
             commit(work, ".gitignore", "build/\n", "ignore build output")
-            File(work, "build/classes").mkdirs()
-            File(work, "src/main").mkdirs()
+            listOf("build/classes", "src/main", "docs", "gradle", "packaging").forEach {
+                java.io.File(work, it).mkdirs()
+            }
 
             val roots = WatchRoots.forRepo(work.path)
-            val names = roots.map { File(it.path).name }
 
-            assert("build" !in names) { "the ignored directory is still watched: $names" }
-            assert("src" in names) { "the source directory stopped being watched: $names" }
+            assert(roots.size == 1) {
+                "a repo now costs ${roots.size} inotify instances instead of 1 — see this file's header"
+            }
         }
 
-        test("the repo folder itself is watched shallowly, so top-level files still report") {
+        test("that one registration is recursive and rooted at the repo") {
             val work = repo()
-            File(work, "src").mkdirs()
+            val root = WatchRoots.forRepo(work.path).single()
 
-            val roots = WatchRoots.forRepo(work.path)
-            val self = roots.single { it.path == work.path }
-
-            // Shallow on purpose: recursive here would walk everything the split exists to avoid,
-            // ignored directories included, and make the rest of the list pointless.
-            assert(!self.recursive) { "the repo root is still registered recursively" }
-            assert(roots.filter { it.path != work.path }.all { it.recursive })
+            // Recursive because it is the only watch there is: anything shallower would leave the
+            // repo's own subdirectories unwatched entirely.
+            assert(root.recursive)
+            assert(root.path == work.path)
         }
 
-        /**
-         * `.git` is not something git reports as ignored, and it must not be dropped: HEAD, refs and
-         * the index are how a commit, a checkout or a fetch becomes visible to the app at all.
-         */
-        test(".git is watched") {
-            val work = repo()
-            val roots = WatchRoots.forRepo(work.path)
-            assert(roots.any { File(it.path).name == ".git" }) { "nothing would notice a commit" }
-        }
-
-        test("git's own rules are inherited, negations included") {
-            val work = repo()
-            // A pattern that a hand-rolled matcher gets wrong: everything ignored, then one taken
-            // back. Only git knows this, which is why git is asked.
-            commit(work, ".gitignore", "vendor/\n!vendor/keep/\n", "ignore vendor except keep")
-            File(work, "vendor/drop").mkdirs()
-            File(work, "vendor/keep").mkdirs()
-
-            val names = WatchRoots.forRepo(work.path).map { File(it.path).name }
-            assert("vendor" !in names) { "the ignored parent is watched: $names" }
-        }
-
-        test("a repo with nothing ignored watches every directory it has") {
-            val work = repo()
-            File(work, "src").mkdirs()
-            File(work, "docs").mkdirs()
-
-            val names = WatchRoots.forRepo(work.path).map { File(it.path).name }.toSet()
-            assert(setOf("src", "docs", ".git").all { it in names }) { "got $names" }
-        }
-
-        /**
-         * The fallback direction matters: watching too much is slow, watching too little is wrong.
-         * A path that isn't a repo — or a folder that has gone away — must come back as the single
-         * recursive watch this replaced, not as an empty list that silently watches nothing.
-         */
-        test("an unreadable folder falls back to one recursive watch") {
-            val gone = File(root, "not-here")
+        test("a folder that isn't a repo still yields a watchable root") {
+            // Registration happens before any scan proves the path is a repo, so this must not
+            // depend on git succeeding.
+            val gone = java.io.File(root, "not-here")
             assert(WatchRoots.forRepo(gone.path) == listOf(WatchRoot(gone.path, recursive = true)))
-        }
-
-        test("child directory names are what re-registration is keyed on") {
-            val work = repo()
-            File(work, "src").mkdirs()
-            val before = WatchRoots.childDirNames(work.path)
-
-            File(work, "newmodule").mkdirs()
-
-            // The shallow root watch reports the new directory; this is what tells the app the watch
-            // set is stale, without paying `check-ignore` after every burst to find out.
-            assert(WatchRoots.childDirNames(work.path) != before)
-            assert("newmodule" in WatchRoots.childDirNames(work.path))
         }
     }
 }

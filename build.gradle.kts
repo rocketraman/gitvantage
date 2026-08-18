@@ -154,6 +154,30 @@ tasks.test {
         showStackTraces = false
     }
 }
+/**
+ * Short switches for the diagnostics, so `./gradlew run` doesn't need the variable names.
+ *
+ * The app reads environment variables, because that is what a *packaged* binary can be given: a user
+ * reporting a slow dashboard can be told to export one and restart. Those work here too —
+ * `GITVANTAGE_PERF=1 ./gradlew run` does reach the forked JVM, daemon or not; I checked, having
+ * assumed otherwise. These properties are purely a convenience over remembering the spellings:
+ *
+ *   ./gradlew run -Pperf            counters, printed every 30s and at exit
+ *   ./gradlew run -Pstall=150       lower the UI-stall threshold from its 500ms default
+ *   ./gradlew run -PdebugStall=4000 block the UI thread on purpose, to prove the watchdog works
+ *
+ * Only a property that was actually passed sets anything, so an exported variable still wins.
+ */
+tasks.withType<JavaExec>().configureEach {
+    fun forward(property: String, variable: String, whenPresent: String? = null) {
+        val value = providers.gradleProperty(property).orNull?.takeIf { it.isNotBlank() } ?: whenPresent
+        if (findProperty(property) != null && value != null) environment(variable, value)
+    }
+    forward("perf", "GITVANTAGE_PERF", whenPresent = "1")
+    forward("stall", "GITVANTAGE_STALL_MS")
+    forward("debugStall", "GITVANTAGE_DEBUG_STALL_MS")
+}
+
 nucleus.application {
     mainClass = "com.gitvantage.ui.MainKt"
     // Build release installers from a GraalVM native image (fast startup, no bundled JVM).
@@ -504,3 +528,4 @@ val smokeTestSubsystems = tasks.register<JavaExec>("smokeTestSubsystems") {
 }
 
 tasks.named("check") { dependsOn(smokeTestSubsystems) }
+

@@ -9,6 +9,7 @@ import com.gitvantage.git.model.StatusResult
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.DETACHED_BRANCH
 import com.gitvantage.model.Meta
+import com.gitvantage.model.Perf
 import com.gitvantage.model.RegistryEntry
 import com.gitvantage.model.Repo
 import com.gitvantage.model.Stash
@@ -39,7 +40,10 @@ object RepoScanner {
      * repo, forever, and would otherwise evict every real entry from a 500-deep console within
      * a couple of idle hours.
      */
-    suspend fun scan(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean = true): Repo = withContext(Dispatchers.IO) {
+    suspend fun scan(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean = true): Repo =
+        withContext(Dispatchers.IO) { Perf.timed("scan.repo") { scanNow(entry, fetch, userInitiated) } }
+
+    private fun scanNow(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean): Repo {
         val dir = File(entry.path)
         val name = dir.name.ifEmpty { entry.path }
         val id = entry.path
@@ -50,7 +54,7 @@ object RepoScanner {
         val reminder = Meta.reminder(entry, now)
 
         if (!Git.isRepo(dir)) {
-            return@withContext Repo(
+            return Repo(
                 id = id, name = name, branch = "—", tags = baseTags,
                 isGitRepo = false, warning = "Not a git repo", note = note,
                 snoozed = snoozed, snoozedFor = snoozedFor, reminder = reminder,
@@ -181,7 +185,7 @@ object RepoScanner {
         val isStale = staleDays != Meta.STALE_NEVER &&
             commitEpoch != null && (now / 1000 - commitEpoch) > staleDays.toLong() * 86_400
 
-        Repo(
+        return Repo(
             id = id, name = displayName, branch = branch, tags = baseTags,
             ahead = ahead, behind = behind,
             staged = status.staged, unstaged = status.unstaged, untracked = status.untracked,

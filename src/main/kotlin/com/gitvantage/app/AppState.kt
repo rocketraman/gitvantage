@@ -27,6 +27,7 @@ import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
 import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
+import com.gitvantage.model.Perf
 import com.gitvantage.model.RegistryEntry
 import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
@@ -134,6 +135,9 @@ private const val SAVE_DEBOUNCE_MS = 500L
  * repo id — which is what lets the sweep share the per-repo debounce instead of needing its own.
  */
 private const val ALL_REPOS = "\u0000all-repos"
+
+/** How often [AppState.startPerfReporter] prints, when `GITVANTAGE_PERF=1`. */
+private const val PERF_REPORT_MS = 30_000L
 
 /**
  * Observable app state (README § State Management) plus the derived filtering,
@@ -378,10 +382,6 @@ class AppState(private val scope: CoroutineScope) {
      */
     private val watchRegs = HashMap<String, List<FsWatchRegistration>>()
 
-    /** Repo id -> the top-level directory names its watch set was built from, so [refreshWatchRoots]
-     *  can tell "a new source directory appeared" from "nothing has moved" with one readdir. */
-    private val watchChildren = HashMap<String, Set<String>>()
-
     /** Serializes [syncWatches]; [watchRegs] is touched from watch registration alone. */
     private val watchMutex = Mutex()
 
@@ -426,6 +426,8 @@ class AppState(private val scope: CoroutineScope) {
         // because you haven't added anything yet. Say which one this is, and don't time it out.
         Registry.loadFailure?.let { toast(it, sticky = true) }
         startRegistryWriter()
+        StallWatchdog.start(scope)
+        startPerfReporter()
         refreshAll(fetch = false)   // fast initial scan (no network)
         startAutoRefresh()
         startGitHubRefresh()
@@ -450,10 +452,11 @@ class AppState(private val scope: CoroutineScope) {
         watchScope.launch {
             runCatching {
                 w.events.collect { ev ->
+                    Perf.count("watch.events")
                     when (val action = actionFor(ev)) {
                         is WatchAction.Rescan -> noteWatchEvent(action.id)
-                        WatchAction.RescanAll -> scheduleFullRescan()
-                        WatchAction.Ignore -> Unit
+                        WatchAction.RescanAll -> { Perf.count("watch.overflow"); scheduleFullRescan() }
+                        WatchAction.Ignore -> Perf.count("watch.events.ignored")
                     }
                 }
             }
@@ -538,7 +541,6 @@ class AppState(private val scope: CoroutineScope) {
                 want.forEach { id -> if (id !in watchRegs) register(w, id) }
                 (watchRegs.keys - want).forEach { id ->
                     runCatching { watchRegs.remove(id)?.forEach { it.close() } }
-                    watchChildren.remove(id)
                     watchBursts.remove(id)
                 }
             }
@@ -547,35 +549,10 @@ class AppState(private val scope: CoroutineScope) {
 
     /** Register [id]'s watch set. Caller holds [watchMutex]. */
     private fun register(w: FsWatcher, id: String) {
-        // Recorded before registering, so a layout that changes underneath us is noticed next time
-        // rather than being remembered as whatever it happened to be afterwards.
-        watchChildren[id] = WatchRoots.childDirNames(id)
+        // A list of one, today. Every registration carries the repo id as its name, which is what
+        // event routing reads, so the shape survives if [WatchRoots] ever returns several again.
         watchRegs[id] = WatchRoots.forRepo(id).mapNotNull { root ->
-            // Every registration carries the repo id as its name, which is what event routing reads
-            // — so splitting one watch into several is invisible to [actionFor].
             runCatching { w.watch(watchRootFor(root.path), root.recursive, id) }.getOrNull()
-        }
-    }
-
-    /**
-     * Re-register a repo whose top-level layout changed.
-     *
-     * The shallow root watch reports a new directory appearing, but nothing inside it is watched
-     * until something registers it — so without this, creating a source folder would mean that
-     * folder silently not refreshing until the app restarted.
-     *
-     * Guarded on the directory names alone, which is one readdir: [WatchRoots.forRepo] asks git what
-     * is ignored, and paying a subprocess after every burst would give back what the pruning saves.
-     */
-    private suspend fun refreshWatchRoots(ids: Collection<String>) {
-        val w = fsWatcher ?: return
-        watchMutex.withLock {
-            ids.forEach { id ->
-                if (id !in watchRegs) return@forEach
-                if (WatchRoots.childDirNames(id) == watchChildren[id]) return@forEach
-                watchRegs.remove(id)?.forEach { runCatching { it.close() } }
-                register(w, id)
-            }
         }
     }
 
@@ -652,16 +629,15 @@ class AppState(private val scope: CoroutineScope) {
             if (due.isNotEmpty()) {
                 // Untracked repos are dropped here rather than at the event, because `entries` is
                 // Compose state and this is the point at which we are back on its thread anyway.
-                val ids = withContext(scope.coroutineContext) {
+                withContext(scope.coroutineContext) {
                     val ids =
                         if (ALL_REPOS in due) order.toList()
                         else due.filter { entries[it] != null }
-                    if (ids.isNotEmpty()) rescanRepos(ids, fetch = false)
-                    ids
+                    if (ids.isNotEmpty()) {
+                        Perf.count("watch.rescans", ids.size.toLong())
+                        Perf.timed("watch.rescan.batch") { rescanRepos(ids, fetch = false) }
+                    }
                 }
-                // A directory appearing at the top of a repo is a root-level event, so this is the
-                // point at which a new source folder becomes watchable — see [refreshWatchRoots].
-                if (ids.isNotEmpty()) refreshWatchRoots(ids)
             }
             when (val next = watchBursts.values.minOfOrNull { it.dueAt }) {
                 null -> watchWake.receive()                                        // idle: wait for an event
@@ -1271,10 +1247,27 @@ class AppState(private val scope: CoroutineScope) {
     private fun startRegistryWriter() {
         writeScope.launch {
             for (request in writeQueue) {
-                Registry.flush().onFailure { e ->
+                Perf.timed("registry.write") { Registry.flush() }.onFailure { e ->
                     // Off the UI thread now, and a toast is state the UI renders.
                     scope.launch { toast("Couldn't save ${Registry.file.name}: ${e.message ?: e::class.simpleName}") }
                 }
+            }
+        }
+    }
+
+    /**
+     * Print the perf counters every so often when they are being collected at all.
+     *
+     * On a timer rather than only at exit, because the interesting case is an app that has become
+     * slow and is still running — a report that arrives when the window closes describes a session
+     * the user has already given up on.
+     */
+    private fun startPerfReporter() {
+        if (!Perf.enabled) return
+        watchScope.launch {
+            while (currentCoroutineContext().isActive) {
+                delay(PERF_REPORT_MS.milliseconds)
+                Perf.dump("every ${PERF_REPORT_MS / 1000}s")
             }
         }
     }
@@ -1339,7 +1332,9 @@ class AppState(private val scope: CoroutineScope) {
     fun flushPendingWrites() {
         saveJob?.cancel(); saveJob = null
         Registry.recordRepos(order.mapNotNull { entries[it] })
-        Registry.flush()
+        // On the UI thread by design (see above), so it is exactly the kind of thing worth timing.
+        Perf.timed("registry.write.onClose") { Registry.flush() }
+        Perf.dump("at exit")
     }
 
     // ---- scanning ----

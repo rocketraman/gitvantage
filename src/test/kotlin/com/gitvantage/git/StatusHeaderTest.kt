@@ -200,3 +200,38 @@ val RemoteListing by testSuite {
         assert(RepoScanner.parseRemotes(out).second == "/Users/me/My Repos/thing")
     }
 }
+
+/**
+ * Which word in an argument list names the git subcommand.
+ *
+ * The counters key on this, and getting it wrong is not a cosmetic problem: a scan of the perf
+ * output is how a slow command gets noticed at all, and a mis-keyed one hides under a name nobody
+ * recognises. That is exactly what happened — every logged mutation was filed under
+ * `color.ui=always`, so a perfectly ordinary `git fetch` surfaced as a mystery command with a
+ * 1.3-second mean.
+ */
+val GitSubcommandNaming by testSuite {
+
+    test("a global option that takes a value does not become the subcommand") {
+        // The regression. `-c` consumes the token after it, and that token has no leading dash.
+        assert(Git.subcommandOf(listOf("-c", "color.ui=always", "fetch")) == "fetch")
+        assert(Git.subcommandOf(listOf("-c", "color.ui=never", "diff", "--cached")) == "diff")
+        assert(Git.subcommandOf(listOf("-C", "/some/path", "status")) == "status")
+    }
+
+    test("a plain command is itself") {
+        assert(Git.subcommandOf(listOf("status", "--porcelain", "--branch")) == "status")
+        assert(Git.subcommandOf(listOf("worktree", "list", "--porcelain")) == "worktree")
+    }
+
+    test("flags before the subcommand are skipped without eating it") {
+        assert(Git.subcommandOf(listOf("--no-pager", "log", "-1")) == "log")
+        // `--opt=value` is one token, so it needs no value-consuming rule — and must not trigger one.
+        assert(Git.subcommandOf(listOf("--git-dir=/x/.git", "rev-parse", "HEAD")) == "rev-parse")
+    }
+
+    test("nothing recognisable still produces a key rather than blowing up") {
+        assert(Git.subcommandOf(emptyList()) == "?")
+        assert(Git.subcommandOf(listOf("-c")) == "?")   // a dangling value-taking option
+    }
+}

@@ -3,6 +3,7 @@
 
 package com.gitvantage.git
 
+import com.gitvantage.model.Perf
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -123,6 +124,38 @@ object Git {
     fun isRepo(path: String): Boolean = isRepo(File(path))
 
     /**
+     * The git subcommand in [args] — "status" out of `-c color.ui=always status --porcelain`.
+     *
+     * Global options come first and some of them *take a value*, which is the whole difficulty:
+     * `-c` is followed by `color.ui=always`, a token that begins with no dash and so reads as the
+     * subcommand to anything scanning for the first non-flag word. That is exactly what the perf
+     * counters did, and it filed every logged mutation — fetch, push, commit — under a bucket named
+     * `color.ui=always`, where a slow fetch looked like an unexplained mystery command.
+     *
+     * `-C <path>` gets the same treatment for the same reason. Options spelled `--opt=value` are a
+     * single token and need no special case.
+     */
+    fun subcommandOf(args: List<String>): String {
+        var i = 0
+        while (i < args.size) {
+            val a = args[i]
+            when {
+                a == "-c" || a == "-C" -> i += 2   // a global option and the value it consumes
+                a.startsWith("-") -> i += 1
+                else -> return a
+            }
+        }
+        return "?"
+    }
+
+    private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result =
+        // Keyed on the subcommand, not the full argument list: "status" is the useful grouping, and
+        // the arguments would make a cardinality explosion out of a handful of real commands.
+        Perf.timed("git." + subcommandOf(args)) {
+            spawnNow(dir, args, timeoutSeconds, captureErr)
+        }
+
+    /**
      * Start `git`, read it to completion, and never wedge.
      *
      * When stderr is wanted it is drained on its own thread. git can fill the pipe buffer
@@ -133,7 +166,7 @@ object Git {
      * no thread — that keeps the read path, which runs many times per repo per scan, as cheap as
      * the per-file helpers it replaces.
      */
-    private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result = try {
+    private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result = try {
         val pb = ProcessBuilder(listOf("git") + args).directory(dir)
         if (!captureErr) pb.redirectError(ProcessBuilder.Redirect.DISCARD)
         val proc = pb.start()
