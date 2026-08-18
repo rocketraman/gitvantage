@@ -615,14 +615,20 @@ private fun SettingsZone(state: AppState, rv: RepoView) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Txt("✕ Remove Repo", 12.sp, Tokens.redText, FontWeight.SemiBold,
-                modifier = Modifier.onTap {
-                    state.popup = Popup.Confirm(
-                        "Remove ${repo.name}?",
-                        "Stops tracking it. Doesn't touch the repo on disk.",
-                        "Remove", danger = true,
-                    ) { state.removeRepo(repo.id) }
-                })
+            // The row already says "doesn't touch the repo" beside the button, but that caption is
+            // terse and sits at the far right where a narrow pane can push it out of view. The
+            // tooltip is where there is room to name the things people are actually afraid of
+            // losing — history, uncommitted work — and to say that it is reversible.
+            HoverTip(REMOVE_KEEPS_FILES) {
+                Txt("✕ Remove Repo", 12.sp, Tokens.redText, FontWeight.SemiBold,
+                    modifier = Modifier.onTap {
+                        state.popup = Popup.Confirm(
+                            "Remove ${repo.name}?",
+                            "Stops tracking it. Doesn't touch the repo on disk.",
+                            "Remove", danger = true,
+                        ) { state.removeRepo(repo.id) }
+                    })
+            }
             Spacer(Modifier.weight(1f))
             Txt("stops tracking · doesn't touch the repo", 11.sp, Tokens.muted2)
         }

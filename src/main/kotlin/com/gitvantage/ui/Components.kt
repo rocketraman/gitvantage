@@ -342,6 +342,18 @@ fun PathTip(path: String, modifier: Modifier = Modifier, content: @Composable ()
     ) { content() }
 }
 
+/**
+ * What "Remove" means, for the two buttons that offer it.
+ *
+ * Shared rather than written twice because they make the same promise about the same irreversible-
+ * sounding word, and two copies of a reassurance drift into two different reassurances. It names
+ * history and uncommitted work specifically: "doesn't touch the repo" is accurate but abstract, and
+ * the fear it has to answer is concrete.
+ */
+const val REMOVE_KEEPS_FILES: String =
+    "Removes the repo from GitVantage only. Nothing on disk is touched — the folder, its history " +
+        "and any uncommitted work stay exactly as they are, and you can add it back at any time."
+
 /** Wrap arbitrary content in a hover tooltip explaining [text] (wraps to a readable width). */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable

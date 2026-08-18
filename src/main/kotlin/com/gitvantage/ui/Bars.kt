@@ -238,11 +238,16 @@ fun BulkActionBar(state: AppState) {
         }
         BulkBtn("Snooze") { state.popup = Popup.Snooze(ids) }
         BulkBtn("Remind") { state.popup = Popup.Remind(ids, "", null) }
-        BulkBtn("Remove", danger = true) {
-            state.popup = Popup.Confirm(
-                "Remove $n $noun?", "Stops tracking them. Does not touch the repos on disk.",
-                "Remove", danger = true,
-            ) { state.removeRepos(ids) }
+        // The one remove button with nothing to read before you press it: a red "Remove" sitting
+        // beside Push and Snooze, above a multi-selection. The confirm dialog explains itself, but
+        // only once the click has already been a small act of faith.
+        HoverTip(REMOVE_KEEPS_FILES) {
+            BulkBtn("Remove", danger = true) {
+                state.popup = Popup.Confirm(
+                    "Remove $n $noun?", "Stops tracking them. Does not touch the repos on disk.",
+                    "Remove", danger = true,
+                ) { state.removeRepos(ids) }
+            }
         }
         Spacer(Modifier.weight(1f))
     }
