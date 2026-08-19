@@ -15,12 +15,12 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Nucleus's own setup action: installs the JetBrains Runtime and Gradle. We pin the
       # JBR to 25. No packaging tools or Node needed for a plain build + test.
       # Pin @main to a released Nucleus tag once you've settled on a version.
-      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@764ed3f9b09445d011f9f078310a58c0747d4dca # main
         with:
           java-version: '25'
           packaging-tools: 'false'
@@ -31,7 +31,7 @@ jobs:
 
       - name: Upload build reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gradle-build-reports
           path: build/reports
