@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.skiko.SystemTheme
 import org.jetbrains.skiko.currentSystemTheme
+import java.util.concurrent.TimeUnit
 
 /**
  * Which appearance the app wears. [SYSTEM] follows the desktop's own light/dark preference;
@@ -58,7 +59,7 @@ object Theme {
 
     /**
      * Whether the desktop told us anything at all. False means every probe below came up empty
-     * (no portal, no `defaults`, headless session…), which is why "Match system" says so in the
+     * (Skiko answered UNKNOWN, no portal, headless session…), which is why "Match system" says so in the
      * picker instead of silently pretending the desktop chose light.
      */
     var systemKnown by mutableStateOf(false)
@@ -124,12 +125,12 @@ object Theme {
 /**
  * Asks the OS whether the user prefers a dark UI.
  *
- * Every probe is a subprocess rather than a library call, deliberately. The alternative on Linux
- * is talking to the XDG appearance portal over D-Bus, which needs a custom `DBusInterface` and
- * therefore a dynamic-proxy registration that GraalVM's closed-world analysis cannot see — the
- * exact failure mode documented for the file chooser in `SmokeChecks`, where the app degrades in
- * silence. `git` is already run this way on every scan, so the subprocess path is the one already
- * proven to survive the native image.
+ * The fallback probes are subprocesses rather than library calls, deliberately. The alternative
+ * on Linux is talking to the XDG appearance portal over D-Bus, which needs a custom
+ * `DBusInterface` and therefore a dynamic-proxy registration that GraalVM's closed-world analysis
+ * cannot see — the exact failure mode documented for the file chooser in `SmokeChecks`, where the
+ * app degrades in silence. `git` is already run this way on every scan, so the subprocess path is
+ * the one already proven to survive the native image.
  *
  * Returns null when nothing could be determined, which callers treat as "leave it as it was"
  * rather than "light".
@@ -140,16 +141,80 @@ private object SystemAppearance {
      * The desktop's light/dark preference, or null when it could not be determined — which callers
      * treat as "leave it as it was" rather than "light".
      *
-     * Skiko already answers this natively, and Skiko is on the classpath because Compose is: the
-     * same call backs `isSystemInDarkTheme()`. This used to shell out to `gdbus`, `gsettings`,
-     * `kreadconfig`, `defaults` and `reg` with a per-probe timeout, which meant the app spawned
-     * subprocesses purely to pick a colour scheme, and made the theme code the one place in the UI
-     * layer that started a process. Knowing the desktop's preference is a nicety, not a
-     * requirement, so a single native call that may answer UNKNOWN is the better trade.
+     * Skiko answers first — natively, the same call that backs `isSystemInDarkTheme()` — and on
+     * macOS and Windows that is a direct OS call which does not answer UNKNOWN in practice. On
+     * Linux its portal read is correct, but it loads libdbus by the *unversioned* soname,
+     * `dlopen("libdbus-1.so")`, and that symlink is a development artifact: `dbus-devel` on
+     * Fedora, `libdbus-1-dev` on Debian. A stock install has only `libdbus-1.so.3`, the dlopen
+     * fails, and Skiko reports UNKNOWN forever — a light-themed app on a dark desktop for anyone
+     * who isn't also a C developer (issue #9; filed upstream as
+     * https://youtrack.jetbrains.com/issue/SKIKO-1177). So UNKNOWN, and only UNKNOWN, falls
+     * through to asking the desktop out loud.
      */
     fun prefersDark(): Boolean? = when (currentSystemTheme) {
         SystemTheme.DARK -> true
         SystemTheme.LIGHT -> false
-        SystemTheme.UNKNOWN -> null
+        SystemTheme.UNKNOWN -> linuxProbe()
+    }
+
+    /**
+     * The freedesktop appearance setting first — `gdbus` speaks GLib's own D-Bus implementation
+     * and never touches libdbus, so it works exactly where Skiko's load failed — then GNOME's
+     * gsettings key, then KDE's config. Each returns null rather than false when it isn't the
+     * right question for this desktop, so the next probe gets its turn.
+     *
+     * Linux-only because that is where Skiko's UNKNOWN means "could not ask" rather than "the
+     * desktop has no preference"; elsewhere there is nothing useful left to try.
+     */
+    private fun linuxProbe(): Boolean? {
+        val os = System.getProperty("os.name").orEmpty().lowercase()
+        if ("mac" in os || "win" in os) return null
+        // org.freedesktop.appearance color-scheme: 0 = no preference, 1 = prefer dark, 2 = prefer light.
+        // ReadOne is the fixed method (portal >= 1.17); Read wraps the value in a second variant,
+        // but prints the same "uint32 N" either way, so one parse serves both.
+        for (method in listOf("ReadOne", "Read")) {
+            val portal = run(
+                "gdbus", "call", "--session",
+                "--dest", "org.freedesktop.portal.Desktop",
+                "--object-path", "/org/freedesktop/portal/desktop",
+                "--method", "org.freedesktop.portal.Settings.$method",
+                "org.freedesktop.appearance", "color-scheme",
+            )
+            Regex("uint32 (\\d)").find(portal.orEmpty())?.groupValues?.get(1)?.let {
+                when (it) {
+                    "1" -> return true
+                    "2" -> return false
+                }
+            }
+        }
+        run("gsettings", "get", "org.gnome.desktop.interface", "color-scheme")?.let {
+            if ("prefer-dark" in it) return true
+            if ("prefer-light" in it || "'default'" in it) return false
+        }
+        // KDE names its scheme rather than stating a preference, and every dark one says so.
+        for (tool in listOf("kreadconfig6", "kreadconfig5")) {
+            run(tool, "--file", "kdeglobals", "--group", "General", "--key", "ColorScheme")?.let {
+                if (it.isNotBlank()) return it.contains("dark", ignoreCase = true)
+            }
+        }
+        return null
+    }
+
+    /** Run [args]; stdout on success, null on a non-zero exit, a timeout, or a missing binary. */
+    private fun run(vararg args: String): String? = try {
+        val proc = ProcessBuilder(args.toList())
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        val out = proc.inputStream.bufferedReader().readText()
+        if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+            proc.destroyForcibly()
+            null
+        } else if (proc.exitValue() == 0) {
+            out.trim()
+        } else {
+            null
+        }
+    } catch (_: Exception) {
+        null
     }
 }
