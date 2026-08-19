@@ -43,16 +43,29 @@ repositories {
 fun releaseVersionOrNull(raw: String?): String? =
     raw?.trim()?.removePrefix("v")?.takeIf { it.matches(Regex("""\d+(\.\d+)*""")) }
 
+/**
+ * The most recent release tag, or null when the checkout has none to describe.
+ *
+ * A tagless checkout is the ordinary case here, not an error — CI clones shallow and without tags,
+ * and a fresh clone before the first release has nothing either. Hence `isIgnoreExitValue` and an
+ * explicit exit-code check rather than letting the exec throw and catching it: under the
+ * configuration cache a value source that throws is recorded as a cache problem, which fails the
+ * build no matter who catches the exception afterwards.
+ */
+fun latestReleaseTagOrNull(): String? {
+    // --match keeps non-release tags out of the answer; --abbrev=0 keeps it a plain x.y.z rather
+    // than a v1.2.3-4-gabc123 describe string.
+    val describe = providers.exec {
+        commandLine("git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
+        isIgnoreExitValue = true
+    }
+    return describe.standardOutput.asText.get().takeIf { describe.result.get().exitValue == 0 }
+}
+
 val appVersion: String =
     releaseVersionOrNull(findProperty("appVersion") as String?)
         ?: releaseVersionOrNull(System.getenv("GITHUB_REF_NAME"))
-        ?: runCatching {
-            providers.exec {
-                // --match keeps non-release tags out of the answer; --abbrev=0 keeps it a plain
-                // x.y.z rather than a v1.2.3-4-gabc123 describe string.
-                commandLine("git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
-            }.standardOutput.asText.get()
-        }.getOrNull().let { releaseVersionOrNull(it) }
+        ?: releaseVersionOrNull(latestReleaseTagOrNull())
         ?: "0.0.0"
 
 version = appVersion
