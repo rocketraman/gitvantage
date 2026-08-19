@@ -18,12 +18,11 @@ jobs:
       - uses: actions/checkout@v4
 
       # Nucleus's own setup action: installs the JetBrains Runtime and Gradle. We pin the
-      # JBR to 21 because Gradle 8.14's Kotlin DSL compiler can't run on JDK 25. No packaging
-      # tools or Node needed for a plain build + test.
+      # JBR to 25. No packaging tools or Node needed for a plain build + test.
       # Pin @main to a released Nucleus tag once you've settled on a version.
       - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
         with:
-          java-version: '21'
+          java-version: '25'
           packaging-tools: 'false'
           setup-node: 'false'
 

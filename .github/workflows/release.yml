@@ -32,13 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Nucleus setup: JBR 21 (Gradle can't run on 25), Linux packaging tools, and the
-      # GraalVM native-image build prerequisites (build.gradle enables graalvm { }). The
-      # GraalVM JDK itself is auto-provisioned by the Nucleus Gradle plugin.
+      # Nucleus setup: JBR 25, Linux packaging tools, and the GraalVM native-image build
+      # prerequisites (build.gradle enables graalvm { }). The GraalVM JDK itself is
+      # auto-provisioned by the Nucleus Gradle plugin.
       # Pin @main to a released Nucleus tag once you've settled on a version.
       - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
         with:
-          java-version: '21'
+          java-version: '25'
           packaging-tools: 'true'
           graalvm: 'true'
           # Match the pin in build.gradle.kts. The action does not choose the toolchain — the
