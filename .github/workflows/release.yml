@@ -30,13 +30,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90   # GraalVM native-image builds are slow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Nucleus setup: JBR 25, Linux packaging tools, and the GraalVM native-image build
       # prerequisites (build.gradle enables graalvm { }). The GraalVM JDK itself is
       # auto-provisioned by the Nucleus Gradle plugin.
       # Pin @main to a released Nucleus tag once you've settled on a version.
-      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@main
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@764ed3f9b09445d011f9f078310a58c0747d4dca # main
         with:
           java-version: '25'
           packaging-tools: 'true'
@@ -107,7 +107,7 @@ jobs:
           [ "$found" = 1 ] || echo "No packaging tool logs under build/compose/logs/."
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-assets-${{ runner.os }}-${{ matrix.arch }}
           # The GraalVM pipeline is bound to the default build type, so its output lands under
@@ -130,7 +130,7 @@ jobs:
       contents: write
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist   # keeps each job's `release-assets-*` as its own subdirectory
 
@@ -138,7 +138,7 @@ jobs:
       # It shells out to `gh` but declares no token input and sets no GH_TOKEN itself, so the
       # calling workflow has to provide one or every gh call fails with "set the GH_TOKEN
       # environment variable". The job's `contents: write` permission covers what it needs.
-      - uses: NucleusFramework/Nucleus/.github/actions/publish-release@main
+      - uses: NucleusFramework/Nucleus/.github/actions/publish-release@764ed3f9b09445d011f9f078310a58c0747d4dca # main
         env:
           GH_TOKEN: ${{ github.token }}
           # This job never checks the repo out (it only downloads artifacts), so `gh` has no git
