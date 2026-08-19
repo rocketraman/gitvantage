@@ -1739,6 +1739,22 @@ class AppState(private val scope: CoroutineScope) {
         }
     }
 
+    /** Check out a pull request's head branch — `gh pr checkout` (see [GitHub.checkoutPr]).
+     *  Shares [switchingBranch] with the branch switches above: whatever the vehicle, the repo
+     *  can only be moving to one branch at a time. */
+    fun checkoutPr(id: String, number: Int) {
+        if (switchingBranch) return
+        switchingBranch = true
+        scope.launch {
+            toast("Checking out PR #$number…")
+            val r = withContext(Dispatchers.IO) { GitHub.checkoutPr(id, number) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            switchingBranch = false
+        }
+    }
+
     /**
      * Delete a branch on the remote (see [BranchOps.deleteRemote]). Reloads both branch lists, not
      * just the remote one: a local branch that tracked it now reads "upstream gone", and that's the

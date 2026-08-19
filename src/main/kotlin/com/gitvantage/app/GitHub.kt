@@ -4,6 +4,7 @@
 package com.gitvantage.app
 
 import com.gitvantage.git.GitLog
+import com.gitvantage.git.model.OpResult
 import com.gitvantage.model.Meta
 import java.io.File
 import java.time.Instant
@@ -732,6 +733,44 @@ object GitHub {
      */
     @Serializable private data class GqlReactionGroup(val viewerHasReacted: Boolean = false)
 
+    // ---- PR checkout ---------------------------------------------------------------------
+
+    /**
+     * Check out [number]'s head branch in [repoPath] — `gh pr checkout <number>`.
+     *
+     * Through gh rather than raw git because gh already knows where the head lives: for a PR
+     * from a fork it fetches the contributor's repo directly, where plain git would first need
+     * their remote added, and either way the local branch gets the PR's own branch name with
+     * its upstream set for pushing review fixups back.
+     *
+     * The one gh call here that mutates the repo, so unlike the polling above it *is* recorded
+     * to [GitLog] — the working tree lands on another branch, and the console has to be able
+     * to say why.
+     */
+    suspend fun checkoutPr(repoPath: String, number: Int): OpResult = withContext(Dispatchers.IO) {
+        val gh = binary ?: return@withContext OpResult(repoPath, false, "GitHub CLI (gh) not found")
+        val dir = File(repoPath)
+        val args = listOf("pr", "checkout", number.toString())
+        val start = System.currentTimeMillis()
+        // 90s, matching what the state layer allows any remote-touching git command — this one
+        // fetches. (Named there as a network timeout; this file may not reach the git runner.)
+        val run = exec(listOf(gh) + args, timeoutSeconds = 90, dir = dir)
+        GitLog.record(dir.name, "gh", args, run.code, run.out, run.err, System.currentTimeMillis() - start)
+        if (run.code == 0) OpResult(repoPath, true, "Checked out PR #$number")
+        else OpResult(repoPath, false, checkoutError(run) ?: "gh pr checkout failed")
+    }
+
+    /**
+     * The one line of a failed checkout worth putting in a toast. gh's own refusals ("no pull
+     * requests found…", auth errors) are the first stderr line; when gh got as far as running
+     * git and *that* refused, the stderr opens with fetch progress ("From github.com…"), so a
+     * line git marks as the problem is preferred over whatever came first.
+     */
+    private fun checkoutError(run: Run): String? {
+        val lines = (run.err + "\n" + run.out).lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        return lines.firstOrNull { it.startsWith("error:") || it.startsWith("fatal:") } ?: lines.firstOrNull()
+    }
+
     // ---- process plumbing ----------------------------------------------------------------
 
     private data class Run(val code: Int, val out: String, val err: String)
@@ -740,10 +779,11 @@ object GitHub {
      * Deliberately not routed through [GitLog]: that console records the mutating `git`
      * commands the user asked for, and a background poll every few minutes would bury them.
      */
-    private fun exec(args: List<String>, timeoutSeconds: Long): Run = try {
+    private fun exec(args: List<String>, timeoutSeconds: Long, dir: File? = null): Run = try {
         val proc = ProcessBuilder(args)
             // GH_PAGER/PAGER would make gh block forever waiting on a pager that has no tty.
             .apply { environment()["GH_PAGER"] = "cat"; environment()["PAGER"] = "cat"; environment()["GH_PROMPT_DISABLED"] = "1" }
+            .apply { dir?.let { directory(it) } }
             .start()
         proc.outputStream.close()   // gh must never wait on stdin
         // BOTH pipes are drained on their own threads, and the deadline is enforced by waitFor.

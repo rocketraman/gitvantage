@@ -66,10 +66,13 @@ object GitLog {
         _entries.update { (it + entry).takeLast(MAX) }
     }
 
-    internal fun record(repo: String, args: List<String>, res: Git.Result, durationMs: Long) {
-        val combined = listOf(res.out, res.err).filter { it.isNotBlank() }.joinToString("\n").trimEnd()
+    /** [program] is spelled by the caller rather than assumed: almost every entry is `git` via
+     *  [Git.run], but `gh pr checkout` mutates the repo the same way and is recorded through
+     *  here too — and the console must caption it as the command that actually ran. */
+    internal fun record(repo: String, program: String, args: List<String>, code: Int, out: String, err: String, durationMs: Long) {
+        val combined = listOf(out, err).filter { it.isNotBlank() }.joinToString("\n").trimEnd()
         val entry = GitCommand(
-            seq.getAndIncrement(), repo, "git " + args.joinToString(" "), res.code, durationMs, combined,
+            seq.getAndIncrement(), repo, "$program " + args.joinToString(" "), code, durationMs, combined,
         )
         _entries.update { (it + entry).takeLast(MAX) }
     }

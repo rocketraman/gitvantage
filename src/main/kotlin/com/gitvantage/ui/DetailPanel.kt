@@ -1456,7 +1456,9 @@ private fun IssuesSection(state: AppState, rv: RepoView) {
             // already ordered by most-recently-updated.
             val ordered = gh.items.sortedByDescending { it.awaitingYou }
             val shown = ordered.take(ISSUE_ROWS)
-            shown.forEach { IssueRow(state, it) }
+            // Same gate the branch lists use: checking out a PR moves the working tree.
+            val clean = with(rv.repo) { staged + unstaged + untracked == 0 }
+            shown.forEach { IssueRow(state, rv.id, it, clean) }
             // Counted against the header's total, not the fetched list — on a busy repo those
             // differ by hundreds, and "+94 more" under a "980 open" header reads as a bug. When
             // the total is itself a floor, drop the number rather than print one that's wrong.
@@ -1613,7 +1615,7 @@ private fun IssuesSettings(state: AppState, rv: RepoView) {
 private const val ISSUE_ROWS = 6
 
 @Composable
-private fun IssueRow(state: AppState, item: GitHub.Item) {
+private fun IssueRow(state: AppState, id: String, item: GitHub.Item, clean: Boolean) {
     // Awaiting-you rows get the amber treatment the badge uses, so the reason you opened the
     // panel is findable without reading every title.
     val bg = if (item.awaitingYou) Tokens.tintAmber else Tokens.panelF7
@@ -1634,6 +1636,25 @@ private fun IssueRow(state: AppState, item: GitHub.Item) {
                 if (item.isDraft) Txt("draft", 10.5.sp, Tokens.muted2)
                 if (item.author.isNotEmpty()) Txt("by ${item.author}", 10.5.sp, Tokens.muted2, maxLines = 1)
                 item.reason?.let { Txt("· $it", 10.5.sp, Tokens.snoozeBtnText, FontWeight.SemiBold, maxLines = 1) }
+                // PRs only: bring the branch here rather than go to it. Its own click target inside
+                // the row, so it wins over the row's open-in-browser tap; hidden mid-switch the same
+                // way the branch rows' Switch is.
+                if (item.isPr && !state.switchingBranch) {
+                    Spacer(Modifier.weight(1f))
+                    HoverTip(
+                        "Fetches this PR's branch and checks it out here (`gh pr checkout " +
+                            "${item.number}`) — from a fork too, no remote setup needed.",
+                    ) {
+                        RowAction("Checkout") {
+                            if (clean) state.checkoutPr(id, item.number)
+                            else state.popup = Popup.Confirm(
+                                "Check out PR #${item.number}?",
+                                "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
+                                "Checkout anyway", danger = false,
+                            ) { state.checkoutPr(id, item.number) }
+                        }
+                    }
+                }
             }
         }
     }

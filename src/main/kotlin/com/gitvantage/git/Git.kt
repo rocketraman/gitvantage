@@ -94,7 +94,7 @@ object Git {
         val start = System.currentTimeMillis()
         val res = spawn(dir, full, timeoutSeconds, captureErr = true)
         // The recorded command excludes the color prefix — it's noise in a console listing.
-        if (log) GitLog.record(repoName, args, res, System.currentTimeMillis() - start)
+        if (log) GitLog.record(repoName, "git", args, res.code, res.out, res.err, System.currentTimeMillis() - start)
         return res
     }
 
