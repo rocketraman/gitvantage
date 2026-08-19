@@ -1,0 +1,22 @@
+[versions]
+dbusJava = "5.2.0"
+fileKit = "0.14.2"
+humanReadable = "2.0.0-alpha02"
+konture = "0.7.7"
+kotlinxSerialization = "1.9.0"
+nucleus = "2.4.0"
+slf4j = "2.0.17"
+testBalloon = "1.0.1-K2.4.0"
+
+[libraries]
+dbusJava-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
+fileKit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version.ref = "fileKit" }
+humanReadable = { module = "nl.jacobras:Human-Readable", version.ref = "humanReadable" }
+konture = { module = "io.github.baole:konture", version.ref = "konture" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+nucleus-application = { module = "dev.nucleusframework:nucleus.nucleus-application", version.ref = "nucleus" }
+nucleus-decorated-window-tao = { module = "dev.nucleusframework:nucleus.decorated-window-tao", version.ref = "nucleus" }
+nucleus-fsWatcher = { module = "dev.nucleusframework:nucleus.fs-watcher", version.ref = "nucleus" }
+nucleus-notification-common = { module = "dev.nucleusframework:nucleus.notification-common", version.ref = "nucleus" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+testBalloon-framework-core = { module = "de.infix.testBalloon:testBalloon-framework-core", version.ref = "testBalloon" }

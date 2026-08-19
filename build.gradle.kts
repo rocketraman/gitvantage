@@ -59,29 +59,29 @@ version = appVersion
 dependencies {
     implementation(compose.desktop.currentOs)
     // The entry-point module — provides nucleusApplication and DecoratedWindow
-    implementation("dev.nucleusframework:nucleus.nucleus-application:2.4.0")
+    implementation(libs.nucleus.application)
     // Enable the Tao backend (Rust-native windowing)
-    implementation("dev.nucleusframework:nucleus.decorated-window-tao:2.4.0")
+    implementation(libs.nucleus.decorated.window.tao)
     // Registry persistence (repo list + tags/notes) as JSON
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    implementation(libs.kotlinx.serialization.json)
     // Cross-platform native directory picker (XDG portal on Linux, native on macOS/Windows).
     // Brings PlatformFile via its filekit-core dependency.
     //
     // Its macOS bridge needs reachability metadata we ship ourselves — see
     // src/main/resources/META-INF/native-image/com.gitvantage/gitvantage/reachability-metadata.json.
-    implementation("io.github.vinceglb:filekit-dialogs:0.14.2")
+    implementation(libs.fileKit.dialogs)
     // OS desktop notifications (reminders + alerts) and a filesystem watcher (live rescans).
-    implementation("dev.nucleusframework:nucleus.notification-common:2.4.0")
-    implementation("dev.nucleusframework:nucleus.fs-watcher:2.4.0")
+    implementation(libs.nucleus.notification.common)
+    implementation(libs.nucleus.fsWatcher)
     // Human-readable durations ("about 5 weeks") for the notification outlook / age labels.
-    implementation("nl.jacobras:Human-Readable:2.0.0-alpha02")
+    implementation(libs.humanReadable)
     // An SLF4J binding. Several dependencies (dbus-java in particular) log through SLF4J; with no
     // provider on the classpath they print "No SLF4J providers were found" and then silently
     // discard everything — which is how a D-Bus failure stayed invisible until the file chooser
     // visibly fell back to Swing. The app itself doesn't log, so this is deliberately the smallest
     // possible provider: slf4j-simple writes WARN and above to stderr with no configuration and no
     // plugin system. (Version tracks slf4j-api, which arrives transitively.)
-    implementation("org.slf4j:slf4j-simple:2.0.17")
+    implementation(libs.slf4j.simple)
     // The --smoke-test checks in com.gitvantage.smoke talk to D-Bus directly to prove the portal
     // works in the packaged image. dbus-java is already on the runtime classpath — it arrives
     // transitively via filekit — but transitive dependencies aren't on the *compile* classpath.
@@ -89,9 +89,9 @@ dependencies {
     // compileOnly, deliberately: declaring it as an implementation dependency would pin a version
     // alongside the one filekit resolves, and the two could then disagree at runtime. This way the
     // runtime graph stays filekit's to decide, and we only borrow the types to compile against.
-    compileOnly("com.github.hypfvieh:dbus-java-core:5.2.0")
+    compileOnly(libs.dbusJava.core)
 
-    testImplementation("de.infix.testBalloon:testBalloon-framework-core:1.0.1-K2.4.0")
+    testImplementation(libs.testBalloon.framework.core)
 }
 
 // Only `assert` is instrumented: the tests use it exclusively, so there is no second assertion
