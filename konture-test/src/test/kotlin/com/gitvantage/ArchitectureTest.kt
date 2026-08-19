@@ -235,12 +235,16 @@ val Architecture by testSuite {
     }
 
     /**
-     * Starting a process is allowed in three places, and only one of them is about git:
+     * Starting a process is allowed in four places, and only one of them is about git:
      *
      *  - `git/Git` runs the git binary — the subject of this file;
      *  - `Actions` launches what the user picked from "Open in …" (a terminal, an IDE, `xdg-open`,
      *    and `git gui`) detached, capturing nothing;
      *  - `GitHub` runs the `gh` CLI, a different binary with a different failure model.
+     *  - `app/Theme` asks the Linux desktop for its light/dark preference through `gdbus`,
+     *    `gsettings` and `kreadconfig`, because Skiko cannot: it dlopens an unversioned
+     *    `libdbus-1.so` that only a machine with the -devel package installed has, and reports
+     *    UNKNOWN otherwise (SKIKO-1177). Shells out only on that UNKNOWN, and only on Linux.
      *
      * Each entry has a reason, which is what makes a new name appearing in a failure worth stopping
      * on rather than adding to the list.
@@ -258,10 +262,10 @@ val Architecture by testSuite {
      * file: Konture attributes a dependency to the file it appears in, so an allowlist over classes
      * would have to name every class each allowed file declares.
      */
-    test("process spawning is confined to Git and the two non-git launchers") {
+    test("process spawning is confined to Git and the three non-git callers") {
         architecture {
             files {
-                that().notHaveName { it in setOf("Git.kt", "Actions.kt", "GitHub.kt") }
+                that().notHaveName { it in setOf("Git.kt", "Actions.kt", "GitHub.kt", "Theme.kt") }
                 should().notReferenceClass("java.lang.ProcessBuilder")
             }
         }
