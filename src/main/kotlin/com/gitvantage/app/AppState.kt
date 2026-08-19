@@ -2589,6 +2589,16 @@ class AppState(private val scope: CoroutineScope) {
         return out.toList()
     }
 
+    /**
+     * True while the GitHub-fed counts (Open Issues / Open PRs / Awaiting You) are still unknown:
+     * at least one repo is tracked but no fetch has completed yet. The git facts are scanned
+     * locally and appear near-instantly; the GitHub numbers arrive over the network seconds
+     * later, and until then their chips would assert a hard 0 that the fetch is about to
+     * contradict — so they show "?" instead.
+     */
+    fun githubCountsPending(): Boolean =
+        githubFetchedEpoch == 0L && repos.any { issuesTracked(it) }
+
     /** Global status counts — computed over all repos, unaffected by the active filter. */
     fun counts(): Map<String, Int> {
         val vms = views()
@@ -2604,6 +2614,7 @@ class AppState(private val scope: CoroutineScope) {
             // called "issues" until the GitHub integration landed and the collision became real.
             "problems" to vms.count { it.hasIssue },
             "ghopen" to vms.count { it.openIssues > 0 },
+            "ghprs" to vms.count { it.openPrs > 0 },
             "ghawaiting" to vms.count { it.awaitingYou > 0 },
             "stashes" to vms.count { it.repo.stash > 0 },
             // Parents, not worktrees: the filter selects the rows that have sub-rows, and counting
@@ -2633,6 +2644,7 @@ class AppState(private val scope: CoroutineScope) {
         "stale" -> v.isStale
         "problems" -> v.hasIssue
         "ghopen" -> v.openIssues > 0
+        "ghprs" -> v.openPrs > 0
         "ghawaiting" -> v.awaitingYou > 0
         "stashes" -> v.repo.stash > 0
         "worktrees" -> v.worktrees.isNotEmpty()

@@ -334,9 +334,11 @@ val LightPalette = Palette(
         // accent blue used by Unpushed.
         "stale" to NsPalette(hex("#3a6ea5"), hex("#e8eff7"), hex("#bcd3e8")),
         "problems" to NsPalette(hex("#813d9c"), hex("#f3e9f6"), hex("#ddc9ef")),
-        // GitHub issue tracker. Open issues are informational, so a blue — but a teal-leaning one, to
-        // stay distinguishable from Unpushed's accent blue and Stale's slate blue at chip size.
+        // GitHub issue tracker. Open issues/PRs are informational, so a blue — but a teal-leaning
+        // one, to stay distinguishable from Unpushed's accent blue and Stale's slate blue at chip
+        // size. Issues and PRs share it the way Dirty and Aging share amber: same tier, same source.
         "ghopen" to NsPalette(hex("#1a6f8b"), hex("#e4f1f6"), hex("#b3d8e5")),
+        "ghprs" to NsPalette(hex("#1a6f8b"), hex("#e4f1f6"), hex("#b3d8e5")),
         // Awaiting you is a call to action, so it sits in the amber family with Dirty and Aging.
         "ghawaiting" to NsPalette(hex("#a06f08"), hex("#fbf1d9"), hex("#ecd58a")),
         "stashes" to NsPalette(hex("#7a4f01"), hex("#f6eede"), hex("#e6d3a8")),
@@ -511,6 +513,7 @@ val DarkPalette = run {
             "stale" to chip(hex("#8ab4dd")),
             "problems" to chip(snoozeText),
             "ghopen" to chip(hex("#6cbcd6")),
+            "ghprs" to chip(hex("#6cbcd6")),
             "ghawaiting" to chip(amberText),
             "stashes" to chip(hex("#dcb567")),
             "worktrees" to chip(hex("#9a9de0")),

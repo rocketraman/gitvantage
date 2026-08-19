@@ -187,11 +187,12 @@ data class RepoView(
     val awaitingYou get() = if (issueLevel == IssueLevel.NONE) 0 else (gh?.awaiting ?: 0)
 
     /**
-     * Open issues/PRs for the status filter and its count — 0 while snoozed, mirroring how
-     * [isStale] and [aging] drop a snoozed repo out of their filters. Use [gh] directly (not
-     * this) wherever the real number should still be shown, e.g. the detail panel.
+     * Open issues / open PRs for their status filters and counts — 0 while snoozed, mirroring
+     * how [isStale] and [aging] drop a snoozed repo out of their filters. Use [gh] directly
+     * (not these) wherever the real number should still be shown, e.g. the detail panel.
      */
-    val openIssues get() = if (snoozed) 0 else (gh?.open ?: 0)
+    val openIssues get() = if (snoozed) 0 else (gh?.openIssues ?: 0)
+    val openPrs get() = if (snoozed) 0 else (gh?.openPrs ?: 0)
 
     /**
      * Worktrees whose unlanded work reaches this row — the effective count, not the scanned one.

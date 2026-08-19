@@ -281,7 +281,8 @@ fun StatusBar(state: AppState) {
         Triple("behind", "Behind", "Repos whose branch is behind its upstream — there are commits to pull in."),
         Triple("stale", "Stale", "Repos with no new commit for longer than the stale threshold (30 days by default, overridable per repo). A heads-up, not a problem — stable code often sits untouched."),
         Triple("problems", "Problems", "Repos in a state that needs fixing: detached HEAD, no upstream, or not a git repo."),
-        Triple("ghopen", "Open Issues", "Repos with open issues or pull requests on GitHub. Informational — every healthy project has some."),
+        Triple("ghopen", "Open Issues", "Repos with open issues on GitHub. Informational — every healthy project has some."),
+        Triple("ghprs", "Open PRs", "Repos with open pull requests on GitHub. Informational — every healthy project has some."),
         Triple("ghawaiting", "Awaiting You", "Repos with an open issue or PR waiting on your response: your review is requested, you're assigned, the last comment mentions you, or someone replied on a thread you opened."),
         Triple("stashes", "Stashes", "Repos holding at least one stash."),
         Triple("worktrees", "Worktrees", "Repos with a branch checked out in another folder. Counts the repos, not the worktrees — and expands each one's worktree rows while the filter is on."),
@@ -305,9 +306,14 @@ fun StatusBar(state: AppState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // The GitHub chips' counts come over the network, seconds after the locally-scanned
+            // git chips are already correct — until the first fetch lands they show "?" rather
+            // than a 0 that's about to be contradicted.
+            val ghPending = state.githubCountsPending()
             chips.forEach { (key, label, tip) ->
+                val count = if (ghPending && key in GH_CHIP_KEYS) null else counts[key] ?: 0
                 HoverTip(tip) {
-                    StatusChip(label, counts[key] ?: 0, key == state.status, statusPalette(key)) {
+                    StatusChip(label, count, key == state.status, statusPalette(key)) {
                         state.status = key
                     }
                 }
@@ -323,8 +329,12 @@ fun StatusBar(state: AppState) {
     }
 }
 
+/** The chips fed by the GitHub poll rather than the local scan — see [AppState.githubCountsPending]. */
+private val GH_CHIP_KEYS = setOf("ghopen", "ghprs", "ghawaiting")
+
+/** [count] is null while the number is still unknown (GitHub not fetched yet) — shown as "?". */
 @Composable
-private fun StatusChip(label: String, count: Int, on: Boolean, p: NsPalette, onClick: () -> Unit) {
+private fun StatusChip(label: String, count: Int?, on: Boolean, p: NsPalette, onClick: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Row(
         Modifier.clip(shape)
@@ -343,7 +353,7 @@ private fun StatusChip(label: String, count: Int, on: Boolean, p: NsPalette, onC
                 .padding(horizontal = 5.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Txt("$count", 11.sp, if (on) Tokens.onBright else Tokens.muted, FontWeight.Bold)
+            Txt(count?.toString() ?: "?", 11.sp, if (on) Tokens.onBright else Tokens.muted, FontWeight.Bold)
         }
     }
 }
