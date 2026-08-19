@@ -72,7 +72,7 @@ object Meta {
      * Hidden, not filtered away — the same bargain as dotfiles. The count stays visible in the
      * section header and one click brings them back, so nothing disappears without saying so.
      */
-    val DEFAULT_HIDE_BRANCH_PATTERNS = listOf("origin/dependabot/.*")
+    val DEFAULT_HIDE_BRANCH_PATTERNS = listOf("origin/dependabot/.*", "origin/renovate(-action)?/.*")
 
     /**
      * Compile [patterns] to regexes, dropping any that don't parse.
