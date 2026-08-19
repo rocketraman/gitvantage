@@ -28,3 +28,11 @@ jobs:
 
       - name: Build + test
         run: ./gradlew build --stacktrace --no-daemon
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gradle-build-reports
+          path: build/reports
+          retention-days: 7
