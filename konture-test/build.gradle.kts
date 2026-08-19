@@ -35,8 +35,8 @@ repositories {
 }
 
 dependencies {
-    testImplementation("de.infix.testBalloon:testBalloon-framework-core:1.0.1-K2.4.0")
-    testImplementation("io.github.baole:konture:0.7.7")
+    testImplementation(libs.testBalloon.framework.core)
+    testImplementation(libs.konture)
 }
 
 @OptIn(ExperimentalKotlinGradlePluginApi::class)
