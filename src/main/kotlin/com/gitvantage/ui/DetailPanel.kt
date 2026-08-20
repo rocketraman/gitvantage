@@ -736,7 +736,10 @@ fun TagAutocompleteField(
             if (typed.isEmpty()) Txt(placeholder, 11.5.sp, Tokens.muted2, font = MonoFont)
             BasicTextField(
                 value = edit.value,
-                onValueChange = { nv -> if (nv.text != edit.text) cycle = 0; edit.value = nv },
+                onValueChange = { nv ->
+                    if (nv.text != edit.text) cycle = 0
+                    edit.value = nv
+                },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 11.5.sp, fontFamily = MonoFont, color = Tokens.text),
                 cursorBrush = SolidColor(accent),

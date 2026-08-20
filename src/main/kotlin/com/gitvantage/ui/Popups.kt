@@ -91,7 +91,10 @@ private fun TagPopup(state: AppState, ids: Set<String>) {
             TagAutocompleteField(
                 accent = state.accent,
                 suggest = { state.tagSuggestions(it) },
-                onCommit = { if (it.isNotBlank()) state.addTagToAll(ids, it); state.popup = null },
+                onCommit = {
+                    if (it.isNotBlank()) state.addTagToAll(ids, it)
+                    state.popup = null
+                },
                 onCancel = { state.popup = null },
                 fieldWidth = 240.dp,
             )
