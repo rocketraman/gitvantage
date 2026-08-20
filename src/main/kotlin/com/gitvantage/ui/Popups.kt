@@ -99,7 +99,6 @@ private fun TagPopup(state: AppState, ids: Set<String>) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UntagPopup(state: AppState, ids: Set<String>) {
     val available = remember(ids) { state.tagsAcross(ids) }
@@ -305,7 +304,6 @@ private fun AppearancePopup(state: AppState) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String) {
     var text by remember { mutableStateOf(initialText) }
