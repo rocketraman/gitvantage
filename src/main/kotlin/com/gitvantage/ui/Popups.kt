@@ -69,7 +69,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Untag -> UntagPopup(state, popup.ids)
         is Popup.Snooze -> SnoozePopup(state, popup.ids)
         is Popup.SnoozeWorktree -> SnoozeWorktreePopup(state, popup)
-        is Popup.Remind -> RemindPopup(state, popup.ids, popup.text, popup.due)
+        is Popup.Remind -> RemindPopup(state, popup.ids, popup.text)
         is Popup.Note -> NotePopup(state, popup.id)
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
@@ -307,7 +307,7 @@ private fun AppearancePopup(state: AppState) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String, initialDue: Long?) {
+private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String) {
     var text by remember { mutableStateOf(initialText) }
     var dueIdx by remember { mutableStateOf(1) }   // default "Tomorrow"
     var custom by remember { mutableStateOf("") }  // a kotlin.time.Duration like 2m, 2h, 3d

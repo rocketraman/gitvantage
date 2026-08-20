@@ -167,7 +167,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         // is clean or dirty; the clean banner covers the "clean / ahead" case.
         if (rv.snoozed) SnoozeBanner(state, rv)
         if (rv.behind > 0 && repo.upstream != null) BehindBanner(state, rv)
-        else if (selClean) CleanBanner(state, rv)
+        else if (selClean) CleanBanner(rv)
         repo.warning?.let { WarnBanner(it) }
 
         // ---- work zones, in scan order: what's in this folder, what's in the others, what refs exist
@@ -818,7 +818,7 @@ private fun SnoozeBanner(state: AppState, rv: RepoView) {
 }
 
 @Composable
-private fun CleanBanner(state: AppState, rv: RepoView) {
+private fun CleanBanner(rv: RepoView) {
     Column(
         Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(10.dp))
             .background(Tokens.cleanBg).border(1.dp, Tokens.cleanBorder, RoundedCornerShape(10.dp))
