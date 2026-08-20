@@ -1140,7 +1140,7 @@ class AppState(private val scope: CoroutineScope) {
         // Label filtering happens before the "only mine" one and applies whatever it's set to:
         // an ignored label says "this category is never mine to answer", which is a statement
         // about the item, not about which view you're looking at.
-        val kept = { it: GitHub.Item -> !it.hasAnyLabel(ignored) && (!mine || it.involvesYou) }
+        val kept = { item: GitHub.Item -> !item.hasAnyLabel(ignored) && (!mine || item.involvesYou) }
         val issues = st.issues.filter(kept)
         val prs = st.prs.filter(kept)
         // GitHub's totalCount is authoritative for "how many are open", but it can't be filtered
