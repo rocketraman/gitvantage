@@ -3,24 +3,25 @@ import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import java.io.File
 
 plugins {
-    kotlin("jvm") version "2.4.0"
-    kotlin("plugin.compose") version "2.4.0"
-    kotlin("plugin.serialization") version "2.4.0"
+    alias(libs.plugins.kotlin)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.kotlinSerialization)
     // Rewrites `assert(x == y)` failures into a diagram of every sub-expression and its value, so a
     // failing test names what was actually wrong without the test having to spell out a message.
-    kotlin("plugin.power-assert") version "2.4.0"
-    id("org.jetbrains.compose") version "1.11.1"
+    alias(libs.plugins.powerAssert)
+    alias(libs.plugins.compose)
     // TestBalloon: coroutine-native test framework. The operations under test are all `suspend`,
     // and its tests are suspend functions — no runBlocking wrapper around every case.
     // The version is pinned to the Kotlin it was built against; it must track the kotlin() versions.
-    id("de.infix.testBalloon") version "1.0.1-K2.4.0"
+    alias(libs.plugins.testBalloon)
     // Konture: architecture rules as ordinary tests. The rules themselves live in :konture-test —
     // see the comment in its build file for why they cannot live here — but the plugin is applied
     // to the root project too, because the root is what generates the project layout every rule
     // reads and shares it with that module.
-    id("io.github.baole.konture") version "0.7.7"
-    id("dev.nucleusframework") version "2.4.0"
+    alias(libs.plugins.konture)
+    alias(libs.plugins.nucleus)
 }
+
 repositories {
     mavenCentral()
     google()

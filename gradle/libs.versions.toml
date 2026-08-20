@@ -1,12 +1,24 @@
 [versions]
+compose = "1.11.1"
 dbusJava = "5.2.0"
 fileKit = "0.14.2"
 humanReadable = "2.0.0-alpha02"
 konture = "0.7.7"
+kotlin = "2.4.0"
 kotlinxSerialization = "1.9.0"
 nucleus = "2.4.0"
 slf4j = "2.0.18"
 testBalloon = "1.0.1-K2.4.0"
+
+[plugins]
+compose = { id = "org.jetbrains.compose", version.ref = "compose" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+konture = { id = "io.github.baole.konture", version.ref = "konture" }
+kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+nucleus = { id = "dev.nucleusframework", version.ref = "nucleus" }
+powerAssert = { id = "org.jetbrains.kotlin.plugin.power-assert", version.ref = "kotlin" }
+testBalloon = { id = "de.infix.testBalloon", version.ref = "testBalloon" }
 
 [libraries]
 dbusJava-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
