@@ -19,7 +19,7 @@ plugins {
     // to the root project too, because the root is what generates the project layout every rule
     // reads and shares it with that module.
     id("io.github.baole.konture") version "0.7.7"
-    id("dev.nucleusframework") version "2.4.0"
+    id("dev.nucleusframework") version "2.4.7"
 }
 repositories {
     mavenCentral()
