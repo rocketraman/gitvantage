@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import java.io.File
 
 plugins {
-    kotlin("jvm") version "2.4.0"
+    kotlin("jvm") version "2.4.10"
     kotlin("plugin.compose") version "2.4.0"
     kotlin("plugin.serialization") version "2.4.0"
     // Rewrites `assert(x == y)` failures into a diagram of every sub-expression and its value, so a
