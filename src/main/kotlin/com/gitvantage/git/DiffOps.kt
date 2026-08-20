@@ -12,7 +12,6 @@ import com.gitvantage.git.model.DiffItem
 import com.gitvantage.git.model.DiffRow
 import com.gitvantage.git.model.DiffSection
 import com.gitvantage.git.model.DiffSide
-import com.gitvantage.model.Stash
 import java.io.File
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers

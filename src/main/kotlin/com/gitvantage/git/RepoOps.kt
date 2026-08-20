@@ -5,7 +5,6 @@ package com.gitvantage.git
 
 import com.gitvantage.git.model.OpResult
 import com.gitvantage.model.RegistryEntry
-import com.gitvantage.model.Repo
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

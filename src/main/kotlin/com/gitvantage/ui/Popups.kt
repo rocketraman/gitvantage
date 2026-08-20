@@ -52,7 +52,6 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
-import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
 import com.gitvantage.app.Theme
@@ -60,9 +59,7 @@ import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
-import com.gitvantage.git.model.Commit
 import com.gitvantage.model.Meta
-import com.gitvantage.model.Reminder
 
 /** Dispatches [AppState.popup] to the right modal. */
 @Composable

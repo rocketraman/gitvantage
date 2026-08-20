@@ -5,7 +5,6 @@ package com.gitvantage.app
 
 import androidx.compose.ui.graphics.Color
 import com.gitvantage.git.RepoScanner
-import com.gitvantage.git.model.Commit
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Repo

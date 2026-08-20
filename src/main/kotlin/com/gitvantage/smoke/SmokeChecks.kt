@@ -3,8 +3,6 @@
 
 package com.gitvantage.smoke
 
-import com.gitvantage.app.AppState
-import com.gitvantage.ui.main
 import dev.nucleusframework.fswatcher.FsWatchers
 import dev.nucleusframework.notification.common.NotificationManager
 import java.nio.file.Files

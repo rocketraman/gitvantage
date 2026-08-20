@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -62,26 +61,18 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup as WindowPopup
 import androidx.compose.ui.window.PopupProperties
-import com.gitvantage.app.Actions
 import com.gitvantage.app.AppState
 import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
-import com.gitvantage.app.PathTree
 import com.gitvantage.app.Popup
-import com.gitvantage.app.Primary
 import com.gitvantage.app.RepoView
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
-import com.gitvantage.app.fileTagColor
 import com.gitvantage.git.model.Branch
-import com.gitvantage.git.model.Commit
-import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
-import com.gitvantage.model.Worktree
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
-import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.Stash
 

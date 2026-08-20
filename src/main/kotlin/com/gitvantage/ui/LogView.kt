@@ -51,12 +51,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
-import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Tokens
 import com.gitvantage.git.model.Commit
 import com.gitvantage.git.model.CommitRef
-import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RefKind
 
 /**

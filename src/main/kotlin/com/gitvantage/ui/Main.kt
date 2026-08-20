@@ -26,7 +26,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -47,7 +46,6 @@ import com.gitvantage.app.Theme
 import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiScale
-import com.gitvantage.git.model.Commit
 import com.gitvantage.smoke.runSmokeChecks
 import dev.nucleusframework.application.DecoratedWindow
 import dev.nucleusframework.application.NucleusBackend

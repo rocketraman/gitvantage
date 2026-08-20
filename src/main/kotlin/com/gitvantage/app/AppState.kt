@@ -29,10 +29,8 @@ import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Perf
 import com.gitvantage.model.RegistryEntry
-import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
-import com.gitvantage.model.Stash
 import com.gitvantage.model.WatchAction
 import com.gitvantage.model.WatchPolicy
 import com.gitvantage.model.Worktree

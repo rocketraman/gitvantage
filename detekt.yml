@@ -19,3 +19,5 @@ style:
     active: false
   ReturnCount:
     active: false
+  UnusedImport:
+    active: true
