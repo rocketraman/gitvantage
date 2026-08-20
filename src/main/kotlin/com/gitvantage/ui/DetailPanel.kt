@@ -1901,7 +1901,7 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
     val paused = if (rv.snoozed) " (paused)" else ""
 
     // Assemble rows first so we can skip the whole section when nothing will notify.
-    data class Row_(
+    data class Row(
         val icon: String, val text: String, val color: Color,
         val action: Pair<String, () -> Unit>? = null, val tip: String? = null,
     )
@@ -1921,22 +1921,22 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
         }
     val rows = buildList {
         if (rv.snoozed) {
-            add(Row_("🔕", "Alerts paused${repo.snoozedFor?.let { " for $it" } ?: ""} — resume to re-enable", Tokens.purple))
+            add(Row("🔕", "Alerts paused${repo.snoozedFor?.let { " for $it" } ?: ""} — resume to re-enable", Tokens.purple))
         }
         // Reminder — fires at its due time, then re-notifies hourly until marked Done.
         repo.reminder?.let { rem ->
             val next = state.nextReminderAt(repo.id)
             val extra = if (rem.overdue && next != null) " · re-notifies in ${Meta.compactDuration(next - now)}" else ""
-            add(Row_("◷", "Reminder “${rem.text}” — ${rem.due}$extra", if (rem.overdue) Tokens.remOverdue else Tokens.remTeal))
+            add(Row("◷", "Reminder “${rem.text}” — ${rem.due}$extra", if (rem.overdue) Tokens.remOverdue else Tokens.remTeal))
         }
         // Aging — a one-shot alert when uncommitted work crosses the threshold.
         if (rv.aging) {
-            add(Row_("⚠", "Aging — uncommitted for ${repo.dirtyFor} (alerted)", Tokens.amber, tip = agingTip))
+            add(Row("⚠", "Aging — uncommitted for ${repo.dirtyFor} (alerted)", Tokens.amber, tip = agingTip))
         } else if (repo.dirtySince != null) {
             val toAge = Meta.AGING_MS - (now - repo.dirtySince)
             val text = if (toAge > 0) "Flags as aging in ${Meta.humanDuration(toAge)}$paused"
             else "Would flag as aging now$paused"
-            add(Row_("◷", text, Tokens.muted2, tip = agingTip))
+            add(Row("◷", text, Tokens.muted2, tip = agingTip))
         }
         // Stale — a one-shot alert when the repo crosses the no-commit threshold. Only shown while
         // it's still pending; once stale, the "stale" badge carries it (no further notification).
@@ -1949,14 +1949,14 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
                 // differently (git rounds 3d16h to "4 days"; the library floors it to "3 days"), so
                 // formatting this half ourselves would put two different numbers for the same commit
                 // on screen at once — the very inconsistency this line exists to remove.
-                add(Row_("◷", "Flags as stale in ${Meta.humanDuration(toStale)}, the last commit was about ${repo.last}$paused", Tokens.muted2, tip = staleTip))
+                add(Row("◷", "Flags as stale in ${Meta.humanDuration(toStale)}, the last commit was about ${repo.last}$paused", Tokens.muted2, tip = staleTip))
             }
         }
         // Upstream advance — opt-in per repo (default off). Stated, not toggled: the switch lives in
         // Settings with the other choices, and this section's job is to say what will happen.
         if (repo.hasRemote && repo.upstream != null && state.notifyUpstreamEnabled(repo.id)) {
             val behind = if (repo.behind > 0) " · behind ${repo.behind} now" else ""
-            add(Row_("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal))
+            add(Row("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal))
         }
     }
     if (rows.isEmpty()) return
