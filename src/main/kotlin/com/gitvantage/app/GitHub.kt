@@ -680,7 +680,6 @@ object GitHub {
         val login: String = "",
     )
 
-    @Serializable private data class GqlError(val message: String = "")
     @Serializable private data class GqlRepo(
         val viewerPermission: String? = null,
         val issues: GqlConn = GqlConn(),
