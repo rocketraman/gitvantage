@@ -148,6 +148,7 @@ private const val PERF_REPORT_MS = 30_000L
  * that state writes after a scan land on the recomposition thread — the git work
  * itself is dispatched to [Dispatchers.Default]/IO inside [refreshAll].
  */
+@Suppress("LargeClass")
 class AppState(private val scope: CoroutineScope) {
     // Tweakable design props (reference § "Tweakable design props").
     // A getter, not a stored value: the accent moves when the theme does, and a `val` captured at

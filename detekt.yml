@@ -1,0 +1,21 @@
+complexity:
+  ComplexCondition:
+    active: false
+  CyclomaticComplexMethod:
+    active: false
+  LongMethod:
+    active: false
+  TooManyFunctions:
+    active: false
+
+naming:
+  FunctionNaming:
+    active: false
+
+style:
+  MaxLineLength:
+    active: false
+  MagicNumber:
+    active: false
+  ReturnCount:
+    active: false

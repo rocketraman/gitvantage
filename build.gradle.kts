@@ -20,6 +20,7 @@ plugins {
     // reads and shares it with that module.
     alias(libs.plugins.konture)
     alias(libs.plugins.nucleus)
+    alias(libs.plugins.detekt)
 }
 
 repositories {
@@ -106,6 +107,11 @@ dependencies {
     compileOnly(libs.dbusJava.core)
 
     testImplementation(libs.testBalloon.framework.core)
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(file("detekt.yml"))
 }
 
 // Only `assert` is instrumented: the tests use it exclusively, so there is no second assertion
