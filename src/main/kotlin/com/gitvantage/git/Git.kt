@@ -166,7 +166,7 @@ object Git {
      * no thread — that keeps the read path, which runs many times per repo per scan, as cheap as
      * the per-file helpers it replaces.
      */
-    private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result = try {
+    private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result = runCatching {
         val pb = ProcessBuilder(listOf("git") + args).directory(dir)
         if (!captureErr) pb.redirectError(ProcessBuilder.Redirect.DISCARD)
         val proc = pb.start()
@@ -184,7 +184,7 @@ object Git {
         pump?.join(TimeUnit.SECONDS.toMillis(2))
 
         if (finished) Result(proc.exitValue(), out, err) else Result(-1, out, "timed out")
-    } catch (e: Exception) {
+    }.getOrElse { e ->
         Result(-1, "", e.message ?: "failed to run git")
     }
 }

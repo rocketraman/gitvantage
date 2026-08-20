@@ -779,7 +779,7 @@ object GitHub {
      * Deliberately not routed through [GitLog]: that console records the mutating `git`
      * commands the user asked for, and a background poll every few minutes would bury them.
      */
-    private fun exec(args: List<String>, timeoutSeconds: Long, dir: File? = null): Run = try {
+    private fun exec(args: List<String>, timeoutSeconds: Long, dir: File? = null): Run = runCatching {
         val proc = ProcessBuilder(args)
             // GH_PAGER/PAGER would make gh block forever waiting on a pager that has no tty.
             .apply { environment()["GH_PAGER"] = "cat"; environment()["PAGER"] = "cat"; environment()["GH_PROMPT_DISABLED"] = "1" }
@@ -811,7 +811,7 @@ object GitHub {
             outThread.join(2000); errThread.join(2000)
             Run(proc.exitValue(), outBuf.toString(), errBuf.toString())
         }
-    } catch (e: Exception) {
+    }.getOrElse { e ->
         Run(-1, "", e.message ?: "failed to run gh")
     }
 

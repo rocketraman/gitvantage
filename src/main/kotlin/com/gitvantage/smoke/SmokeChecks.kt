@@ -239,16 +239,14 @@ private fun checkXdgPortal() {
     // was named in nativeDistributions. There is no jlink runtime now; in a native image the same
     // failure comes from UnixSystem's JNI entry points not being registered, and it presents
     // identically here.
-    val connection = try {
+    val connection = runCatching {
         DBusConnectionBuilder.forSessionBus().build()
-    } catch (e: AddressResolvingException) {
-        record(Status.SKIP, name, "no session D-Bus on this machine ($e)")
-        return
-    } catch (e: InvalidBusAddressException) {
-        record(Status.SKIP, name, "session D-Bus address is unusable ($e)")
-        return
-    } catch (e: Exception) {
-        record(Status.FAIL, name, "session D-Bus resolved but would not connect: $e")
+    }.getOrElse { e ->
+        when (e) {
+            is AddressResolvingException -> record(Status.SKIP, name, "no session D-Bus on this machine ($e)")
+            is InvalidBusAddressException -> record(Status.SKIP, name, "session D-Bus address is unusable ($e)")
+            else -> record(Status.FAIL, name, "session D-Bus resolved but would not connect: $e")
+        }
         return
     }
     val result = runCatching {
