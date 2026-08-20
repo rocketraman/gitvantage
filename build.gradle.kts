@@ -8,7 +8,7 @@ plugins {
     kotlin("plugin.serialization") version "2.4.0"
     // Rewrites `assert(x == y)` failures into a diagram of every sub-expression and its value, so a
     // failing test names what was actually wrong without the test having to spell out a message.
-    kotlin("plugin.power-assert") version "2.4.0"
+    kotlin("plugin.power-assert") version "2.4.10"
     id("org.jetbrains.compose") version "1.11.1"
     // TestBalloon: coroutine-native test framework. The operations under test are all `suspend`,
     // and its tests are suspend functions — no runBlocking wrapper around every case.
