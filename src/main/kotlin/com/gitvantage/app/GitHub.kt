@@ -815,7 +815,7 @@ object GitHub {
         Run(-1, "", e.message ?: "failed to run gh")
     }
 
-    private fun msgOf(e: kotlinx.serialization.json.JsonElement): String? =
+    private fun msgOf(e: JsonElement): String? =
         ((e as? JsonObject)?.get("message") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
 
     /** The error GraphQL attributed to [alias] — `errors[].path` names the field that failed. */
