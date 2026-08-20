@@ -107,7 +107,7 @@ jobs:
           [ "$found" = 1 ] || echo "No packaging tool logs under build/compose/logs/."
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets-${{ runner.os }}-${{ matrix.arch }}
           # The GraalVM pipeline is bound to the default build type, so its output lands under
