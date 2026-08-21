@@ -429,6 +429,9 @@ val smokeTestNativeImage = tasks.register("smokeTestNativeImage") {
 
     val outputDir = graalvmAppDir
     val imageName = "GitVantage"
+    // Hoisted out of doLast: reaching for `providers` from inside the action would capture the
+    // build script object itself, which the configuration cache cannot serialize.
+    val providers = project.providers
     val isLinux = System.getProperty("os.name").lowercase().contains("linux")
     val hasXvfb = isLinux &&
         System.getenv("PATH").orEmpty().split(File.pathSeparator).any { File(it, "xvfb-run").canExecute() }
@@ -496,6 +499,8 @@ val smokeTestNativeImageSubsystems = tasks.register("smokeTestNativeImageSubsyst
 
     val outputDir = graalvmAppDir
     val imageName = "GitVantage"
+    // See smokeTestNativeImage: `providers` must be captured here, not inside doLast.
+    val providers = project.providers
 
     doLast {
         val dir = outputDir.get().asFile
