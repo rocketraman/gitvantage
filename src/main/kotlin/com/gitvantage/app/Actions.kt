@@ -69,6 +69,5 @@ object Actions {
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
-        true
     }.isSuccess
 }
