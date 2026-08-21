@@ -1,3 +1,4 @@
-# Project-scoped toolchain.
+# Project-scoped toolchain. Pinned to the JDK major: mise resolves it to the
+# newest Temurin 25 build it can actually install.
 [tools]
-java = "temurin-25.0.4+101.0.LTS"
+java = "temurin-25"
