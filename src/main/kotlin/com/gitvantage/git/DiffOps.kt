@@ -109,7 +109,7 @@ object DiffOps {
                 val d = dels.getOrNull(i)
                 val a = adds.getOrNull(i)
                 if (d != null && a != null) {
-                    @Suppress("DestructuringDeclarationWithTooManyEntries")
+                    @Suppress("DestructuringDeclarationWithTooManyEntries", "Indentation")
                     val (ls, le, rs, re) = charSpans(d.second, a.second)
                     items.add(DiffRow(DiffCell(d.first, d.second, DiffSide.DEL, ls, le), DiffCell(a.first, a.second, DiffSide.ADD, rs, re)))
                 } else {
