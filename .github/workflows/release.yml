@@ -30,7 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90   # GraalVM native-image builds are slow
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Nucleus setup: JBR 25, Linux packaging tools, and the GraalVM native-image build
       # prerequisites (build.gradle enables graalvm { }). The GraalVM JDK itself is
