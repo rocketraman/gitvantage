@@ -2,7 +2,7 @@
 compose = "1.11.1"
 detekt = "2.0.0-alpha.6"
 dbusJava = "5.2.0"
-fileKit = "0.14.2"
+fileKit = "0.15.0"
 humanReadable = "2.0.0-alpha02"
 konture = "0.8.1"
 kotlin = "2.4.10"
