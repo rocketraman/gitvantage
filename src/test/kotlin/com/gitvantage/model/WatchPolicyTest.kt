@@ -16,8 +16,7 @@ import java.nio.file.Path
  * never once ran.
  */
 val WatchDebounce by testSuite {
-
-    val now = 1_800_000_000_000L   // fixed clock; the policy takes it as a parameter for this reason
+    val now = 1_800_000_000_000L // fixed clock; the policy takes it as a parameter for this reason
 
     test("a lone event waits out the quiet period") {
         val deadline = WatchPolicy.deadlineFor(now)

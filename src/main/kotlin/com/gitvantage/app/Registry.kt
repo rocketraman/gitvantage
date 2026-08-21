@@ -14,10 +14,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 @Serializable
-private data class RegistryFile(
-    val repos: List<RegistryEntry> = emptyList(),
-    val settings: Settings = Settings(),
-)
+private data class RegistryFile(val repos: List<RegistryEntry> = emptyList(), val settings: Settings = Settings())
 
 object Registry {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
@@ -220,7 +217,7 @@ object Registry {
         if (!root.isDirectory) return emptyList()
         val out = mutableListOf<RegistryEntry>()
         fun walk(dir: File, depth: Int) {
-            if (Git.isRepo(dir)) {          // a repo → record it, stop descending
+            if (Git.isRepo(dir)) { // a repo → record it, stop descending
                 out += RegistryEntry(dir.absolutePath)
                 return
             }

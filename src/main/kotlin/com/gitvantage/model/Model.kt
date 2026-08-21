@@ -9,8 +9,8 @@ package com.gitvantage.model
  * merged with persisted tags/notes from the [Registry].
  */
 data class ChangedFile(
-    val tag: String,        // M / A / D / ? / R
-    val section: String,    // staged | unstaged | untracked
+    val tag: String, // M / A / D / ? / R
+    val section: String, // staged | unstaged | untracked
     val path: String,
 )
 
@@ -40,13 +40,13 @@ data class Repo(
     val author: String = "",
     val upstream: String? = null,
     val hasRemote: Boolean = false,
-    val webBase: String? = null,        // browsable https base for the remote, e.g. https://github.com/owner/repo
-    val isGitHub: Boolean = false,      // remote host is github.com (enables commit/issue/PR/actions links)
-    val hasWorkflows: Boolean = false,  // repo defines .github/workflows (enables the Actions link)
+    val webBase: String? = null, // browsable https base for the remote, e.g. https://github.com/owner/repo
+    val isGitHub: Boolean = false, // remote host is github.com (enables commit/issue/PR/actions links)
+    val hasWorkflows: Boolean = false, // repo defines .github/workflows (enables the Actions link)
     val hasSubmodules: Boolean = false,
-    val superproject: String? = null,   // parent working-tree path if this repo is itself a submodule
-    val isWorktree: Boolean = false,    // this checkout is a linked worktree, not the main one
-    val worktreeMain: String? = null,   // the main working tree's path, when this is a linked worktree
+    val superproject: String? = null, // parent working-tree path if this repo is itself a submodule
+    val isWorktree: Boolean = false, // this checkout is a linked worktree, not the main one
+    val worktreeMain: String? = null, // the main working tree's path, when this is a linked worktree
     /**
      * The linked working trees attached to this repository — every tree but this one, and never a
      * bare main repo, which has no files to report on.
@@ -72,13 +72,13 @@ data class Repo(
     val isGitRepo: Boolean = true,
     val warning: String? = null,
     val stale: Boolean = false,
-    val staleDays: Int = 30,        // effective "stale after N days" threshold (per-repo override or global)
-    val staleImportant: Boolean = false,   // treat staleness as important (red) rather than informational (amber)
+    val staleDays: Int = 30, // effective "stale after N days" threshold (per-repo override or global)
+    val staleImportant: Boolean = false, // treat staleness as important (red) rather than informational (amber)
     val snoozed: Boolean = false,
     val snoozedFor: String? = null,
     val dirtyFor: String? = null,
-    val dirtySince: Long? = null,   // epoch millis the tree first went dirty (from the registry)
-    val modifiedAt: Long? = null,   // epoch millis of the newest change in the working tree (mtime)
+    val dirtySince: Long? = null, // epoch millis the tree first went dirty (from the registry)
+    val modifiedAt: Long? = null, // epoch millis of the newest change in the working tree (mtime)
     val reminder: Reminder? = null,
     val note: String? = null,
     /**

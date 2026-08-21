@@ -101,11 +101,15 @@ sealed interface Popup {
     data class SnoozeWorktree(val repoId: String, val path: String, val label: String) : Popup {
         override val ids: Set<String> = setOf(repoId)
     }
+
     /** The appearance picker (Match system / Light / Dark). App-wide, so it owns no repos. */
     data object Appearance : Popup { override val ids: Set<String> = emptySet() }
     data class Confirm(
-        val title: String, val message: String, val confirmLabel: String,
-        val danger: Boolean, val onConfirm: () -> Unit,
+        val title: String,
+        val message: String,
+        val confirmLabel: String,
+        val danger: Boolean,
+        val onConfirm: () -> Unit,
     ) : Popup {
         override val ids: Set<String> = emptySet()
     }
@@ -156,8 +160,8 @@ class AppState(private val scope: CoroutineScope) {
     val showNotes = true
 
     // Registry-backed source of truth for path order + persisted tags/notes/snooze.
-    private val entries = mutableStateMapOf<String, RegistryEntry>()  // path -> entry
-    private val order = mutableStateListOf<String>()                  // path, in list order
+    private val entries = mutableStateMapOf<String, RegistryEntry>() // path -> entry
+    private val order = mutableStateListOf<String>() // path, in list order
 
     /** Git-scanned repos (reactive). Rebuilt by [refreshAll]. */
     val repos = mutableStateListOf<Repo>()
@@ -172,11 +176,11 @@ class AppState(private val scope: CoroutineScope) {
     var view by mutableStateOf(ViewMode.TABLE)
     var status by mutableStateOf("all")
     var groupBy by mutableStateOf("none")
-    var sortBy by mutableStateOf(Registry.settings().sortBy)   // name | commit | attention
+    var sortBy by mutableStateOf(Registry.settings().sortBy) // name | commit | attention
         private set
     fun setSort(s: String) { sortBy = s; Registry.saveSettings(Registry.settings().copy(sortBy = s)) }
-    var tagFilter by mutableStateOf<Set<String>>(emptySet())       // include: repo must carry these
-    var tagExclude by mutableStateOf<Set<String>>(emptySet())      // exclude: repo must NOT carry these
+    var tagFilter by mutableStateOf<Set<String>>(emptySet()) // include: repo must carry these
+    var tagExclude by mutableStateOf<Set<String>>(emptySet()) // exclude: repo must NOT carry these
     var searchText by mutableStateOf("")
     var addingTag by mutableStateOf(false)
 
@@ -190,7 +194,7 @@ class AppState(private val scope: CoroutineScope) {
     val chooserCandidates = mutableStateListOf<RepoCandidate>()
     var chooserSelected by mutableStateOf<Set<String>>(emptySet())
         private set
-    var chooserFilter by mutableStateOf("")   // live search over the discovered candidates
+    var chooserFilter by mutableStateOf("") // live search over the discovered candidates
 
     // Bulk multi-select (checkboxes in the main list), transient op feedback, and the
     // active Tag/Snooze/Remind/Confirm modal.
@@ -205,6 +209,7 @@ class AppState(private val scope: CoroutineScope) {
         private set
     fun resizeDetailPane(w: Float) { detailPaneWidth = w.coerceIn(360f, 1000f) }
     fun persistDetailPaneWidth() { Registry.saveSettings(Registry.settings().copy(detailPaneWidth = detailPaneWidth.toInt())) }
+
     /**
      * Remember the window size. Recorded now, written soon — the one settings write that lands
      * repeatedly during a single interaction.
@@ -233,9 +238,11 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var switchingBranch by mutableStateOf(false)
         private set
+
     /** Name of the branch currently being pushed, so its row can say so. One at a time. */
     var pushingBranch by mutableStateOf<String?>(null)
         private set
+
     /** Full ref of the remote branch currently being deleted (e.g. "origin/foo") — a network round
      *  trip, so the row says "Deleting…" rather than looking like the click missed. */
     var deletingRemoteBranch by mutableStateOf<String?>(null)
@@ -262,10 +269,11 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var consoleOpen by mutableStateOf(false)
         private set
-    var consoleHeight by mutableStateOf(260f)   // docked-panel height in dp; drag the top edge to resize
+    var consoleHeight by mutableStateOf(260f) // docked-panel height in dp; drag the top edge to resize
         private set
     fun toggleConsole() { consoleOpen = !consoleOpen }
     fun closeConsole() { consoleOpen = false }
+
     /**
      * The git console's contents. Surfaced here rather than let the console reach into [GitLog]
      * directly: the view layer talks to application state, and that is what keeps "the UI never
@@ -289,9 +297,9 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var logRepoName by mutableStateOf("")
         private set
-    var logRepoId by mutableStateOf("")           // repo path, so a commit row can open its own diff
+    var logRepoId by mutableStateOf("") // repo path, so a commit row can open its own diff
         private set
-    var logWebBase by mutableStateOf<String?>(null)   // GitHub base, so a commit row can link out
+    var logWebBase by mutableStateOf<String?>(null) // GitHub base, so a commit row can link out
         private set
     var logTitle by mutableStateOf("Log")
         private set
@@ -300,7 +308,7 @@ class AppState(private val scope: CoroutineScope) {
     var logCommits by mutableStateOf<List<Commit>>(emptyList())
         private set
 
-    private val scanLimiter = Semaphore(8)   // cap concurrent git subprocesses
+    private val scanLimiter = Semaphore(8) // cap concurrent git subprocesses
     private var toastJob: Job? = null
 
     // Open GitHub issues/PRs, keyed by repo id. Deliberately NOT folded into [repos]: those are
@@ -311,31 +319,34 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var githubFetching by mutableStateOf(false)
         private set
-    private var githubRerun = false   // a refresh was asked for while one was already running
+    private var githubRerun = false // a refresh was asked for while one was already running
     var githubFetchedEpoch by mutableStateOf(0L)
         private set
+
     /** Global default for polling open issues, overridable per repo. Registry-only (like the
      *  global stale threshold): the per-repo control is the one with a UI. */
     var githubEnabled = Registry.settings().githubIssues
         private set
     var githubMineOnly by mutableStateOf(Registry.settings().githubMineOnly)
         private set
+
     /** Hosts `gh` holds a working login for, from the last probe — see [issuesSupported]. */
     private var githubHosts by mutableStateOf<Set<String>>(emptySet())
 
     // Notification bookkeeping.
-    private val prevBehind = HashMap<String, Int>()    // last-seen "behind" per repo
-    private var alertsPrimed = false                   // suppress upstream alerts on the first scan
-    private val remindAt = HashMap<String, Long>()     // path -> next time to (re)notify
-    private val agingNotified = HashSet<String>()      // repos already alerted for aging (cleared when clean)
-    private var agingPrimed = false                    // don't alert for work already aging at startup
-    private val staleNotified = HashSet<String>()      // repos already alerted for staleness (cleared when fresh)
-    private var stalePrimed = false                    // don't alert for repos already stale at startup
+    private val prevBehind = HashMap<String, Int>() // last-seen "behind" per repo
+    private var alertsPrimed = false // suppress upstream alerts on the first scan
+    private val remindAt = HashMap<String, Long>() // path -> next time to (re)notify
+    private val agingNotified = HashSet<String>() // repos already alerted for aging (cleared when clean)
+    private var agingPrimed = false // don't alert for work already aging at startup
+    private val staleNotified = HashSet<String>() // repos already alerted for staleness (cleared when fresh)
+    private var stalePrimed = false // don't alert for repos already stale at startup
 
     /** Re-remind interval after a reminder first fires and isn't marked Done (see fireReminder). */
     private val remindAgainMs = 60 * 60_000L
 
     // Filesystem watcher (real-time rescans on disk changes).
+
     /**
      * Where every part of the watcher runs: receiving events, registering and closing watches, and
      * the loop that decides when a burst has ended.
@@ -374,6 +385,7 @@ class AppState(private val scope: CoroutineScope) {
     /** Volatile because [syncWatches] now reads it from [watchScope] rather than from the caller. */
     @Volatile
     private var fsWatcher: FsWatcher? = null
+
     /**
      * Repo id -> its registrations. A list, not one: a repo is watched as a shallow root plus a
      * recursive watch per directory git isn't ignoring, so that the build output beside the code
@@ -427,7 +439,7 @@ class AppState(private val scope: CoroutineScope) {
         startRegistryWriter()
         StallWatchdog.start(scope)
         startPerfReporter()
-        refreshAll(fetch = false)   // fast initial scan (no network)
+        refreshAll(fetch = false) // fast initial scan (no network)
         startAutoRefresh()
         startGitHubRefresh()
         startSelectionFetch()
@@ -639,7 +651,7 @@ class AppState(private val scope: CoroutineScope) {
                 }
             }
             when (val next = watchBursts.values.minOfOrNull { it.dueAt }) {
-                null -> watchWake.receive()                                        // idle: wait for an event
+                null -> watchWake.receive() // idle: wait for an event
                 else -> withTimeoutOrNull(next - System.currentTimeMillis()) { watchWake.receive() }
             }
         }
@@ -685,7 +697,7 @@ class AppState(private val scope: CoroutineScope) {
      *  skipped until they resume; recovering (a new commit) re-arms the alert. */
     private fun notifyStaleCrossings(scanned: List<Repo>) {
         val staleNow = scanned.filter { it.stale }.map { it.id }.toSet()
-        staleNotified.retainAll(staleNow)   // a repo that got a fresh commit can alert again later
+        staleNotified.retainAll(staleNow) // a repo that got a fresh commit can alert again later
         if (!stalePrimed) { staleNotified.addAll(staleNow); stalePrimed = true; return }
         scanned.forEach { r ->
             if (!r.stale || r.id in staleNotified || r.snoozed) return@forEach
@@ -710,7 +722,7 @@ class AppState(private val scope: CoroutineScope) {
             val since = entries[id]?.dirtySinceEpoch ?: return@mapNotNull null
             if (now - since >= Meta.AGING_MS) id else null
         }.toSet()
-        agingNotified.retainAll(agedNow)   // repos that went clean can alert again on the next cycle
+        agingNotified.retainAll(agedNow) // repos that went clean can alert again on the next cycle
         if (!agingPrimed) { agingNotified.addAll(agedNow); agingPrimed = true; return }
         agedNow.forEach { id ->
             val e = entries[id] ?: return@forEach
@@ -741,8 +753,8 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             while (isActive) {
                 val now = System.currentTimeMillis()
-                refreshMeta(order.toList())   // live "in 3m" / "overdue" labels
-                checkAgingNotifications(now)  // clock-driven aging crossings
+                refreshMeta(order.toList()) // live "in 3m" / "overdue" labels
+                checkAgingNotifications(now) // clock-driven aging crossings
                 order.mapNotNull { entries[it] }.forEach { e ->
                     val due = e.reminderDueEpoch
                     if (due != null && e.reminderText.isNotBlank()) {
@@ -798,7 +810,7 @@ class AppState(private val scope: CoroutineScope) {
         val have = tagsOf(id).toSet()
         return allTagsInUse()
             .filter { it !in have && it.lowercase().contains(q) }
-            .sortedBy { if (it.lowercase().startsWith(q)) 0 else 1 }   // stable: keeps alphabetical within a group
+            .sortedBy { if (it.lowercase().startsWith(q)) 0 else 1 } // stable: keeps alphabetical within a group
             .take(limit)
     }
 
@@ -1419,7 +1431,7 @@ class AppState(private val scope: CoroutineScope) {
     private suspend fun openChooserFor(parent: String) {
         chooserParent = parent
         chooserCandidates.clear()
-        chooserSelected = emptySet()   // default: nothing checked — the user opts in
+        chooserSelected = emptySet() // default: nothing checked — the user opts in
         chooserFilter = ""
         chooserScanning = true
         chooserOpen = true
@@ -1438,7 +1450,7 @@ class AppState(private val scope: CoroutineScope) {
 
     fun toggleChooserSelection(path: String) {
         val c = chooserCandidates.find { it.path == path } ?: return
-        if (c.alreadyTracked) return   // can't re-add what's already tracked
+        if (c.alreadyTracked) return // can't re-add what's already tracked
         chooserSelected = if (path in chooserSelected) chooserSelected - path else chooserSelected + path
     }
 
@@ -1471,9 +1483,9 @@ class AppState(private val scope: CoroutineScope) {
         val candidates = picked.flatMap { p ->
             val dir = File(p)
             when {
-                Git.isRepo(dir) -> listOf(dir.absolutePath)          // a git repo → add it
-                else -> Registry.discover(dir).map { it.path }                   // a parent → add its git children
-                    .ifEmpty { listOf(dir.absolutePath) }                        // neither → add as-is (scanner flags "Not a git repo")
+                Git.isRepo(dir) -> listOf(dir.absolutePath) // a git repo → add it
+                else -> Registry.discover(dir).map { it.path } // a parent → add its git children
+                    .ifEmpty { listOf(dir.absolutePath) } // neither → add as-is (scanner flags "Not a git repo")
             }
         }.distinct()
         val now = java.time.Instant.now()
@@ -1487,7 +1499,7 @@ class AppState(private val scope: CoroutineScope) {
         }.filterNotNull()
         repos.addAll(scanned)
         rememberNested(scanned)
-        added.firstOrNull()?.let { selectedId = it.path }   // open detail on the first added
+        added.firstOrNull()?.let { selectedId = it.path } // open detail on the first added
     }
 
     /**
@@ -1514,7 +1526,7 @@ class AppState(private val scope: CoroutineScope) {
 
     // ---- bulk selection (checkbox + Ctrl/Shift-click multi-select) ----
 
-    private var bulkAnchor: String? = null   // origin row for Shift-range (not observable)
+    private var bulkAnchor: String? = null // origin row for Shift-range (not observable)
 
     val bulkCount get() = bulkSelected.size
     fun toggleBulk(id: String) {
@@ -1539,7 +1551,7 @@ class AppState(private val scope: CoroutineScope) {
                 }
                 // keep the anchor so the range can be re-extended from the same origin
             }
-            ctrl -> toggleBulk(id)          // also updates the anchor
+            ctrl -> toggleBulk(id) // also updates the anchor
             else -> { selectedId = id; bulkAnchor = id }
         }
     }
@@ -1575,7 +1587,7 @@ class AppState(private val scope: CoroutineScope) {
         ids.forEach { id ->
             val newDue = if (t.isEmpty()) null else dueEpoch
             entries[id]?.let { entries[id] = it.copy(reminderText = t, reminderDueEpoch = newDue) }
-            if (t.isEmpty() || newDue == null) remindAt.remove(id) else remindAt[id] = newDue   // (re)schedule next notify
+            if (t.isEmpty() || newDue == null) remindAt.remove(id) else remindAt[id] = newDue // (re)schedule next notify
         }
         persist(); refreshMeta(ids)
         toast(if (t.isEmpty()) "Reminder cleared" else "Reminder set on ${ids.size} ${plural(ids.size)}")
@@ -1677,7 +1689,7 @@ class AppState(private val scope: CoroutineScope) {
             val list = withContext(Dispatchers.IO) { BranchOps.load(id) }
             if (branchesRepo == id) {
                 branches = list
-                if (showRemoteBranches) {   // keep the remote list's "hasLocal" flags fresh
+                if (showRemoteBranches) { // keep the remote list's "hasLocal" flags fresh
                     val locals = list.map { it.name }.toSet()
                     remoteBranches = withContext(Dispatchers.IO) { BranchOps.loadRemotes(id, locals) }
                 }
@@ -1837,7 +1849,7 @@ class AppState(private val scope: CoroutineScope) {
             val r = withContext(Dispatchers.IO) { SubmoduleOps.updatePointer(id, path) }
             toast(r.message)
             reloadSubmodules(id)
-            rescanRepos(listOf(id), fetch = false)   // parent now has a staged gitlink change
+            rescanRepos(listOf(id), fetch = false) // parent now has a staged gitlink change
             submodulesBusy = false
         }
     }
@@ -2033,7 +2045,7 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             toast(withContext(Dispatchers.IO) { WorktreeOps.prune(id) }.message)
             reloadWorktrees(id)
-            rescanRepos(listOf(id), fetch = false)   // the worktree count just changed
+            rescanRepos(listOf(id), fetch = false) // the worktree count just changed
             worktreesBusy = false
         }
     }
@@ -2270,7 +2282,7 @@ class AppState(private val scope: CoroutineScope) {
         val subPath = File(parentId, sub.path).absolutePath
         logRepoName = "${File(parentId).name}/${sub.path}"
         logRepoId = subPath
-        logWebBase = null   // submodule's own remote isn't scanned here; skip external links
+        logWebBase = null // submodule's own remote isn't scanned here; skip external links
         logTitle = "${sub.path}: pending pointer commits"
         logCommits = emptyList()
         logLoading = true
@@ -2313,7 +2325,8 @@ class AppState(private val scope: CoroutineScope) {
         if (title.isBlank()) return
         scope.launch {
             toast("Committing ${File(id).name}…")
-            val result = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.commit(e, title, body, stageAll) } }
+            val result =
+                withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.commit(e, title, body, stageAll) } }
             rescanRepos(listOf(id), fetch = false)
             toast(result.message)
         }
@@ -2349,7 +2362,7 @@ class AppState(private val scope: CoroutineScope) {
         if (refreshingId != null) return
         refreshingId = id
         scope.launch {
-            rescanRepos(listOf(id), fetch = true)   // also reloads branches + submodules (see rescanRepos)
+            rescanRepos(listOf(id), fetch = true) // also reloads branches + submodules (see rescanRepos)
             refreshingId = null
             toast("Refreshed ${File(id).name}")
         }
@@ -2368,7 +2381,7 @@ class AppState(private val scope: CoroutineScope) {
         scanned.forEach { s ->
             val idx = repos.indexOfFirst { it.id == s.id }
             if (idx >= 0) repos[idx] = s else repos.add(s)
-            prevBehind[s.id] = s.behind   // keep baseline current so auto-refresh won't false-alert
+            prevBehind[s.id] = s.behind // keep baseline current so auto-refresh won't false-alert
         }
         rememberNested(scanned)
         reconcileDirtySince(scanned)
@@ -2417,7 +2430,7 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             while (isActive) {
                 delay((intervalSeconds * 1000).milliseconds)
-                refreshGitHub()   // no-ops harmlessly when no repo has a tracked GitHub remote
+                refreshGitHub() // no-ops harmlessly when no repo has a tracked GitHub remote
             }
         }
     }
@@ -2524,6 +2537,7 @@ class AppState(private val scope: CoroutineScope) {
     }
 
     /** Toolbar timestamp text. */
+
     /**
      * How stale the dashboard is, as the *least* recently fetched repo — not the most.
      *
@@ -2697,15 +2711,15 @@ class AppState(private val scope: CoroutineScope) {
     private fun sorted(vs: List<RepoView>): List<RepoView> = when (sortBy) {
         "commit" -> vs.sortedWith(
             compareByDescending<RepoView> { it.repo.lastCommitEpoch ?: Long.MIN_VALUE }
-                .thenBy { it.repo.name.lowercase() })
+                .thenBy { it.repo.name.lowercase() }
+        )
         // Snoozed repos sink within their rank. A snooze can't clear a dirty working tree, so the
         // repo keeps its amber rank (and its amber dot) — but "not now" has to buy something, and
         // what it buys is that the rows still asking for you outrank the ones you've muted.
         // [groups] partitions this order without re-sorting, so sections inherit the same tail.
-        "attention" -> vs.sortedWith(
-            compareBy<RepoView> { attentionRank(it) }
-                .thenBy { if (it.snoozed) 1 else 0 }
-                .thenBy { it.repo.name.lowercase() })
+        "attention" -> vs.sortedWith(compareBy<RepoView> { attentionRank(it) }
+            .thenBy { if (it.snoozed) 1 else 0 }
+            .thenBy { it.repo.name.lowercase() })
         else -> vs.sortedBy { it.repo.name.lowercase() }
     }
 

@@ -14,7 +14,7 @@ import de.infix.testBalloon.framework.core.testSuite
  */
 val FetchScheduling by testSuite {
 
-    val now = 1_800_000_000_000L   // fixed clock; the policy takes it as a parameter for this reason
+    val now = 1_800_000_000_000L // fixed clock; the policy takes it as a parameter for this reason
     val hour = 3_600_000L
     val day = 24 * hour
     fun daysAgo(n: Long) = now - n * day
@@ -54,7 +54,7 @@ val FetchScheduling by testSuite {
     }
 
     test("a repo is due only once its own interval has elapsed") {
-        val active = daysAgo(1)   // hourly tier
+        val active = daysAgo(1) // hourly tier
         assert(!FetchPolicy.isDue(active, lastFetchedMs = now - 59 * 60_000, now = now))
         assert(FetchPolicy.isDue(active, lastFetchedMs = now - hour, now = now))
     }
@@ -62,9 +62,9 @@ val FetchScheduling by testSuite {
     test("tiers are what decide due-ness, not a shared interval") {
         // The same 3-hour-old fetch: due for the daily tier's neighbours, not for the two-hourly.
         val threeHoursAgo = now - 3 * hour
-        assert(FetchPolicy.isDue(daysAgo(1), threeHoursAgo, now))    // hourly → due
-        assert(FetchPolicy.isDue(daysAgo(5), threeHoursAgo, now))    // 2-hourly → due
-        assert(!FetchPolicy.isDue(daysAgo(10), threeHoursAgo, now))  // daily → not yet
+        assert(FetchPolicy.isDue(daysAgo(1), threeHoursAgo, now)) // hourly → due
+        assert(FetchPolicy.isDue(daysAgo(5), threeHoursAgo, now)) // 2-hourly → due
+        assert(!FetchPolicy.isDue(daysAgo(10), threeHoursAgo, now)) // daily → not yet
     }
 
     test("a dormant repo is never due, however long ago it was fetched") {
@@ -75,7 +75,7 @@ val FetchScheduling by testSuite {
     // --- what counts as activity --------------------------------------------------------------
 
     test("activity is the newest of local commits, dirty tree and upstream movement") {
-        val commitSecs = daysAgo(40) / 1000   // git's %ct is seconds, the others are millis
+        val commitSecs = daysAgo(40) / 1000 // git's %ct is seconds, the others are millis
         assert(FetchPolicy.activityMs(commitSecs, null, null) == daysAgo(40))
         // Uncommitted work is activity that produces no commit date of its own.
         assert(FetchPolicy.activityMs(commitSecs, daysAgo(1), null) == daysAgo(1))

@@ -75,7 +75,7 @@ data class RegistryEntry(
     val snoozeUntilEpoch: Long? = null,
     val reminderText: String = "",
     val reminderDueEpoch: Long? = null,
-    val dirtySinceEpoch: Long? = null,   // when the working tree first went dirty (for the "Aging" signal)
+    val dirtySinceEpoch: Long? = null, // when the working tree first went dirty (for the "Aging" signal)
     val notifyUpstream: Boolean = false, // desktop-notify when this repo's upstream advances (opt-in)
     // Auto-fetch bookkeeping, both epoch millis. Persisted rather than in-memory because
     // [FetchPolicy] schedules in hours and days: rebuilt at every launch, a 24-hour interval would
@@ -97,7 +97,7 @@ data class Settings(
     val windowWidth: Int = 1480,
     val windowHeight: Int = 860,
     val detailPaneWidth: Int = 466,
-    val sortBy: String = "name",   // name | commit | attention
+    val sortBy: String = "name", // name | commit | attention
     // Appearance: system | light | dark. "system" follows the desktop's own light/dark
     // preference (see ThemeMode / SystemAppearance) and is the default, so a fresh install
     // matches the rest of the session rather than asserting a look of its own.

@@ -49,7 +49,7 @@ val PerfCounters by testSuite {
     test("a stat keeps the largest sample, not the latest") {
         val s = Perf.Stat()
         s.record(5_000_000)
-        s.record(1_000_000)   // smaller, and last — it must not become the maximum
+        s.record(1_000_000) // smaller, and last — it must not become the maximum
         s.record(3_000_000)
 
         assert(s.count.get() == 3L)

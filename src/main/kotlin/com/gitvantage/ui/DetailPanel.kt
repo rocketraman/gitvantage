@@ -106,107 +106,107 @@ fun DetailPanel(state: AppState, rv: RepoView) {
                 .padding(horizontal = 22.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-        // Header
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatusDot(rv.accent, 11)
-            Txt(repo.name, 20.sp, Tokens.text, FontWeight.Bold, modifier = Modifier.weight(1f))
-            // Manual refresh — re-scan with fetch, reload branches + submodules. A safety net for
-            // any external change the filesystem watcher didn't catch (e.g. remote advances).
-            Box(
-                Modifier.size(26.dp).clip(RoundedCornerShape(50)).background(Tokens.segTrack)
-                    .pointerHoverIcon(PointerIcon.Hand).onTap { state.refreshRepo(repo.id) },
-                contentAlignment = Alignment.Center,
-            ) { Txt(if (state.refreshingId == repo.id) "⟳" else "↻", 14.sp, state.accent) }
-            Box(
-                Modifier.size(26.dp).clip(RoundedCornerShape(50)).background(Tokens.segTrack)
-                    .onTap { state.selectedId = null },
-                contentAlignment = Alignment.Center,
-            ) { Txt("×", 14.sp, Tokens.secondary) }
-        }
+            // Header
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatusDot(rv.accent, 11)
+                Txt(repo.name, 20.sp, Tokens.text, FontWeight.Bold, modifier = Modifier.weight(1f))
+                // Manual refresh — re-scan with fetch, reload branches + submodules. A safety net for
+                // any external change the filesystem watcher didn't catch (e.g. remote advances).
+                Box(
+                    Modifier.size(26.dp).clip(RoundedCornerShape(50)).background(Tokens.segTrack)
+                        .pointerHoverIcon(PointerIcon.Hand).onTap { state.refreshRepo(repo.id) },
+                    contentAlignment = Alignment.Center,
+                ) { Txt(if (state.refreshingId == repo.id) "⟳" else "↻", 14.sp, state.accent) }
+                Box(
+                    Modifier.size(26.dp).clip(RoundedCornerShape(50)).background(Tokens.segTrack)
+                        .onTap { state.selectedId = null },
+                    contentAlignment = Alignment.Center,
+                ) { Txt("×", 14.sp, Tokens.secondary) }
+            }
 
-        // Branch line. Just the branch and a way to copy it: the ahead/behind numbers used to sit
-        // here too and said the same thing as the badges on the row and the banner below, three
-        // times on one screen.
-        Row(
-            Modifier.padding(top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont,
-                modifier = Modifier.weight(1f, fill = false))
-            // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
-            if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
-        }
+            // Branch line. Just the branch and a way to copy it: the ahead/behind numbers used to sit
+            // here too and said the same thing as the badges on the row and the banner below, three
+            // times on one screen.
+            Row(
+                Modifier.padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont,
+                    modifier = Modifier.weight(1f, fill = false))
+                // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
+                if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
+            }
 
-        // If this repo is itself a submodule of a parent that's also tracked, link to it.
-        repo.superproject?.let { sup ->
-            state.trackedRepoAt(sup)?.let { parentId ->
-                Row(
-                    Modifier.padding(top = 8.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.tintBlue)
-                        .pointerHoverIcon(PointerIcon.Hand).onTap { state.selectedId = parentId }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Txt("⤴ Submodule of", 11.5.sp, state.accent, FontWeight.SemiBold)
-                    Txt(java.io.File(parentId).name, 11.5.sp, state.accent, FontWeight.Bold, font = MonoFont)
+            // If this repo is itself a submodule of a parent that's also tracked, link to it.
+            repo.superproject?.let { sup ->
+                state.trackedRepoAt(sup)?.let { parentId ->
+                    Row(
+                        Modifier.padding(top = 8.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.tintBlue)
+                            .pointerHoverIcon(PointerIcon.Hand).onTap { state.selectedId = parentId }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Txt("⤴ Submodule of", 11.5.sp, state.accent, FontWeight.SemiBold)
+                        Txt(java.io.File(parentId).name, 11.5.sp, state.accent, FontWeight.Bold, font = MonoFont)
+                    }
                 }
             }
-        }
 
-        // Tags
-        TagEditor(state, rv)
+            // Tags
+            TagEditor(state, rv)
 
-        // Actions. Split by consequence: a bordered button changes something, a flat accent link
-        // only shows you something. That's the same rule the list rows' hover actions follow, and
-        // it's what lets Diff and Log lose their borders without losing their meaning — they were
-        // the two read-only actions wearing the same weight as Push.
-        ActionRow(state, rv)
+            // Actions. Split by consequence: a bordered button changes something, a flat accent link
+            // only shows you something. That's the same rule the list rows' hover actions follow, and
+            // it's what lets Diff and Log lose their borders without losing their meaning — they were
+            // the two read-only actions wearing the same weight as Push.
+            ActionRow(state, rv)
 
-        // Banners. Behind-upstream takes its own banner (with Diff/Log) so it shows whether the tree
-        // is clean or dirty; the clean banner covers the "clean / ahead" case.
-        if (rv.snoozed) SnoozeBanner(state, rv)
-        if (rv.behind > 0 && repo.upstream != null) BehindBanner(state, rv)
-        else if (selClean) CleanBanner(rv)
-        repo.warning?.let { WarnBanner(it) }
+            // Banners. Behind-upstream takes its own banner (with Diff/Log) so it shows whether the tree
+            // is clean or dirty; the clean banner covers the "clean / ahead" case.
+            if (rv.snoozed) SnoozeBanner(state, rv)
+            if (rv.behind > 0 && repo.upstream != null) BehindBanner(state, rv)
+            else if (selClean) CleanBanner(rv)
+            repo.warning?.let { WarnBanner(it) }
 
-        // ---- work zones, in scan order: what's in this folder, what's in the others, what refs exist
+            // ---- work zones, in scan order: what's in this folder, what's in the others, what refs exist
 
-        // Changed files — one list, not three sections. The three headings were a taxonomy of git's
-        // index, and the question the pane is asked is "what have I touched"; the state each file is
-        // in stays on the row, where it belongs to the file rather than to a heading.
-        if (repo.files.isNotEmpty()) ChangedFilesSection(state, rv)
+            // Changed files — one list, not three sections. The three headings were a taxonomy of git's
+            // index, and the question the pane is asked is "what have I touched"; the state each file is
+            // in stays on the row, where it belongs to the file rather than to a heading.
+            if (repo.files.isNotEmpty()) ChangedFilesSection(state, rv)
 
-        // Stashes
-        if (repo.stashes.isNotEmpty()) StashSection(state, repo.id, repo.stashes)
+            // Stashes
+            if (repo.stashes.isNotEmpty()) StashSection(state, repo.id, repo.stashes)
 
-        // Submodules (if any) — pointer status, target, fetch + pointer update
-        if (repo.hasSubmodules) SubmodulesSection(state, rv)
+            // Submodules (if any) — pointer status, target, fetch + pointer update
+            if (repo.hasSubmodules) SubmodulesSection(state, rv)
 
-        // The branches this repository has checked out in other folders, each openable in place.
-        WorktreesPaneSection(state, rv)
+            // The branches this repository has checked out in other folders, each openable in place.
+            WorktreesPaneSection(state, rv)
 
-        // Branches (local), with status vs mainline + delete
-        if (repo.isGitRepo) BranchesSection(state, rv)
+            // Branches (local), with status vs mainline + delete
+            if (repo.isGitRepo) BranchesSection(state, rv)
 
-        // Open GitHub issues / pull requests. Only for remotes we can actually query: a non-GitHub
-        // forge (Azure DevOps, GitLab, …) or a GitHub URL that isn't a plain owner/repo gets no
-        // section at all, rather than a permanently empty one — an empty "Issues & pull requests"
-        // heading on a GitLab repo reads as "no open issues", which is a different claim entirely.
-        if (state.issuesSupported(repo)) IssuesSection(state, rv)
+            // Open GitHub issues / pull requests. Only for remotes we can actually query: a non-GitHub
+            // forge (Azure DevOps, GitLab, …) or a GitHub URL that isn't a plain owner/repo gets no
+            // section at all, rather than a permanently empty one — an empty "Issues & pull requests"
+            // heading on a GitLab repo reads as "no open issues", which is a different claim entirely.
+            if (state.issuesSupported(repo)) IssuesSection(state, rv)
 
-        // What will notify, and when. Its thresholds and opt-ins live in Settings; this is the
-        // forecast they produce.
-        NotificationsOutlook(state, rv)
+            // What will notify, and when. Its thresholds and opt-ins live in Settings; this is the
+            // forecast they produce.
+            NotificationsOutlook(state, rv)
 
-        // Note + reminder, two lines. The full editors are one click away; what the pane owes at a
-        // glance is what the note *says*, and a 60px empty textarea said nothing on most repos.
-        if (state.showNotes) NoteLines(state, rv)
+            // Note + reminder, two lines. The full editors are one click away; what the pane owes at a
+            // glance is what the note *says*, and a 60px empty textarea said nothing on most repos.
+            if (state.showNotes) NoteLines(state, rv)
 
-        // Everything that configures rather than reports, behind one disclosure — see [SettingsZone].
-        SettingsZone(state, rv)
-        }   // content Column
-    }       // outer Row (drag handle + content)
+            // Everything that configures rather than reports, behind one disclosure — see [SettingsZone].
+            SettingsZone(state, rv)
+        } // content Column
+    } // outer Row (drag handle + content)
 }
 
 /**
@@ -696,6 +696,7 @@ fun TagAutocompleteField(
     val n = candidates.size
     val idx = if (n > 0) cycle.mod(n) else 0
     val active = candidates.getOrNull(idx)
+
     // Accept the active completion into the field, cursor at the end.
     fun accept() { active?.let { edit.setText(it); cycle = 0 } }
     val atEnd = edit.value.selection.collapsed && edit.value.selection.end == typed.length
@@ -1902,8 +1903,11 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
 
     // Assemble rows first so we can skip the whole section when nothing will notify.
     data class Row(
-        val icon: String, val text: String, val color: Color,
-        val action: Pair<String, () -> Unit>? = null, val tip: String? = null,
+        val icon: String,
+        val text: String,
+        val color: Color,
+        val action: Pair<String, () -> Unit>? = null,
+        val tip: String? = null,
     )
     // Plain-language explanations of the two easily-confused states.
     val agingTip = "“Aging” = you have uncommitted changes that have been sitting in the working " +

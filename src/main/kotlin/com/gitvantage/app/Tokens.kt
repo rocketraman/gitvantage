@@ -240,13 +240,13 @@ val LightPalette = Palette(
     muted = hex("#77767b"),
     muted2 = hex("#9a9996"),
 
-    green = hex("#2ec27e"),   // clean / staged
-    amber = hex("#e5a50a"),   // dirty / modified
-    red = hex("#e01b24"),     // warning / stale (dot)
+    green = hex("#2ec27e"), // clean / staged
+    amber = hex("#e5a50a"), // dirty / modified
+    red = hex("#e01b24"), // warning / stale (dot)
     redText = hex("#c0181f"), // warning / stale (text)
-    purple = hex("#813d9c"),  // stash
-    gray = hex("#77767b"),    // untracked
-    behind = hex("#986a44"),  // behind arrows
+    purple = hex("#813d9c"), // stash
+    gray = hex("#77767b"), // untracked
+    behind = hex("#986a44"), // behind arrows
     untrackedSeg = hex("#c8c7c4"),
 
     tintGreen = hex("#e6f6ee"),

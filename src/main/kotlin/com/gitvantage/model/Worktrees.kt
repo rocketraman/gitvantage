@@ -8,22 +8,22 @@ import kotlinx.serialization.Serializable
 
 data class Worktree(
     val path: String,
-    val head: String,             // full sha the worktree has checked out ("" when bare)
-    val branch: String?,          // short branch name; null when detached or bare
+    val head: String, // full sha the worktree has checked out ("" when bare)
+    val branch: String?, // short branch name; null when detached or bare
     val bare: Boolean,
     val locked: Boolean,
-    val lockReason: String?,      // git's reason, when one was given with `worktree lock --reason`
-    val prunable: Boolean,        // git considers the administrative entry stale
+    val lockReason: String?, // git's reason, when one was given with `worktree lock --reason`
+    val prunable: Boolean, // git considers the administrative entry stale
     val prunableReason: String?,
-    val isMain: Boolean,          // the repository's main working tree (git lists it first)
-    val isCurrent: Boolean = false,   // the repo being viewed *is* this worktree
-    val missing: Boolean = false,     // the directory is gone from disk (the usual cause of prunable)
-    val dirtyCount: Int = 0,          // uncommitted changes inside (filled in by listWithWork)
-    val unmerged: Int = 0,            // commits here that mainline hasn't got (ditto)
-    val mainline: String? = null,     // the ref [unmerged] and [branchMerged] were measured against
-    val branchMerged: Boolean = false,   // its branch is fully contained in mainline (only load)
-    val lastRelative: String = "",    // git's relative date for the worktree's HEAD commit
-    val lastAuthor: String = "",      // who made that commit
+    val isMain: Boolean, // the repository's main working tree (git lists it first)
+    val isCurrent: Boolean = false, // the repo being viewed *is* this worktree
+    val missing: Boolean = false, // the directory is gone from disk (the usual cause of prunable)
+    val dirtyCount: Int = 0, // uncommitted changes inside (filled in by listWithWork)
+    val unmerged: Int = 0, // commits here that mainline hasn't got (ditto)
+    val mainline: String? = null, // the ref [unmerged] and [branchMerged] were measured against
+    val branchMerged: Boolean = false, // its branch is fully contained in mainline (only load)
+    val lastRelative: String = "", // git's relative date for the worktree's HEAD commit
+    val lastAuthor: String = "", // who made that commit
     // Epoch *seconds* of that commit, as git reports them. Carried alongside the relative string
     // rather than derived from it, so the card strip's "2h" is computed from a timestamp instead of
     // being parsed back out of git's prose.
@@ -71,12 +71,7 @@ data class Worktree(
  * *tracked* repo and carries no line counts; a worktree is read on demand and the +N −N is the
  * reason the list is worth opening at all.
  */
-data class WorktreeChange(
-    val path: String,
-    val untracked: Boolean,
-    val added: Int = 0,
-    val deleted: Int = 0,
-)
+data class WorktreeChange(val path: String, val untracked: Boolean, val added: Int = 0, val deleted: Int = 0)
 
 /**
  * The alerts a worktree can answer for itself instead of inheriting from its parent checkout.

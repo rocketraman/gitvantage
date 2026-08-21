@@ -161,7 +161,7 @@ private fun RepoRow(state: AppState, rv: RepoView) {
     val checked = rv.id in state.bulkSelected
     val rowBg = when {
         selected -> state.accent.copy(alpha = 0x14 / 255f)
-        checked -> state.accent.copy(alpha = 0x0A / 255f)   // subtle multi-select tint
+        checked -> state.accent.copy(alpha = 0x0A / 255f) // subtle multi-select tint
         state.emphasis == Emphasis.LOUD && rv.attention -> rv.accentBg
         else -> Color.Transparent
     }

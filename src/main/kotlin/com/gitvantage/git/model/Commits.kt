@@ -15,11 +15,11 @@ data class Commit(
     val fullHash: String,
     val shortHash: String,
     val author: String,
-    val relDate: String,   // "3 days ago" (committer, relative)
-    val isoDate: String,   // absolute ISO-8601 (committer)
+    val relDate: String, // "3 days ago" (committer, relative)
+    val isoDate: String, // absolute ISO-8601 (committer)
     val subject: String,
-    val body: String,      // remaining message lines (may be blank)
-    val refs: List<CommitRef> = emptyList(),   // branches/tags pointing here (git's %D decoration)
+    val body: String, // remaining message lines (may be blank)
+    val refs: List<CommitRef> = emptyList(), // branches/tags pointing here (git's %D decoration)
     val parents: List<CommitParent> = emptyList(),
     // Reachable from one of origin's remote-tracking refs — i.e. the commit exists on the
     // remote as of the last fetch, so a link to it on the web will actually resolve.

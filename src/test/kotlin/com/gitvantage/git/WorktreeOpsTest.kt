@@ -149,7 +149,7 @@ val WorktreeOperations by testSuite {
             val work = repo()
             val tree = File(root, "wt")
             git(work, "worktree", "add", "-q", "-b", "side", tree.path)
-            File(tree, "a.txt").writeText("one\ntwo\nthree\n")   // was "one\n": +2 lines
+            File(tree, "a.txt").writeText("one\ntwo\nthree\n") // was "one\n": +2 lines
             File(tree, "new.txt").writeText("fresh\n")
 
             val changes = WorktreeOps.changes(tree.path).associateBy { it.path }

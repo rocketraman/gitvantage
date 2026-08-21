@@ -122,7 +122,7 @@ object WorktreeOps {
      */
     fun mayHaveOtherWorktrees(dir: File): Boolean {
         val dotGit = File(dir, ".git")
-        if (!dotGit.isDirectory) return true          // a gitfile — this checkout is linked to something
+        if (!dotGit.isDirectory) return true // a gitfile — this checkout is linked to something
         val admin = File(dotGit, "worktrees").list() ?: return false
         return admin.isNotEmpty()
     }

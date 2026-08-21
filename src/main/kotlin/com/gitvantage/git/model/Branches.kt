@@ -10,15 +10,15 @@ data class Branch(
     val name: String,
     val isCurrent: Boolean,
     val isMainline: Boolean,
-    val behind: Int,        // commits mainline is ahead of this branch
-    val ahead: Int,         // commits on this branch not in mainline
-    val merged: Boolean,    // fully merged into mainline
-    val stale: Boolean,     // old and very behind mainline
+    val behind: Int, // commits mainline is ahead of this branch
+    val ahead: Int, // commits on this branch not in mainline
+    val merged: Boolean, // fully merged into mainline
+    val stale: Boolean, // old and very behind mainline
     val lastRelative: String,
-    val upstream: String?,        // tracking branch short name (e.g. "origin/main"), null if none
-    val upstreamAhead: Int,       // local commits the upstream doesn't have
-    val upstreamBehind: Int,      // upstream commits the local branch doesn't have
-    val upstreamGone: Boolean,    // upstream was configured but no longer exists on the remote
+    val upstream: String?, // tracking branch short name (e.g. "origin/main"), null if none
+    val upstreamAhead: Int, // local commits the upstream doesn't have
+    val upstreamBehind: Int, // upstream commits the local branch doesn't have
+    val upstreamGone: Boolean, // upstream was configured but no longer exists on the remote
     /**
      * The working tree that has this branch checked out, when it isn't this one. git allows a
      * branch in exactly one tree at a time and refuses to switch to a branch held elsewhere,
@@ -34,12 +34,12 @@ data class Branch(
 }
 
 data class RemoteBranch(
-    val name: String,        // full short ref, e.g. "origin/feature/login"
-    val shortName: String,   // without the remote prefix, e.g. "feature/login"
-    val author: String,      // author of the branch tip
+    val name: String, // full short ref, e.g. "origin/feature/login"
+    val shortName: String, // without the remote prefix, e.g. "feature/login"
+    val author: String, // author of the branch tip
     val lastRelative: String,
-    val hasLocal: Boolean,   // a local branch of the same short name already exists
-    val merged: Boolean,     // fully merged into mainline
+    val hasLocal: Boolean, // a local branch of the same short name already exists
+    val merged: Boolean, // fully merged into mainline
 ) {
     /** The remote this branch lives on, e.g. "origin" — the prefix [shortName] drops. */
     val remote get() = name.substringBefore('/')

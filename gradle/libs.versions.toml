@@ -24,6 +24,7 @@ testBalloon = { id = "de.infix.testBalloon", version.ref = "testBalloon" }
 
 [libraries]
 dbusJava-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
+detekt-rules-ktlint = { module = "dev.detekt:detekt-rules-ktlint-wrapper", version.ref = "detekt" }
 fileKit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version.ref = "fileKit" }
 humanReadable = { module = "nl.jacobras:Human-Readable", version.ref = "humanReadable" }
 konture = { module = "io.github.baole:konture", version.ref = "konture" }

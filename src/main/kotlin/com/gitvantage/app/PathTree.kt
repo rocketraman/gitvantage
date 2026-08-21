@@ -3,7 +3,6 @@
 
 package com.gitvantage.app
 
-
 /**
  * Turns a flat list of file paths into an indented tree, collapsing chains of
  * single-child directories into one node (IntelliJ "compact middle packages") so deep
@@ -34,13 +33,14 @@ object PathTree {
         }
 
         val out = mutableListOf<Node>()
+
         // Directories first, then files; each alphabetical.
         fun sorted(t: T) = t.children.entries.sortedWith(compareBy({ it.value.isFile }, { it.key.lowercase() }))
         fun walk(name: String, t: T, depth: Int) {
             if (t.isFile) { out.add(Node(depth, name, t.fullPath)); return }
             var label = name
             var node = t
-            while (node.children.size == 1) {   // collapse single-subdirectory chains
+            while (node.children.size == 1) { // collapse single-subdirectory chains
                 val (k, v) = node.children.entries.first()
                 if (v.isFile) break
                 label = "$label/$k"; node = v
