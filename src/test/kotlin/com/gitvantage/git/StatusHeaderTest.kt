@@ -232,6 +232,6 @@ val GitSubcommandNaming by testSuite {
 
     test("nothing recognisable still produces a key rather than blowing up") {
         assert(Git.subcommandOf(emptyList()) == "?")
-        assert(Git.subcommandOf(listOf("-c")) == "?")   // a dangling value-taking option
+        assert(Git.subcommandOf(listOf("-c")) == "?") // a dangling value-taking option
     }
 }

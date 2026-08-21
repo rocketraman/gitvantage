@@ -115,7 +115,7 @@ object SubmoduleOps {
         if (!res.ok) return@withContext OpResult(repoPath, false, res.firstError("update failed"))
         // Still `ok` if staging fails: the submodule *did* advance and no retry undoes that. But the
         // message must not go on telling the user to commit the parent, which would record nothing.
-        val add = Git.run(dir, listOf("add", path))   // stage the new gitlink for committing
+        val add = Git.run(dir, listOf("add", path)) // stage the new gitlink for committing
         OpResult(
             repoPath, true,
             if (add.ok) "Advanced $path — commit the parent to record it"

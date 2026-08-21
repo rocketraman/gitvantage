@@ -332,7 +332,7 @@ object RepoScanner {
             if (raw.length < 3) return@forEach
             val x = raw[0]; val y = raw[1]
             var path = raw.substring(3)
-            if (" -> " in path) path = path.substringAfter(" -> ")   // rename/copy
+            if (" -> " in path) path = path.substringAfter(" -> ") // rename/copy
             path = path.trim('"')
 
             if (x == '?' && y == '?') {
@@ -340,11 +340,11 @@ object RepoScanner {
                 keep(ChangedFile("?", "untracked", path))
                 return@forEach
             }
-            if (x != ' ' && x != '?') {   // staged (index) change
+            if (x != ' ' && x != '?') { // staged (index) change
                 staged++
                 keep(ChangedFile(x.toString(), "staged", path))
             }
-            if (y != ' ' && y != '?') {   // unstaged (worktree) change
+            if (y != ' ' && y != '?') { // unstaged (worktree) change
                 unstaged++
                 keep(ChangedFile(y.toString(), "unstaged", path))
             }

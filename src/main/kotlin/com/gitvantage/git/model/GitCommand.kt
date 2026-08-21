@@ -7,8 +7,8 @@ package com.gitvantage.git.model
 data class GitCommand(
     val seq: Long,
     val repo: String,
-    val command: String,   // "git push -u origin HEAD"
+    val command: String, // "git push -u origin HEAD"
     val exitCode: Int,
     val durationMs: Long,
-    val output: String,    // combined stdout+stderr, may contain ANSI SGR escapes
+    val output: String, // combined stdout+stderr, may contain ANSI SGR escapes
 )

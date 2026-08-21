@@ -73,10 +73,13 @@ object GitHub {
     sealed interface Status {
         /** Not probed yet. */
         data object Unknown : Status
+
         /** No `gh` binary on PATH or in the usual install locations. */
         data object Missing : Status
+
         /** `gh` is installed but not logged in. */
         data object NoAuth : Status
+
         /**
          * [hosts] is every host `gh` holds a working login for, lowercased — the authoritative
          * answer to "is this remote a GitHub instance?". A GitHub Enterprise install can live at
@@ -95,7 +98,7 @@ object GitHub {
         val url: String,
         val isPr: Boolean,
         val isDraft: Boolean,
-        val updatedAt: Long,          // epoch millis
+        val updatedAt: Long, // epoch millis
         val author: String,
         /** As GitHub spells them, for [RegistryEntry.ignoreLabels] to match case-insensitively. */
         val labels: List<String>,
@@ -178,8 +181,8 @@ object GitHub {
      * "not installed" for a perfectly working `gh`.
      */
     private val EXTRA_PATHS = listOf(
-        "/opt/homebrew/bin/gh",     // Homebrew, Apple silicon
-        "/usr/local/bin/gh",        // Homebrew, Intel + manual installs
+        "/opt/homebrew/bin/gh", // Homebrew, Apple silicon
+        "/usr/local/bin/gh", // Homebrew, Intel + manual installs
         "/usr/bin/gh",
         "/home/linuxbrew/.linuxbrew/bin/gh",
         System.getProperty("user.home") + "/.local/bin/gh",
@@ -305,7 +308,7 @@ object GitHub {
             }
             val res = exec(args, timeoutSeconds = 30)
             val data = runCatching { json.parseToJsonElement(res.out).jsonObject["data"] as? JsonObject }.getOrNull()
-                ?: return@forEach   // leave them unclassified; [isMine] falls back and the next poll retries
+                ?: return@forEach // leave them unclassified; [isMine] falls back and the next poll retries
             chunk.forEachIndexed { i, c ->
                 val repo = (data["R$i"] as? JsonObject)
                     ?.let { runCatching { json.decodeFromJsonElement(GqlRepo.serializer(), it) }.getOrNull() }
@@ -673,8 +676,9 @@ object GitHub {
 
     /** `gh auth status --json hosts`: host -> the accounts gh knows for it. */
     @Serializable private data class AuthStatus(val hosts: Map<String, List<AuthAccount>> = emptyMap())
+
     @Serializable private data class AuthAccount(
-        val state: String = "",      // "success", or a description of what's wrong with the token
+        val state: String = "", // "success", or a description of what's wrong with the token
         val active: Boolean = false, // the account used when targeting this host
         val host: String = "",
         val login: String = "",
@@ -692,7 +696,9 @@ object GitHub {
          */
         val canWrite: Boolean get() = viewerPermission in setOf("WRITE", "MAINTAIN", "ADMIN")
     }
+
     @Serializable private data class GqlConn(val totalCount: Int = 0, val nodes: List<GqlNode> = emptyList())
+
     /** Search returns issues and pull requests in one list, so the node has to say which it is. */
     @Serializable private data class GqlSearch(val nodes: List<GqlNode> = emptyList())
 
@@ -714,18 +720,27 @@ object GitHub {
         /** Only ever populated on search results; the connection form knows the type up front. */
         val isPr: Boolean get() = typename == "PullRequest"
     }
+
     @Serializable private data class GqlActor(val login: String = "")
+
     @Serializable private data class GqlActorConn(val nodes: List<GqlActor> = emptyList())
+
     @Serializable private data class GqlLabel(val name: String = "")
+
     @Serializable private data class GqlLabelConn(val nodes: List<GqlLabel> = emptyList())
+
     @Serializable private data class GqlReviewConn(val nodes: List<GqlReviewReq> = emptyList())
+
     @Serializable private data class GqlReviewReq(val requestedReviewer: GqlActor? = null)
+
     @Serializable private data class GqlCommentConn(val nodes: List<GqlComment> = emptyList())
+
     @Serializable private data class GqlComment(
         val author: GqlActor? = null,
         val bodyText: String = "",
         val reactionGroups: List<GqlReactionGroup> = emptyList(),
     )
+
     /**
      * GitHub returns all eight groups on every comment, reacted or not, so only the flag matters —
      * `content` is deliberately not requested: any reaction counts as an acknowledgement.
@@ -784,7 +799,7 @@ object GitHub {
             .apply { environment()["GH_PAGER"] = "cat"; environment()["PAGER"] = "cat"; environment()["GH_PROMPT_DISABLED"] = "1" }
             .apply { dir?.let { directory(it) } }
             .start()
-        proc.outputStream.close()   // gh must never wait on stdin
+        proc.outputStream.close() // gh must never wait on stdin
         // BOTH pipes are drained on their own threads, and the deadline is enforced by waitFor.
         //
         // Reading either stream on this thread would make [timeoutSeconds] unenforceable:

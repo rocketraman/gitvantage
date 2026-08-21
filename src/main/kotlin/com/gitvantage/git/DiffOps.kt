@@ -84,7 +84,7 @@ object DiffOps {
     /** Append a section (header + its items) to the shared lists, fixing up file indices. */
     private fun appendSection(label: String, local: Local, items: MutableList<DiffItem>, files: MutableList<DiffFileRef>) {
         if (local.files.isEmpty()) return
-        val offset = items.size + 1   // +1 for the DiffSection header we add first
+        val offset = items.size + 1 // +1 for the DiffSection header we add first
         items.add(DiffSection(label))
         items.addAll(local.items)
         local.files.forEach { f -> files.add(f.copy(index = f.index + offset, section = label)) }

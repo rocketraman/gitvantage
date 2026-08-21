@@ -101,13 +101,13 @@ object Meta {
     fun isBranchHidden(name: String, hide: List<Regex>) = hide.any { it.matches(name) }
 
     /** A repo counts as "Recently Added" for this long after it was first tracked. */
-    const val RECENT_MS = 24L * 60 * 60 * 1000   // 24 hours
+    const val RECENT_MS = 24L * 60 * 60 * 1000 // 24 hours
 
     /** Uncommitted changes that have sat this long flip the repo to the "Aging" attention signal. */
-    const val AGING_MS = 24L * 60 * 60 * 1000   // 24 hours
+    const val AGING_MS = 24L * 60 * 60 * 1000 // 24 hours
 
     /** A repo counts as "Recently Modified" if its working tree changed within this window. */
-    const val RECENT_MODIFIED_MS = 12L * 60 * 60 * 1000   // 12 hours
+    const val RECENT_MODIFIED_MS = 12L * 60 * 60 * 1000 // 12 hours
 
     /**
      * Prose duration style: full words with an explicit approximation word ("about 2 months").
@@ -168,7 +168,7 @@ object Meta {
         }
         val clean = hostPath.removeSuffix(".git").trimEnd('/')
         if ('/' !in clean) return null to false
-        val host = clean.substringBefore('/').substringBefore(':')   // drop any :port
+        val host = clean.substringBefore('/').substringBefore(':') // drop any :port
         val path = clean.substringAfter('/')
         val isGitHub = host.equals("github.com", true) || host.startsWith("github.", true)
         return "https://$host/$path" to isGitHub

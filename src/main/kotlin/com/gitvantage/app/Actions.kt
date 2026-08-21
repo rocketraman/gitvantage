@@ -17,7 +17,7 @@ object Actions {
         val term = System.getenv("TERMINAL")?.takeIf { it.isNotBlank() }
         val candidates = buildList {
             if (term != null) add(listOf(term))
-            add(listOf("konsole", "--workdir", path))       // KDE
+            add(listOf("konsole", "--workdir", path)) // KDE
             add(listOf("gnome-terminal", "--working-directory=$path"))
             add(listOf("kgx", "--working-directory=$path"))
             add(listOf("alacritty", "--working-directory", path))

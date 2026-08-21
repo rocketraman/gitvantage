@@ -43,10 +43,10 @@ import com.gitvantage.app.statusPalette
 /** Generic segmented pill control (Group by, View toggle). */
 @Composable
 fun Segmented(
-    options: List<Pair<String, String>>,   // key to label
+    options: List<Pair<String, String>>, // key to label
     active: String,
     onSelect: (String) -> Unit,
-    tips: Map<String, String> = emptyMap(),   // optional per-option hover explanation
+    tips: Map<String, String> = emptyMap(), // optional per-option hover explanation
     // Toolbar size by default. Smaller where the control sits inside a list item rather than above
     // the list — a worktree card's Changes|Log switch is part of that card, not a page control.
     fontSize: androidx.compose.ui.unit.TextUnit = 12.5.sp,

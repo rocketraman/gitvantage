@@ -310,8 +310,8 @@ private fun AppearancePopup(state: AppState) {
 @Composable
 private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String) {
     var text by remember { mutableStateOf(initialText) }
-    var dueIdx by remember { mutableStateOf(1) }   // default "Tomorrow"
-    var custom by remember { mutableStateOf("") }  // a kotlin.time.Duration like 2m, 2h, 3d
+    var dueIdx by remember { mutableStateOf(1) } // default "Tomorrow"
+    var custom by remember { mutableStateOf("") } // a kotlin.time.Duration like 2m, 2h, 3d
     val hadReminder = initialText.isNotBlank()
     // A parseable custom period overrides the preset chip.
     val customMs: Long? = custom.trim().takeIf { it.isNotBlank() }
@@ -409,7 +409,7 @@ private fun CommitForm(
         state.popup = null
     }
 
-    Modal({ state.popup = null }, width = 640) {   // wide enough for the 72-col body guide
+    Modal({ state.popup = null }, width = 640) { // wide enough for the 72-col body guide
         ModalHeader(heading, subheading)
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             // Summary line

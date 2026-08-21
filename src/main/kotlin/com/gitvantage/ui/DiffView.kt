@@ -233,8 +233,8 @@ private fun DiffItemRow(item: DiffItem) {
 @Composable
 private fun SideCell(cell: DiffCell?, modifier: Modifier) {
     val (bg, color, hl) = when (cell?.side) {
-        DiffSide.ADD -> Triple(Tokens.diffAddBg, Tokens.diffAddFg, Tokens.diffAddMark)   // saturated green highlight
-        DiffSide.DEL -> Triple(Tokens.diffDelBg, Tokens.diffDelFg, Tokens.diffDelMark)   // saturated red highlight
+        DiffSide.ADD -> Triple(Tokens.diffAddBg, Tokens.diffAddFg, Tokens.diffAddMark) // saturated green highlight
+        DiffSide.DEL -> Triple(Tokens.diffDelBg, Tokens.diffDelFg, Tokens.diffDelMark) // saturated red highlight
         DiffSide.CONTEXT -> Triple(Tokens.surface, Tokens.text2, Color.Transparent)
         null -> Triple(Tokens.diffEmptyBg, Tokens.muted2, Color.Transparent)
     }

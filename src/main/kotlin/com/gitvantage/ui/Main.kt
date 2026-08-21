@@ -132,7 +132,7 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
             state = windowState,
             visible = windowVisible,
             title = "GitVantage",
-            icon = painterResource("app-icon.png"),   // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
+            icon = painterResource("app-icon.png"), // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
             onPreviewKeyEvent = ::zoomShortcut,
         ) {
             // Everything the window draws — the Nucleus-drawn title bar included — sizes itself
@@ -213,7 +213,7 @@ fun GitVantageApp(app: AppState) {
         Column(Modifier.fillMaxSize().background(Tokens.surface)) {
             Toolbar(app)
             StatusBar(app)
-            if (app.bulkCount > 0) BulkActionBar(app)   // appears while repos are checked
+            if (app.bulkCount > 0) BulkActionBar(app) // appears while repos are checked
             TagBar(app)
             Row(Modifier.fillMaxWidth().weight(1f)) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {

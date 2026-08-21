@@ -164,10 +164,10 @@ private fun semanticColor(line: String): Color {
     return when {
         t.startsWith("error:") || t.startsWith("fatal:") || t.startsWith("!") ||
             "[rejected]" in t || "non-fast-forward" in low -> ConErr
-        t.startsWith("warning:") || t.startsWith("hint:") -> ANSI_FG[3]                   // yellow
+        t.startsWith("warning:") || t.startsWith("hint:") -> ANSI_FG[3] // yellow
         t.startsWith("Switched to") || t.startsWith("Already") ||
             REF_UPDATE.containsMatchIn(t) || "[new branch]" in t || "[new tag]" in t -> ConOk
-        t.startsWith("To ") || t.startsWith("From ") -> ConPrompt                          // blue
+        t.startsWith("To ") || t.startsWith("From ") -> ConPrompt // blue
         else -> ConText
     }
 }

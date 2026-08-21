@@ -160,8 +160,8 @@ data class RepoView(
     val tags: List<String>,
     val tagChips: List<TagChip>,
     val badges: List<Badge>,
-    val accent: Color,       // state color (dot / left bar / status)
-    val accentBg: Color,     // matching tint
+    val accent: Color, // state color (dot / left bar / status)
+    val accentBg: Color, // matching tint
     val statusLabel: String,
     val segments: List<Segment>,
     val ahead: Int,
@@ -174,14 +174,15 @@ data class RepoView(
     val attention: Boolean,
     val aging: Boolean,
     val snoozed: Boolean,
-    val primary: Primary?,   // contextual Commit / Push
-    val gh: GhSummary? = null,        // open GitHub issues/PRs, null when not tracked
-    val issueLevel: IssueLevel = IssueLevel.NONE,   // gh's level, forced to NONE while snoozed
+    val primary: Primary?, // contextual Commit / Push
+    val gh: GhSummary? = null, // open GitHub issues/PRs, null when not tracked
+    val issueLevel: IssueLevel = IssueLevel.NONE, // gh's level, forced to NONE while snoozed
     /** This repo's linked worktrees, alert overrides already resolved. Empty for nearly every repo. */
     val worktrees: List<WorktreeView> = emptyList(),
 ) {
     val id get() = repo.id
     val changed get() = repo.staged + repo.unstaged + repo.untracked
+
     /** Open issues/PRs awaiting a response from you (0 while snoozed). */
     val awaitingYou get() = if (issueLevel == IssueLevel.NONE) 0 else (gh?.awaiting ?: 0)
 
@@ -383,12 +384,7 @@ fun deriveView(
     )
 }
 
-data class RepoGroup(
-    val name: String,
-    val nsLabel: String,
-    val showHeader: Boolean,
-    val repos: List<RepoView>,
-)
+data class RepoGroup(val name: String, val nsLabel: String, val showHeader: Boolean, val repos: List<RepoView>)
 
 /**
  * File-status letter color by change type (detail panel).

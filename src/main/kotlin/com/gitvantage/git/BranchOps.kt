@@ -48,7 +48,7 @@ object BranchOps {
                     it.isNotEmpty() && runCatching { File(it).canonicalPath }.getOrDefault(it) != here
                 },
             )
-        }.filter { it.name.isNotEmpty() && !it.name.startsWith("gitbutler/") }.toList()   // ignore GitButler's virtual branches
+        }.filter { it.name.isNotEmpty() && !it.name.startsWith("gitbutler/") }.toList() // ignore GitButler's virtual branches
         if (rows.isEmpty()) return@withContext emptyList()
 
         val names = rows.map { it.name }.toSet()
@@ -90,7 +90,7 @@ object BranchOps {
                 // remote name ("origin"), so a no-slash entry is the symref, not a real branch;
                 // some git versions instead keep it as "origin/HEAD".
                 if (name.isEmpty() || name.endsWith("/HEAD") || !name.contains('/')) return@mapNotNull null
-                val short = name.substringAfter('/')   // drop the remote name prefix
+                val short = name.substringAfter('/') // drop the remote name prefix
                 val merged = mainline != null && mainline.substringAfter('/') != short &&
                     Git.exitCode(dir, "merge-base", "--is-ancestor", name, mainline) == 0
                 RemoteBranch(
@@ -191,8 +191,13 @@ object BranchOps {
     }
 
     private data class Row(
-        val name: String, val epoch: Long, val isCurrent: Boolean, val relative: String,
-        val upstream: String?, val track: String, val worktree: String? = null,
+        val name: String,
+        val epoch: Long,
+        val isCurrent: Boolean,
+        val relative: String,
+        val upstream: String?,
+        val track: String,
+        val worktree: String? = null,
     )
 
     private fun count(dir: File, range: String): Int =

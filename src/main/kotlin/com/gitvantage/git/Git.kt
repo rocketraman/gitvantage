@@ -140,7 +140,7 @@ object Git {
         while (i < args.size) {
             val a = args[i]
             when {
-                a == "-c" || a == "-C" -> i += 2   // a global option and the value it consumes
+                a == "-c" || a == "-C" -> i += 2 // a global option and the value it consumes
                 a.startsWith("-") -> i += 1
                 else -> return a
             }

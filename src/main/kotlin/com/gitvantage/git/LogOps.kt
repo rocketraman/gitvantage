@@ -18,9 +18,9 @@ import kotlinx.coroutines.withContext
  * works. All process work runs on [Dispatchers.IO] so the UI thread is never blocked.
  */
 object LogOps {
+    private const val US = "\u001F" // field separator within a record
+    private const val RS = "\u001E" // record separator between commits
 
-    private const val US = "\u001F"   // field separator within a record
-    private const val RS = "\u001E"   // record separator between commits
     // %D is the ref decoration ("HEAD -> main, origin/main, tag: v1.0.0"). It sits before %s
     // because %b must stay last — the body is the only field that can contain newlines.
     // %P/%p are the parent hashes (full and abbreviated), space-separated. Two or more means a

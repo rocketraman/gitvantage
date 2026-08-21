@@ -125,7 +125,7 @@ object StallWatchdog {
             // A cancelled scope silently never runs this, which is why the wait below is bounded.
             runCatching {
                 scope.launch {
-                    uiThread = Thread.currentThread()   // stays correct however start() was reached
+                    uiThread = Thread.currentThread() // stays correct however start() was reached
                     arrived.countDown()
                 }
             }.onFailure { return }
@@ -141,7 +141,7 @@ object StallWatchdog {
             Perf.count("ui.stalls")
             Perf.time("ui.dispatch", System.nanoTime() - sent)
             report(blockedMs, recovered, stack)
-            if (!recovered) return   // the scope is gone; nothing left to watch
+            if (!recovered) return // the scope is gone; nothing left to watch
         }
     }
 

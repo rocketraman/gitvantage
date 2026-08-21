@@ -266,6 +266,7 @@ private fun checkXdgPortal() {
 }
 
 /** Desktop notifications also go over D-Bus; unavailable on a headless runner is fine. */
+
 /**
  * FileKit's own portal interface, as distinct from dbus-java.
  *
