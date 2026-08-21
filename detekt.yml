@@ -8,6 +8,34 @@ complexity:
   TooManyFunctions:
     active: false
 
+ktlint:
+  ArgumentListWrapping:
+    active: false
+  BinaryExpressionWrapping:
+    active: false
+  BlankLineBetweenWhenConditions:
+    active: false
+  FunctionLiteral:
+    active: false
+  FunctionSignature:
+    active: false
+  ImportOrdering:
+    active: false
+  Kdoc:
+    active: false
+  MaximumLineLength:
+    active: false
+  MultiLineIfElse:
+    active: false
+  ParameterListWrapping:
+    active: false
+  StatementWrapping:
+    active: false
+  TrailingCommaOnCallSite:
+    active: false
+  Wrapping:
+    active: false
+
 naming:
   FunctionNaming:
     active: false

@@ -107,6 +107,8 @@ dependencies {
     compileOnly(libs.dbusJava.core)
 
     testImplementation(libs.testBalloon.framework.core)
+
+    detektPlugins(libs.detekt.rules.ktlint)
 }
 
 detekt {
