@@ -5,9 +5,6 @@ package com.gitvantage.app
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
-import com.gitvantage.git.Git
-import com.gitvantage.git.model.Diff
-import com.gitvantage.model.Reminder
 
 /**
  * Design tokens (the Adwaita-derived palette). Colors are exact hex values; the

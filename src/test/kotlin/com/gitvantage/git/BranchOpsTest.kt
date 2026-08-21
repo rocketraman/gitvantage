@@ -3,7 +3,6 @@
 
 package com.gitvantage.git
 
-import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.RemoteBranch
 import de.infix.testBalloon.framework.core.testSuite
 

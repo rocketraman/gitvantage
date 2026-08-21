@@ -5,7 +5,6 @@ package com.gitvantage.app
 
 import androidx.compose.ui.graphics.Color
 import com.gitvantage.git.RepoScanner
-import com.gitvantage.git.model.Commit
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Repo
@@ -211,7 +210,6 @@ fun deriveView(
     gh: GhSummary? = null,
     worktrees: List<WorktreeView> = emptyList(),
 ): RepoView {
-    val C = Tokens
     val staged = repo.staged; val unstaged = repo.unstaged; val untracked = repo.untracked; val stash = repo.stash
     val changed = staged + unstaged + untracked
     val isDirty = changed > 0
@@ -230,26 +228,26 @@ fun deriveView(
     val unlandedTrees = worktrees.count { it.rollsUp }
 
     val badges = buildList {
-        if (staged > 0) add(Badge("$staged staged", C.green, C.tintGreen))
-        if (unstaged > 0) add(Badge("$unstaged modified", C.amber, C.tintAmber))
-        if (untracked > 0) add(Badge("$untracked untracked", C.gray, C.tintGray))
-        if (stash > 0) add(Badge("⚑ $stash ${if (stash > 1) "stashes" else "stash"}", C.purple, C.tintPurple))
-        repo.warning?.let { add(Badge(it, C.redText, C.tintRed)) }
+        if (staged > 0) add(Badge("$staged staged", Tokens.green, Tokens.tintGreen))
+        if (unstaged > 0) add(Badge("$unstaged modified", Tokens.amber, Tokens.tintAmber))
+        if (untracked > 0) add(Badge("$untracked untracked", Tokens.gray, Tokens.tintGray))
+        if (stash > 0) add(Badge("⚑ $stash ${if (stash > 1) "stashes" else "stash"}", Tokens.purple, Tokens.tintPurple))
+        repo.warning?.let { add(Badge(it, Tokens.redText, Tokens.tintRed)) }
         // Sync status as pills (prominent, and in-line with the other badges) rather than a faint
         // arrow tucked onto the branch line.
-        if (repo.ahead > 0) add(Badge("↑${repo.ahead} ahead", accent, C.tintBlue))
-        if (repo.behind > 0) add(Badge("↓${repo.behind} behind", C.snoozeBtnText, C.snoozeBtnBg))
+        if (repo.ahead > 0) add(Badge("↑${repo.ahead} ahead", accent, Tokens.tintBlue))
+        if (repo.behind > 0) add(Badge("↓${repo.behind} behind", Tokens.snoozeBtnText, Tokens.snoozeBtnBg))
         if (repo.stale) {
-            if (staleImportant) add(Badge("stale", C.amber, C.tintAmber))
-            else add(Badge("stale", accent, C.tintBlue))
+            if (staleImportant) add(Badge("stale", Tokens.amber, Tokens.tintAmber))
+            else add(Badge("stale", accent, Tokens.tintBlue))
         }
-        if (aging) add(Badge("aging ${repo.dirtyFor ?: ""}".trim(), C.amber, C.tintAmber))
+        if (aging) add(Badge("aging ${repo.dirtyFor ?: ""}".trim(), Tokens.amber, Tokens.tintAmber))
         // Working trees. Structural information, never part of the accent cascade — extra checkouts
         // are a workflow, not a problem — so this wears the indigo the Worktrees filter chip does
         // rather than the accent blue, which is spoken for by "behind" and "open issues". A linked
         // worktree says so instead of showing the count: "you are not on the main checkout" is the
         // fact that changes how you read the row.
-        val wtPalette = C.worktreeChip
+        val wtPalette = Tokens.worktreeChip
         if (repo.isWorktree) add(Badge("⑂ worktree", wtPalette.c, wtPalette.t))
         else if (worktrees.isNotEmpty()) {
             add(Badge("⑂ ${worktrees.size} ${if (worktrees.size == 1) "worktree" else "worktrees"}", wtPalette.c, wtPalette.t))
@@ -260,7 +258,7 @@ fun deriveView(
         // recolouring the indigo count — "2 worktrees" and "1 of them has work in it" are different
         // facts, the same way the issue count and "awaiting you" are kept apart above. It stays
         // visible while snoozed; only its pull on the row's colour is silenced.
-        if (unlandedTrees > 0) add(Badge("⑂ $unlandedTrees unlanded", C.amber, C.tintAmber))
+        if (unlandedTrees > 0) add(Badge("⑂ $unlandedTrees unlanded", Tokens.amber, Tokens.tintAmber))
         // Open issues/PRs. Two badges at most: the count (always, when tracked) and — when some
         // are waiting on you — a separate louder one, because "12 open" and "1 of them needs you"
         // are different facts and collapsing them into one number hides the actionable half.
@@ -274,7 +272,7 @@ fun deriveView(
             // (issueLevel is NONE while snoozed) but a red "awaiting you" chip stayed on it —
             // the loudest thing on a row that is supposed to have been silenced.
             val loud = gh.important && !snoozed
-            val (col, bg) = if (loud) C.amber to C.tintAmber else accent to C.tintBlue
+            val (col, bg) = if (loud) Tokens.amber to Tokens.tintAmber else accent to Tokens.tintBlue
             // "45+" under "only mine", where the count is the filtered fetch and the fetch is
             // capped; without it the badge states a number it can't actually stand behind.
             val more = if (gh.countIsFloor) "+" else ""
@@ -291,15 +289,15 @@ fun deriveView(
                         // "3+" when more were open than one fetch inspects: "awaiting you" is only
                         // known for the items actually examined, so it's a floor, not a count.
                         "↩ ${gh.awaiting}${if (gh.truncated) "+" else ""} awaiting you",
-                        if (loud) C.redText else C.amber,
-                        if (loud) C.tintRed else C.tintAmber,
+                        if (loud) Tokens.redText else Tokens.amber,
+                        if (loud) Tokens.tintRed else Tokens.tintAmber,
                     ),
                 )
             }
         }
         repo.reminder?.let { rem ->
-            val col = if (rem.overdue) C.remOverdue else C.remTeal
-            val bg = if (rem.overdue) C.remOverdueBg else C.remTealBg
+            val col = if (rem.overdue) Tokens.remOverdue else Tokens.remTeal
+            val bg = if (rem.overdue) Tokens.remOverdueBg else Tokens.remTealBg
             add(Badge("◷ ${rem.due}", col, bg))
         }
     }
@@ -314,15 +312,15 @@ fun deriveView(
         // Blue is "nothing to do locally, just so you know": the remote moved on and there are
         // commits to pull, the repo has simply been quiet (stable code sits untouched), or it has
         // open issues nobody is waiting on you for.
-        repo.warning != null || issueLevel == IssueLevel.CRITICAL -> { acc = C.red; accBg = C.tintRed }
+        repo.warning != null || issueLevel == IssueLevel.CRITICAL -> { acc = Tokens.red; accBg = Tokens.tintRed }
         // Unlanded work in another checkout is amber for the reason the tier exists — it is work
         // sitting on this machine — even though it isn't sitting in *this* folder. Snoozing drops
         // it out, like every other call to action.
         isDirty || repo.ahead > 0 || staleImportant ||
             (unlandedTrees > 0 && !snoozed) ||
-            issueLevel == IssueLevel.IMPORTANT -> { acc = C.amber; accBg = C.tintAmber }
-        repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = C.tintBlue }
-        else -> { acc = C.green; accBg = C.tintGreen }
+            issueLevel == IssueLevel.IMPORTANT -> { acc = Tokens.amber; accBg = Tokens.tintAmber }
+        repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = Tokens.tintBlue }
+        else -> { acc = Tokens.green; accBg = Tokens.tintGreen }
     }
 
     val statusLabel = when {
@@ -335,15 +333,15 @@ fun deriveView(
 
     val segments = if (changed > 0) {
         listOf(
-            Triple(staged, C.green, 0), Triple(unstaged, C.amber, 1), Triple(untracked, C.untrackedSeg, 2),
+            Triple(staged, Tokens.green, 0), Triple(unstaged, Tokens.amber, 1), Triple(untracked, Tokens.untrackedSeg, 2),
         ).filter { it.first > 0 }.map { Segment(it.first.toFloat() / changed, it.second) }
     } else {
-        listOf(Segment(1f, C.green))
+        listOf(Segment(1f, Tokens.green))
     }
 
     val primary = when {
-        isDirty -> Primary("Commit", C.snoozeBtnBg, C.snoozeBtnText, C.snoozeBtnBorder)
-        repo.ahead > 0 -> Primary("Push", C.tintBlue, accent, Tokens.accentBorder)
+        isDirty -> Primary("Commit", Tokens.snoozeBtnBg, Tokens.snoozeBtnText, Tokens.snoozeBtnBorder)
+        repo.ahead > 0 -> Primary("Push", Tokens.tintBlue, accent, Tokens.accentBorder)
         else -> null
     }
 

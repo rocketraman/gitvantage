@@ -138,9 +138,8 @@ object Registry {
                 out.fd.sync()
             }
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE)
-        } catch (e: Throwable) {
+        } finally {
             tmp.delete()
-            throw e
         }
     }
 

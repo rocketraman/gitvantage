@@ -3,7 +3,6 @@
 
 package com.gitvantage.git
 
-import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.BranchStatus
 import com.gitvantage.git.model.StatusResult
 import com.gitvantage.model.ChangedFile

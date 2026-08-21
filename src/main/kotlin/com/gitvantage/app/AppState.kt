@@ -29,10 +29,8 @@ import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Perf
 import com.gitvantage.model.RegistryEntry
-import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
-import com.gitvantage.model.Stash
 import com.gitvantage.model.WatchAction
 import com.gitvantage.model.WatchPolicy
 import com.gitvantage.model.Worktree
@@ -148,6 +146,7 @@ private const val PERF_REPORT_MS = 30_000L
  * that state writes after a scan land on the recomposition thread — the git work
  * itself is dispatched to [Dispatchers.Default]/IO inside [refreshAll].
  */
+@Suppress("LargeClass")
 class AppState(private val scope: CoroutineScope) {
     // Tweakable design props (reference § "Tweakable design props").
     // A getter, not a stored value: the accent moves when the theme does, and a `val` captured at
@@ -1141,7 +1140,7 @@ class AppState(private val scope: CoroutineScope) {
         // Label filtering happens before the "only mine" one and applies whatever it's set to:
         // an ignored label says "this category is never mine to answer", which is a statement
         // about the item, not about which view you're looking at.
-        val kept = { it: GitHub.Item -> !it.hasAnyLabel(ignored) && (!mine || it.involvesYou) }
+        val kept = { item: GitHub.Item -> !item.hasAnyLabel(ignored) && (!mine || item.involvesYou) }
         val issues = st.issues.filter(kept)
         val prs = st.prs.filter(kept)
         // GitHub's totalCount is authoritative for "how many are open", but it can't be filtered

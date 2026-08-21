@@ -52,7 +52,6 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
-import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
 import com.gitvantage.app.Theme
@@ -60,9 +59,7 @@ import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
-import com.gitvantage.git.model.Commit
 import com.gitvantage.model.Meta
-import com.gitvantage.model.Reminder
 
 /** Dispatches [AppState.popup] to the right modal. */
 @Composable
@@ -72,7 +69,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Untag -> UntagPopup(state, popup.ids)
         is Popup.Snooze -> SnoozePopup(state, popup.ids)
         is Popup.SnoozeWorktree -> SnoozeWorktreePopup(state, popup)
-        is Popup.Remind -> RemindPopup(state, popup.ids, popup.text, popup.due)
+        is Popup.Remind -> RemindPopup(state, popup.ids, popup.text)
         is Popup.Note -> NotePopup(state, popup.id)
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
@@ -94,7 +91,10 @@ private fun TagPopup(state: AppState, ids: Set<String>) {
             TagAutocompleteField(
                 accent = state.accent,
                 suggest = { state.tagSuggestions(it) },
-                onCommit = { if (it.isNotBlank()) state.addTagToAll(ids, it); state.popup = null },
+                onCommit = {
+                    if (it.isNotBlank()) state.addTagToAll(ids, it)
+                    state.popup = null
+                },
                 onCancel = { state.popup = null },
                 fieldWidth = 240.dp,
             )
@@ -102,7 +102,6 @@ private fun TagPopup(state: AppState, ids: Set<String>) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UntagPopup(state: AppState, ids: Set<String>) {
     val available = remember(ids) { state.tagsAcross(ids) }
@@ -308,9 +307,8 @@ private fun AppearancePopup(state: AppState) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String, initialDue: Long?) {
+private fun RemindPopup(state: AppState, ids: Set<String>, initialText: String) {
     var text by remember { mutableStateOf(initialText) }
     var dueIdx by remember { mutableStateOf(1) }   // default "Tomorrow"
     var custom by remember { mutableStateOf("") }  // a kotlin.time.Duration like 2m, 2h, 3d

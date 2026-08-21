@@ -129,7 +129,7 @@ fun WorktreeSubRow(state: AppState, rv: RepoView, wtv: WorktreeView, barWidth: F
                     RowAction("Remove + branch", danger = true) { confirmRemove(state, rv, wt, alsoBranch = true) }
                 }
             }
-            WorktreeSnoozeChip(state, rv, wtv)
+            WorktreeSnoozeChip(rv, wtv)
         }
     }
 }
@@ -569,7 +569,7 @@ private fun AlertsCard(state: AppState, rv: RepoView, wtv: WorktreeView, close: 
  * here says so rather than leaving a moon glyph looking like a mystery action.
  */
 @Composable
-private fun WorktreeSnoozeChip(state: AppState, rv: RepoView, wtv: WorktreeView, size: Int = 27) {
+private fun WorktreeSnoozeChip(rv: RepoView, wtv: WorktreeView, size: Int = 27) {
     val shape = RoundedCornerShape(7.dp)
     val on = wtv.snoozed
     val gear = wtv.alerts.overridden.isNotEmpty()

@@ -3,8 +3,6 @@
 
 package com.gitvantage.git
 
-import java.io.File
-
 /** One directory to register with the filesystem watcher, and whether to descend into it. */
 data class WatchRoot(val path: String, val recursive: Boolean)
 

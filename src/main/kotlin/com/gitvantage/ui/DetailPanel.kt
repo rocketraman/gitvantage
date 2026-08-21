@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -62,26 +61,18 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup as WindowPopup
 import androidx.compose.ui.window.PopupProperties
-import com.gitvantage.app.Actions
 import com.gitvantage.app.AppState
 import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
-import com.gitvantage.app.PathTree
 import com.gitvantage.app.Popup
-import com.gitvantage.app.Primary
 import com.gitvantage.app.RepoView
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
-import com.gitvantage.app.fileTagColor
 import com.gitvantage.git.model.Branch
-import com.gitvantage.git.model.Commit
-import com.gitvantage.git.model.Diff
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
-import com.gitvantage.model.Worktree
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
-import com.gitvantage.model.Reminder
 import com.gitvantage.model.Repo
 import com.gitvantage.model.Stash
 
@@ -176,7 +167,7 @@ fun DetailPanel(state: AppState, rv: RepoView) {
         // is clean or dirty; the clean banner covers the "clean / ahead" case.
         if (rv.snoozed) SnoozeBanner(state, rv)
         if (rv.behind > 0 && repo.upstream != null) BehindBanner(state, rv)
-        else if (selClean) CleanBanner(state, rv)
+        else if (selClean) CleanBanner(rv)
         repo.warning?.let { WarnBanner(it) }
 
         // ---- work zones, in scan order: what's in this folder, what's in the others, what refs exist
@@ -745,7 +736,10 @@ fun TagAutocompleteField(
             if (typed.isEmpty()) Txt(placeholder, 11.5.sp, Tokens.muted2, font = MonoFont)
             BasicTextField(
                 value = edit.value,
-                onValueChange = { nv -> if (nv.text != edit.text) cycle = 0; edit.value = nv },
+                onValueChange = { nv ->
+                    if (nv.text != edit.text) cycle = 0
+                    edit.value = nv
+                },
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 11.5.sp, fontFamily = MonoFont, color = Tokens.text),
                 cursorBrush = SolidColor(accent),
@@ -827,7 +821,7 @@ private fun SnoozeBanner(state: AppState, rv: RepoView) {
 }
 
 @Composable
-private fun CleanBanner(state: AppState, rv: RepoView) {
+private fun CleanBanner(rv: RepoView) {
     Column(
         Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(10.dp))
             .background(Tokens.cleanBg).border(1.dp, Tokens.cleanBorder, RoundedCornerShape(10.dp))
@@ -1907,7 +1901,7 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
     val paused = if (rv.snoozed) " (paused)" else ""
 
     // Assemble rows first so we can skip the whole section when nothing will notify.
-    data class Row_(
+    data class Row(
         val icon: String, val text: String, val color: Color,
         val action: Pair<String, () -> Unit>? = null, val tip: String? = null,
     )
@@ -1927,22 +1921,22 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
         }
     val rows = buildList {
         if (rv.snoozed) {
-            add(Row_("🔕", "Alerts paused${repo.snoozedFor?.let { " for $it" } ?: ""} — resume to re-enable", Tokens.purple))
+            add(Row("🔕", "Alerts paused${repo.snoozedFor?.let { " for $it" } ?: ""} — resume to re-enable", Tokens.purple))
         }
         // Reminder — fires at its due time, then re-notifies hourly until marked Done.
         repo.reminder?.let { rem ->
             val next = state.nextReminderAt(repo.id)
             val extra = if (rem.overdue && next != null) " · re-notifies in ${Meta.compactDuration(next - now)}" else ""
-            add(Row_("◷", "Reminder “${rem.text}” — ${rem.due}$extra", if (rem.overdue) Tokens.remOverdue else Tokens.remTeal))
+            add(Row("◷", "Reminder “${rem.text}” — ${rem.due}$extra", if (rem.overdue) Tokens.remOverdue else Tokens.remTeal))
         }
         // Aging — a one-shot alert when uncommitted work crosses the threshold.
         if (rv.aging) {
-            add(Row_("⚠", "Aging — uncommitted for ${repo.dirtyFor} (alerted)", Tokens.amber, tip = agingTip))
+            add(Row("⚠", "Aging — uncommitted for ${repo.dirtyFor} (alerted)", Tokens.amber, tip = agingTip))
         } else if (repo.dirtySince != null) {
             val toAge = Meta.AGING_MS - (now - repo.dirtySince)
             val text = if (toAge > 0) "Flags as aging in ${Meta.humanDuration(toAge)}$paused"
             else "Would flag as aging now$paused"
-            add(Row_("◷", text, Tokens.muted2, tip = agingTip))
+            add(Row("◷", text, Tokens.muted2, tip = agingTip))
         }
         // Stale — a one-shot alert when the repo crosses the no-commit threshold. Only shown while
         // it's still pending; once stale, the "stale" badge carries it (no further notification).
@@ -1955,14 +1949,14 @@ private fun NotificationsOutlook(state: AppState, rv: RepoView) {
                 // differently (git rounds 3d16h to "4 days"; the library floors it to "3 days"), so
                 // formatting this half ourselves would put two different numbers for the same commit
                 // on screen at once — the very inconsistency this line exists to remove.
-                add(Row_("◷", "Flags as stale in ${Meta.humanDuration(toStale)}, the last commit was about ${repo.last}$paused", Tokens.muted2, tip = staleTip))
+                add(Row("◷", "Flags as stale in ${Meta.humanDuration(toStale)}, the last commit was about ${repo.last}$paused", Tokens.muted2, tip = staleTip))
             }
         }
         // Upstream advance — opt-in per repo (default off). Stated, not toggled: the switch lives in
         // Settings with the other choices, and this section's job is to say what will happen.
         if (repo.hasRemote && repo.upstream != null && state.notifyUpstreamEnabled(repo.id)) {
             val behind = if (repo.behind > 0) " · behind ${repo.behind} now" else ""
-            add(Row_("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal))
+            add(Row("🔔", "Alerts when ${repo.upstream} gets new commits$behind$paused", Tokens.remTeal))
         }
     }
     if (rows.isEmpty()) return

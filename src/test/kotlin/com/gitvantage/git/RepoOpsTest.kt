@@ -3,7 +3,6 @@
 
 package com.gitvantage.git
 
-import com.gitvantage.model.Repo
 import de.infix.testBalloon.framework.core.testSuite
 
 /** Repo-level mutations: push, commit, fast-forward, stash apply/drop. */

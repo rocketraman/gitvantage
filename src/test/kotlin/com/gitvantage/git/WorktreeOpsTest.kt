@@ -3,7 +3,6 @@
 
 package com.gitvantage.git
 
-import com.gitvantage.model.Worktree
 import de.infix.testBalloon.framework.core.testSuite
 import java.io.File
 

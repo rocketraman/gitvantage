@@ -60,14 +60,15 @@ object Actions {
         return started != null
     }
 
-    private fun launch(cmd: List<String>, dir: File): Boolean = try {
+    /** Launch [cmd] in [dir] and return true on success or false on failure, e.g. if the command
+     *  was not found or is not launchable.
+     */
+    private fun launch(cmd: List<String>, dir: File): Boolean = runCatching {
         ProcessBuilder(cmd)
             .directory(dir.takeIf { it.isDirectory })
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
         true
-    } catch (e: Exception) {
-        false   // command not found / not launchable → try the next candidate
-    }
+    }.isSuccess
 }
