@@ -7,7 +7,7 @@ humanReadable = "2.0.0-alpha02"
 konture = "0.8.1"
 kotlin = "2.4.10"
 kotlinxSerialization = "1.11.0"
-nucleus = "2.4.7"
+nucleus = "2.5.0"
 slf4j = "2.0.18"
 testBalloon = "1.0.1-K2.4.0"
 
