@@ -43,7 +43,6 @@ import androidx.compose.ui.window.rememberWindowState
 import com.gitvantage.app.AppState
 import com.gitvantage.app.Registry
 import com.gitvantage.app.Theme
-import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiScale
 import com.gitvantage.smoke.runSmokeChecks
@@ -197,18 +196,6 @@ private fun zoomShortcut(ev: KeyEvent): Boolean {
 
 @Composable
 fun GitVantageApp(app: AppState) {
-    // Follow the desktop while "Match system" is chosen. Polled rather than subscribed: there is
-    // no change notification we can take without a D-Bus interface and the native-image
-    // reachability risk that comes with it (see SystemAppearance), and one short-lived subprocess
-    // a minute is nothing beside the periodic fetch already running across every tracked repo.
-    // Keyed on the mode, so choosing "Match system" restarts this and reads the desktop at once
-    // rather than after the first delay.
-    LaunchedEffect(Theme.mode) {
-        while (Theme.mode == ThemeMode.SYSTEM) {
-            Theme.refreshSystemPreferenceAsync()
-            delay(60_000.milliseconds)
-        }
-    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(Tokens.surface)) {
             Toolbar(app)

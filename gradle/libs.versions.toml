@@ -30,6 +30,7 @@ humanReadable = { module = "nl.jacobras:Human-Readable", version.ref = "humanRea
 konture = { module = "io.github.baole:konture", version.ref = "konture" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 nucleus-application = { module = "dev.nucleusframework:nucleus.nucleus-application", version.ref = "nucleus" }
+nucleus-darkmode-detector = { module = "dev.nucleusframework:nucleus.darkmode-detector", version.ref = "nucleus" }
 nucleus-decorated-window-tao = { module = "dev.nucleusframework:nucleus.decorated-window-tao", version.ref = "nucleus" }
 nucleus-fsWatcher = { module = "dev.nucleusframework:nucleus.fs-watcher", version.ref = "nucleus" }
 nucleus-notification-common = { module = "dev.nucleusframework:nucleus.notification-common", version.ref = "nucleus" }

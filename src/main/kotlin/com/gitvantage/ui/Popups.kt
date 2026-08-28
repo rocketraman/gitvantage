@@ -231,15 +231,10 @@ private fun SnoozeWorktreePopup(state: AppState, p: Popup.SnoozeWorktree) {
  * "Match system" is annotated with what the *desktop* currently asks for, so choosing it isn't a
  * leap of faith. That has to come from [Theme.systemDark] and not [Theme.isDark]: the latter is
  * the theme in force, so under a Light or Dark override it just reports the user's own choice
- * back at them — "Match system · dark" purely because dark is what's on screen. When the desktop
- * never answered (a session with no portal and no gsettings), the row says so rather than
- * quietly presenting light as the desktop's choice.
+ * back at them — "Match system · dark" purely because dark is what's on screen.
  */
 @Composable
 private fun AppearancePopup(state: AppState) {
-    // The poller only runs under SYSTEM, so outside it the last reading can be arbitrarily old.
-    // Re-read on open — this is the one moment the value is actually being shown to someone.
-    LaunchedEffect(Unit) { Theme.refreshSystemPreferenceAsync() }
     // takeFocus: nothing here is typed into, and the zoom steps are meant to be tried one after
     // another — so Escape has to work without first having clicked something.
     Modal({ state.popup = null }, takeFocus = true) {
@@ -252,7 +247,6 @@ private fun AppearancePopup(state: AppState) {
                 val on = m == Theme.mode
                 val detail = when {
                     m != ThemeMode.SYSTEM -> null
-                    !Theme.systemKnown -> "this desktop didn't say — using light"
                     Theme.systemDark -> "dark"
                     else -> "light"
                 }
