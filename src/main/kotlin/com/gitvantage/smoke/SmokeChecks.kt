@@ -3,6 +3,8 @@
 
 package com.gitvantage.smoke
 
+import dev.nucleusframework.darkmodedetector.NoopDarkModeDetector
+import dev.nucleusframework.darkmodedetector.getPlatformDarkModeDetector
 import dev.nucleusframework.fswatcher.FsWatchers
 import dev.nucleusframework.notification.common.NotificationManager
 import java.nio.file.Files
@@ -62,6 +64,7 @@ fun runSmokeChecks(): Int {
     checkFsWatcher()
     checkFsWatcherThroughSymlink()
     checkXdgPortal()
+    checkThemeDetector()
     checkXdgFileChooserProxy()
     checkMacOsFileChooserBridge()
     checkNotifications()
@@ -262,6 +265,34 @@ private fun checkXdgPortal() {
     result.fold(
         onSuccess = { record(Status.PASS, name, "FileChooser portal version $it") },
         onFailure = { record(Status.FAIL, name, "portal unreachable: $it") },
+    )
+}
+
+/**
+ * The OS dark-mode detector's native library.
+ *
+ * The desktop's light/dark preference is read through a JNI library Nucleus bundles and extracts
+ * at runtime (`libnucleus_linux_theme.so` and its macOS/Windows siblings), with the change signal
+ * arriving back through a callback the image has to keep reachable from native code. Nothing about
+ * a failure here is visible where a user would see it: the app simply wears light forever on a
+ * dark desktop — the exact bug that shipped as issue #9, back when this went through Skiko.
+ *
+ * The honest limit: a PASS proves the library loaded and answered, not that the answer is right. A
+ * session with no portal answers "light" perfectly successfully.
+ */
+private fun checkThemeDetector() {
+    val name = "OS dark-mode detector (JNI)"
+    val detector = runCatching { getPlatformDarkModeDetector() }.getOrElse {
+        record(Status.FAIL, name, "detector would not initialize: $it")
+        return
+    }
+    if (detector === NoopDarkModeDetector) {
+        record(Status.SKIP, name, "no detector for this platform")
+        return
+    }
+    runCatching { detector.isDark() }.fold(
+        onSuccess = { record(Status.PASS, name, "reports the desktop prefers ${if (it) "dark" else "light"}") },
+        onFailure = { record(Status.FAIL, name, "native library loaded but would not answer: $it") },
     )
 }
 

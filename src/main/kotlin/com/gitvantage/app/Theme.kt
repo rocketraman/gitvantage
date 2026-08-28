@@ -6,11 +6,10 @@ package com.gitvantage.app
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.jetbrains.skiko.SystemTheme
-import org.jetbrains.skiko.currentSystemTheme
-import java.util.concurrent.TimeUnit
+import dev.nucleusframework.darkmodedetector.IDarkModeDetector
+import dev.nucleusframework.darkmodedetector.NoopDarkModeDetector
+import dev.nucleusframework.darkmodedetector.getPlatformDarkModeDetector
+import java.util.function.Consumer
 
 /**
  * Which appearance the app wears. [SYSTEM] follows the desktop's own light/dark preference;
@@ -41,7 +40,7 @@ enum class ThemeMode(val key: String, val label: String, val short: String, val 
  * The app's active appearance, and the one place that decides it.
  *
  * [palette] is what every token in [Tokens] reads. Both of the things it depends on — the user's
- * [mode] and the last-detected [systemDark] — are snapshot state, so a change to either
+ * [mode] and the desktop's own [systemDark] — are snapshot state, so a change to either
  * recomposes whatever read a token, with no theme object threaded through the tree.
  */
 object Theme {
@@ -49,21 +48,52 @@ object Theme {
         private set
 
     /**
-     * The *desktop's* preference as of the last refresh — not what the app is currently wearing.
-     * The two only agree while [mode] is [ThemeMode.SYSTEM]; under a Light or Dark override this
-     * still reports what the desktop asked for, which is what the picker's "Match system" row and
-     * the toolbar tooltip need in order to say where that option would land you.
+     * The *desktop's* preference — not what the app is currently wearing. The two only agree while
+     * [mode] is [ThemeMode.SYSTEM]; under a Light or Dark override this still reports what the
+     * desktop asked for, which is what the picker's "Match system" row and the toolbar tooltip
+     * need in order to say where that option would land you.
+     *
+     * Kept current by the detector rather than re-read on demand: [detector] pushes every change
+     * as the desktop makes it, so this is live even while an override is in force.
      */
     var systemDark by mutableStateOf(false)
         private set
 
     /**
-     * Whether the desktop told us anything at all. False means every probe below came up empty
-     * (Skiko answered UNKNOWN, no portal, headless session…), which is why "Match system" says so in the
-     * picker instead of silently pretending the desktop chose light.
+     * Nucleus's OS dark-mode detector — the same one [dev.nucleusframework.application.nucleusApplication]
+     * already installs over Compose's `LocalSystemTheme`, so the app and every library drawing
+     * inside it answer this question identically.
+     *
+     * Talking to it directly rather than through `isSystemInDarkTheme()` because this object is
+     * read from outside the composition (and [load] runs before it), and because the listener
+     * below is what replaces polling entirely.
+     *
+     * On Linux it reads `org.freedesktop.appearance color-scheme` from the XDG desktop portal
+     * through a bundled JNI library, and subscribes to the portal's `SettingChanged` signal.
+     * Deliberately *not* Skiko's `currentSystemTheme`, which asks the same portal but loads
+     * libdbus by the unversioned soname — `dlopen("libdbus-1.so")`, a symlink that only exists
+     * with a distro's dbus *devel* package installed. On a stock install that load fails and Skiko
+     * answers UNKNOWN forever: a light-themed app on a dark desktop for anyone who is not also a C
+     * developer (issue #9, https://youtrack.jetbrains.com/issue/SKIKO-1177). Nucleus's library is
+     * link-time bound to `libdbus-1.so.3` and has no such failure mode.
+     *
+     * Acquiring it runs its native library load, so a platform whose library is missing or
+     * unloadable would throw here — an `UnsatisfiedLinkError` out of an object initializer, at
+     * startup, before the first frame. Falling back to [NoopDarkModeDetector] means that costs the
+     * app its "Match system" accuracy (it reports light) rather than its ability to start. The
+     * packaged binary's own `--smoke-test` covers the case, since nothing in the UI would.
      */
-    var systemKnown by mutableStateOf(false)
-        private set
+    private val detector: IDarkModeDetector =
+        runCatching { getPlatformDarkModeDetector() }.getOrElse { NoopDarkModeDetector }
+
+    /**
+     * Held as one instance so [load] is idempotent: the detector stores listeners in a set, so
+     * re-registering the same object is a no-op rather than a second delivery of every change.
+     *
+     * Called from the detector's own thread — a D-Bus dispatch thread on Linux — which is fine to
+     * write snapshot state from: the write lands in the global snapshot and wakes whatever read it.
+     */
+    private val onSystemThemeChanged = Consumer<Boolean> { systemDark = it }
 
     val isDark: Boolean
         get() = when (mode) {
@@ -74,147 +104,36 @@ object Theme {
 
     val palette: Palette get() = if (isDark) DarkPalette else LightPalette
 
-    /** Load the persisted choice and take a first reading of the desktop preference. */
+    private var loaded = false
+
+    /**
+     * Load the persisted choice, take a first reading of the desktop preference, and subscribe to
+     * every later change.
+     *
+     * The first reading is synchronous by design: this runs before the first frame and *wants* to
+     * block, because painting the window in the wrong theme and correcting it is a visible flash.
+     * It is one in-process D-Bus round trip. Everything after it arrives on the detector's own
+     * signal, so no caller ever needs to ask again.
+     *
+     * Runs its body once and then does nothing, because the call site is a composable body: the
+     * application scope in `Main.kt` reads [isDark] (it hands the window's title bar its theme), so
+     * every change to the desktop preference recomposes the very function that calls this. Without
+     * the guard the re-read would race the [detector]'s own signal — the listener sets [systemDark],
+     * that recomposes the caller, and the re-read overwrites it with whatever a fresh blocking poll
+     * of the portal answers. Both readings agree once the portal has settled, so the damage is a
+     * flicker and a blocking D-Bus round trip on the UI thread per recomposition, not a wrong theme.
+     */
     fun load() {
+        if (loaded) return
+        loaded = true
         mode = ThemeMode.from(Registry.settings().theme)
-        refreshSystemPreference()
+        systemDark = runCatching { detector.isDark() }.getOrDefault(false)
+        detector.registerListener(onSystemThemeChanged)
     }
 
     fun switchTo(m: ThemeMode) {
         if (m == mode) return
         mode = m
-        // No re-probe here: this runs on the UI thread from a click handler, and the probe can
-        // block for up to its timeout. The poller in `GitVantageApp` is keyed on [mode], so
-        // choosing "Match system" restarts it and it reads the desktop immediately, off-thread.
         Registry.saveSettings(Registry.settings().copy(theme = m.key))
-    }
-
-    /**
-     * Re-probe the desktop's light/dark preference, blocking until it answers.
-     *
-     * Only for [load], which runs before the first frame and *wants* to block — painting the
-     * window in the wrong theme and correcting it is a visible flash. Everywhere else, use
-     * [refreshSystemPreferenceAsync]: the probe shells out with a timeout, and that is far too
-     * long to hold the UI thread.
-     */
-    fun refreshSystemPreference() {
-        val detected = SystemAppearance.prefersDark() ?: return
-        systemKnown = true
-        systemDark = detected
-    }
-
-    /**
-     * [refreshSystemPreference] with the probe moved off the calling thread.
-     *
-     * Polling is how a desktop theme change reaches us at all: there is no cross-platform change
-     * notification we can subscribe to without taking on a D-Bus interface, a dynamic proxy, and
-     * the native-image reachability problem that comes with it (see [SystemAppearance]).
-     *
-     * Called both by the poller and whenever the picker opens. The picker needs it because the
-     * poller only runs under [ThemeMode.SYSTEM]: sit in Dark for an hour and [systemDark] is
-     * frozen at whatever it was when you left, so the "Match system" row would state a stale
-     * preference with total confidence.
-     */
-    suspend fun refreshSystemPreferenceAsync() {
-        val detected = withContext(Dispatchers.IO) { SystemAppearance.prefersDark() } ?: return
-        systemKnown = true
-        systemDark = detected
-    }
-}
-
-/**
- * Asks the OS whether the user prefers a dark UI.
- *
- * The fallback probes are subprocesses rather than library calls, deliberately. The alternative
- * on Linux is talking to the XDG appearance portal over D-Bus, which needs a custom
- * `DBusInterface` and therefore a dynamic-proxy registration that GraalVM's closed-world analysis
- * cannot see — the exact failure mode documented for the file chooser in `SmokeChecks`, where the
- * app degrades in silence. `git` is already run this way on every scan, so the subprocess path is
- * the one already proven to survive the native image.
- *
- * Returns null when nothing could be determined, which callers treat as "leave it as it was"
- * rather than "light".
- */
-private object SystemAppearance {
-
-    /**
-     * The desktop's light/dark preference, or null when it could not be determined — which callers
-     * treat as "leave it as it was" rather than "light".
-     *
-     * Skiko answers first — natively, the same call that backs `isSystemInDarkTheme()` — and on
-     * macOS and Windows that is a direct OS call which does not answer UNKNOWN in practice. On
-     * Linux its portal read is correct, but it loads libdbus by the *unversioned* soname,
-     * `dlopen("libdbus-1.so")`, and that symlink is a development artifact: `dbus-devel` on
-     * Fedora, `libdbus-1-dev` on Debian. A stock install has only `libdbus-1.so.3`, the dlopen
-     * fails, and Skiko reports UNKNOWN forever — a light-themed app on a dark desktop for anyone
-     * who isn't also a C developer (issue #9; filed upstream as
-     * https://youtrack.jetbrains.com/issue/SKIKO-1177). So UNKNOWN, and only UNKNOWN, falls
-     * through to asking the desktop out loud.
-     */
-    fun prefersDark(): Boolean? = when (currentSystemTheme) {
-        SystemTheme.DARK -> true
-        SystemTheme.LIGHT -> false
-        SystemTheme.UNKNOWN -> linuxProbe()
-    }
-
-    /**
-     * The freedesktop appearance setting first — `gdbus` speaks GLib's own D-Bus implementation
-     * and never touches libdbus, so it works exactly where Skiko's load failed — then GNOME's
-     * gsettings key, then KDE's config. Each returns null rather than false when it isn't the
-     * right question for this desktop, so the next probe gets its turn.
-     *
-     * Linux-only because that is where Skiko's UNKNOWN means "could not ask" rather than "the
-     * desktop has no preference"; elsewhere there is nothing useful left to try.
-     */
-    private fun linuxProbe(): Boolean? {
-        val os = System.getProperty("os.name").orEmpty().lowercase()
-        if ("mac" in os || "win" in os) return null
-        // org.freedesktop.appearance color-scheme: 0 = no preference, 1 = prefer dark, 2 = prefer light.
-        // ReadOne is the fixed method (portal >= 1.17); Read wraps the value in a second variant,
-        // but prints the same "uint32 N" either way, so one parse serves both.
-        for (method in listOf("ReadOne", "Read")) {
-            val portal = run(
-                "gdbus", "call", "--session",
-                "--dest", "org.freedesktop.portal.Desktop",
-                "--object-path", "/org/freedesktop/portal/desktop",
-                "--method", "org.freedesktop.portal.Settings.$method",
-                "org.freedesktop.appearance", "color-scheme",
-            )
-            Regex("uint32 (\\d)").find(portal.orEmpty())?.groupValues?.get(1)?.let {
-                when (it) {
-                    "1" -> return true
-                    "2" -> return false
-                }
-            }
-        }
-        run("gsettings", "get", "org.gnome.desktop.interface", "color-scheme")?.let {
-            if ("prefer-dark" in it) return true
-            if ("prefer-light" in it || "'default'" in it) return false
-        }
-        // KDE names its scheme rather than stating a preference, and every dark one says so.
-        for (tool in listOf("kreadconfig6", "kreadconfig5")) {
-            run(tool, "--file", "kdeglobals", "--group", "General", "--key", "ColorScheme")?.let {
-                if (it.isNotBlank()) return it.contains("dark", ignoreCase = true)
-            }
-        }
-        return null
-    }
-
-    /** Run [args]; stdout on success, null on a non-zero exit, a timeout, or a missing binary. */
-    private fun run(vararg args: String): String? = try {
-        val proc = ProcessBuilder(args.toList())
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-        val out = proc.inputStream.bufferedReader().readText()
-        if (!proc.waitFor(2, TimeUnit.SECONDS)) {
-            proc.destroyForcibly()
-            null
-        } else if (proc.exitValue() == 0) {
-            out.trim()
-        } else {
-            null
-        }
-    } catch (_: Exception) {
-        null
     }
 }

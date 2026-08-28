@@ -77,6 +77,10 @@ dependencies {
     implementation(libs.nucleus.application)
     // Enable the Tao backend (Rust-native windowing)
     implementation(libs.nucleus.decorated.window.tao)
+    // The desktop's light/dark preference (XDG portal on Linux, native on macOS/Windows), pushed
+    // as it changes. Already on the classpath via nucleus-application — which installs it over
+    // Compose's LocalSystemTheme — but Theme.kt calls it directly, so it is declared directly.
+    implementation(libs.nucleus.darkmode.detector)
     // Registry persistence (repo list + tags/notes) as JSON
     implementation(libs.kotlinx.serialization.json)
     // Cross-platform native directory picker (XDG portal on Linux, native on macOS/Windows).
