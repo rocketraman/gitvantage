@@ -3,6 +3,8 @@
 
 package com.gitvantage.smoke
 
+import com.gitvantage.app.Actions
+import com.gitvantage.app.Os
 import dev.nucleusframework.darkmodedetector.NoopDarkModeDetector
 import dev.nucleusframework.darkmodedetector.getPlatformDarkModeDetector
 import dev.nucleusframework.fswatcher.FsWatchers
@@ -68,6 +70,7 @@ fun runSmokeChecks(): Int {
     checkXdgFileChooserProxy()
     checkMacOsFileChooserBridge()
     checkNotifications()
+    checkOpenInTargets()
 
     val failed = results.filter { it.first == Status.FAIL }
     println()
@@ -500,4 +503,39 @@ private fun checkNotifications() {
         },
         onFailure = { record(Status.FAIL, name, "initialisation threw: $it") },
     )
+}
+
+/**
+ * Whether the "Open in …" actions have anything to open with.
+ *
+ * This is the check that would have caught the reason they did nothing at all on macOS and
+ * Windows. Their chains launch detached and never wait, so a chain that resolves to nothing is
+ * indistinguishable from a button that works — there is no error to surface, no exit code to read,
+ * and the user's only report is "clicking it does nothing".
+ *
+ * Only the floors are failures, and each platform's floor is different. macOS ships Terminal.app,
+ * `open` and Safari, and Windows ships `cmd.exe` and `explorer.exe`, so on those two a missing
+ * terminal, file manager or browser is a real defect in the chain above. Linux guarantees none of
+ * them — a headless CI runner legitimately has no terminal emulator and no `xdg-open` — so there
+ * an empty answer is reported and skipped rather than failed. The IDE and the git GUI are
+ * informational anywhere, being optional on every platform; what makes them worth printing is that
+ * "nothing resolved" is the one thing their silence at the click cannot tell you apart from.
+ */
+private fun checkOpenInTargets() {
+    val required = when (Os.current) {
+        Os.LINUX -> emptySet()
+        else -> setOf("terminal", "file manager", "browser")
+    }
+    Actions.resolutions(System.getProperty("user.home")).forEach { (what, cmd) ->
+        val name = "Open in $what"
+        when {
+            cmd != null -> record(Status.PASS, name, cmd.joinToString(" "))
+            what in required -> record(
+                Status.FAIL, name,
+                "nothing resolved, but ${Os.current.name.lowercase()} always has one — the " +
+                    "chain in Actions is wrong or Programs cannot see it, and the button is dead",
+            )
+            else -> record(Status.SKIP, name, "nothing installed to handle it")
+        }
+    }
 }
