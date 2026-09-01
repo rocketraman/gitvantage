@@ -1854,6 +1854,20 @@ class AppState(private val scope: CoroutineScope) {
         }
     }
 
+    /** Move a submodule's working tree back onto the commit the parent points at. */
+    fun moveSubmoduleToParentPointer(id: String, path: String) {
+        if (submodulesBusy) return
+        submodulesBusy = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { SubmoduleOps.checkoutParentPointer(id, path) }
+            toast(r.message)
+            reloadSubmodules(id)
+            // The parent saw the gitlink as modified while the submodule sat elsewhere; it no longer does.
+            rescanRepos(listOf(id), fetch = false)
+            submodulesBusy = false
+        }
+    }
+
     /** `git submodule sync` — re-point at the URL in .gitmodules. */
     fun syncSubmodule(id: String, path: String) {
         if (submodulesBusy) return

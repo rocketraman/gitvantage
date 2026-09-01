@@ -14,6 +14,14 @@ data class Submodule(
     val remoteRef: String?, // resolved remote-tracking ref used for "behind" / the diff target
     val behind: Int, // commits the submodule's remote is ahead of the recorded pointer
     val dirtyCount: Int, // uncommitted changes inside the submodule (0 = clean)
+    val head: String = "", // sha the submodule's working tree is actually on ("" if uninitialized)
+    // The gitlink in the parent's *index* — the commit `git submodule update` checks out, and what
+    // [statusChar]'s '+' is measured against. Identical to [recordedFull] except while a pointer
+    // move is staged but not yet committed, which is exactly when the two must not be confused.
+    val indexSha: String = "",
 ) {
     val dirty get() = dirtyCount > 0
+
+    /** The working tree sits on a different commit than the parent points at (`+` in git's status). */
+    val moved get() = statusChar == '+'
 }

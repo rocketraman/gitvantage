@@ -989,6 +989,14 @@ private fun SubmoduleRow(state: AppState, id: String, s: Submodule) {
         PathTip(s.url, Modifier.padding(top = 2.dp)) {
             Txt("→ ${s.url}", 11.sp, Tokens.muted, font = MonoFont, maxLines = 1)
         }
+        // What the "moved" badge means, spelled out: where the checkout sits vs where the parent
+        // points. Without both shas the label on the action below names a hash the user can't see.
+        if (s.moved && s.head.isNotEmpty() && s.indexSha.isNotEmpty()) {
+            Txt(
+                "↕ on @${s.head.take(7)} — parent points at @${s.indexSha.take(7)}",
+                11.sp, Tokens.muted, font = MonoFont, modifier = Modifier.padding(top = 3.dp),
+            )
+        }
         // Uncommitted changes inside the submodule — surfaced prominently.
         if (s.dirtyCount > 0) {
             Txt(
@@ -1002,6 +1010,9 @@ private fun SubmoduleRow(state: AppState, id: String, s: Submodule) {
                 if (!busy) RowAction("Init") { state.initSubmodule(id, s.path) }
             } else {
                 if (!busy) RowAction("Fetch") { state.fetchSubmodule(id, s.path) }
+                // The checkout wandered off the recorded commit — put it back. Safe without a
+                // confirmation: git refuses rather than overwriting uncommitted work inside.
+                if (s.moved && !busy) RowAction("Move to parent hash") { state.moveSubmoduleToParentPointer(id, s.path) }
                 if (s.behind > 0 && !busy) RowAction("Update") { state.updateSubmodulePointer(id, s.path) }
                 // Diff against whatever branch this submodule tracks (main, or a configured
                 // submodule.<name>.branch like develop) — not necessarily mainline.
