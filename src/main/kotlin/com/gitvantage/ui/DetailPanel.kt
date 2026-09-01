@@ -79,6 +79,11 @@ import com.gitvantage.model.Stash
 @Composable
 fun DetailPanel(state: AppState, rv: RepoView) {
     val repo = rv.repo
+    // The tracked entry's path, forced absolute. Registry entries are written absolute, so this is
+    // almost always the id unchanged — but a hand-edited registry can hold a relative one, and
+    // "Copy path" has to be able to promise what its label says. Not canonicalised: resolving
+    // symlinks would hand back a path the user has never seen for a checkout they reach by one.
+    val repoPath = remember(repo.id) { java.io.File(repo.id).absolutePath }
     val staged = repo.files.filter { it.section == "staged" }
     val modified = repo.files.filter { it.section == "unstaged" }
     val untracked = repo.files.filter { it.section == "untracked" }
@@ -136,6 +141,29 @@ fun DetailPanel(state: AppState, rv: RepoView) {
                     modifier = Modifier.weight(1f, fill = false))
                 // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
                 if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
+            }
+
+            // Where this repository actually is on disk, and a way to take it with you.
+            //
+            // The pane never said. The name at the top is a folder name, and folder names repeat —
+            // two checkouts of the same project, a fork beside its upstream, `web` under three
+            // different clients — so the one line that tells them apart was missing from the one
+            // surface that talks about a single repo. It earns its place by answering that on
+            // sight, before anyone reaches for the pill.
+            //
+            // Shown `~`-folded because that is how the path is read, copied absolute because that
+            // is how it is used — pasted into a `cd`, a script, another tool's "open folder", where
+            // a `~` only survives if a shell happens to expand it. The tooltip shows the absolute
+            // form, so the two are never a secret from each other.
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PathTip(repoPath, Modifier.weight(1f, fill = false)) {
+                    Txt(shortPath(repoPath), 11.5.sp, Tokens.muted2, font = MonoFont)
+                }
+                CopyPill(repoPath, "Copy path")
             }
 
             // If this repo is itself a submodule of a parent that's also tracked, link to it.

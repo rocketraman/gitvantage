@@ -327,6 +327,17 @@ fun Badges(badges: List<Badge>, modifier: Modifier = Modifier, hasNote: Boolean 
     }
 }
 
+/**
+ * An absolute path with `$HOME` folded back to `~`, which is how the user thinks of it.
+ *
+ * A display form only — never what gets copied. `~` is a shell's expansion, not a path, so the
+ * thing on the clipboard stays absolute even where the thing on screen is folded.
+ */
+fun shortPath(path: String): String {
+    val home = System.getProperty("user.home").orEmpty()
+    return if (home.isNotEmpty() && path.startsWith(home)) "~" + path.removePrefix(home) else path
+}
+
 /** Wrap content in a hover tooltip that shows the full [path] (for truncated file names). */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable

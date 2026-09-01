@@ -47,6 +47,7 @@ GitVantage watches all your local repositories and gives you, in one place:
 - **Namespaced tags + notes** — organize repos with `owner:me`, `lang:kotlin`, … (with inline autocomplete), and keep per-repo working notes.
   Bulk-tag, untag, and act on many repos at once.
 - **A rich per-repo detail pane**:
+  - **Where it is on disk** — the repo's folder, `~`-folded so it reads at a glance, with the full absolute path one click away on the clipboard (hover for it in full).
   - Changed files (staged / modified / untracked) and a **GitHub-style side-by-side diff viewer** with character-level highlighting and a flattened file tree.
   - **Branches** with their tracking status vs upstream (ahead / behind / diverged / in sync) *and* vs mainline (merged / stale), one-click **switch**, **diff**, **copy the name**, and **delete** (mirrors `git branch -d/-D`).
   - **Remote branches** with last author, one-click checkout into a local tracking branch, and copy of the full ref.
