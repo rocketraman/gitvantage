@@ -657,9 +657,3 @@ private fun lastCommitLine(wt: Worktree): String = when {
 /** Git's relative date compacted to the strip's width — "2 hours ago" reads as "2h". */
 private fun compactAgo(wt: Worktree): String? =
     wt.lastEpoch?.let { Meta.compactDuration(System.currentTimeMillis() - it * 1000) }
-
-/** An absolute path with `$HOME` folded back to `~`, which is how the user thinks of it. */
-private fun shortPath(path: String): String {
-    val home = System.getProperty("user.home").orEmpty()
-    return if (home.isNotEmpty() && path.startsWith(home)) "~" + path.removePrefix(home) else path
-}
