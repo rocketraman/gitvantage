@@ -34,21 +34,31 @@ object SubmoduleOps {
             when (key) { "path" -> c.path = value; "url" -> c.url = value; "branch" -> c.branch = value }
         }
 
-        // git submodule status → status char per path.
-        val statusByPath = hashMapOf<String, Char>()
+        // git submodule status → "<char><sha> <path> (<describe>)" per path. The sha is the commit the
+        // submodule is *checked out on*, not the one the parent records, so it is what tells the user
+        // where a moved submodule actually sits. It is meaningless for an uninitialized one (git prints
+        // the recorded pointer there), so that case keeps it blank.
+        data class St(val ch: Char, val head: String)
+        val statusByPath = hashMapOf<String, St>()
         Git.read(dir, "submodule", "status").lineSequence().filter { it.isNotBlank() }.forEach { raw ->
             val ch = raw[0]
             val body = raw.substring(1).trim()
             val path = body.substringAfter(' ').substringBefore(" (").trim()
-            if (path.isNotEmpty()) statusByPath[path] = ch
+            if (path.isNotEmpty()) statusByPath[path] = St(ch, if (ch == '-') "" else body.substringBefore(' '))
         }
 
         byName.values.mapNotNull { c ->
             val path = c.path ?: return@mapNotNull null
-            val statusChar = statusByPath[path] ?: '-'
+            val st = statusByPath[path]
+            val statusChar = st?.ch ?: '-'
             val subDir = File(dir, path)
             val initialized = statusChar != '-' && Git.isRepo(subDir)
             val recordedFull = Git.read(dir, "rev-parse", "HEAD:$path").trim()
+            // Asked separately from the HEAD gitlink above rather than in one `rev-parse HEAD:p :p`,
+            // because a submodule that is added but not yet committed has no HEAD gitlink at all and
+            // the combined form would fail for both — losing the index sha in the one case where it
+            // is the only pointer there is.
+            val indexSha = Git.read(dir, "rev-parse", ":$path").trim()
             var behind = 0
             var dirtyCount = 0
             var remoteRef: String? = null
@@ -63,7 +73,10 @@ object SubmoduleOps {
             // Note: `git submodule sync` (URL re-point) is intentionally not surfaced — .gitmodules
             // often uses relative URLs that resolve to the absolute remote, so a reliable "needs sync"
             // check would have to replicate git's URL resolution. Use the Terminal for that rare case.
-            Submodule(path, c.url ?: "?", c.branch, statusChar, initialized, recordedFull.take(10), recordedFull, remoteRef, behind, dirtyCount)
+            Submodule(
+                path, c.url ?: "?", c.branch, statusChar, initialized, recordedFull.take(10), recordedFull,
+                remoteRef, behind, dirtyCount, st?.head.orEmpty(), indexSha,
+            )
         }
     }
 
@@ -104,6 +117,28 @@ object SubmoduleOps {
         val dir = File(repoPath)
         val res = Git.run(dir, listOf("submodule", "deinit", "-f", "--", path))
         if (res.ok) OpResult(repoPath, true, "Deinitialized $path") else OpResult(repoPath, false, res.firstError("deinit failed"))
+    }
+
+    /**
+     * Move a submodule's working tree onto the commit the parent points at — the reverse of
+     * [updatePointer], and the fix for a submodule someone else advanced or you checked out
+     * elsewhere for a moment.
+     *
+     * `git submodule update` targets the gitlink in the parent's *index*, which is also what
+     * `git submodule status` measures its `+` against, so this always clears the "moved" badge that
+     * offered it. Deliberately without `--force`: git then refuses the checkout rather than
+     * discarding uncommitted work inside the submodule, and the refusal becomes the toast. It can
+     * still reach the network — the recorded commit may be one this clone has never fetched.
+     */
+    suspend fun checkoutParentPointer(repoPath: String, path: String): OpResult = withContext(Dispatchers.IO) {
+        val dir = File(repoPath)
+        if (!Git.isRepo(File(dir, path))) return@withContext OpResult(repoPath, false, "$path not initialized")
+        val res = Git.run(
+            dir, listOf("submodule", "update", "--checkout", "--", path),
+            Git.NETWORK_TIMEOUT, repoName = "${dir.name}/$path",
+        )
+        if (res.ok) OpResult(repoPath, true, "Moved $path to the parent's commit")
+        else OpResult(repoPath, false, res.firstError("move failed"))
     }
 
     /** Advance a submodule to the latest commit on its remote branch and stage the new pointer

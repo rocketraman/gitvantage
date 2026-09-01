@@ -7,7 +7,7 @@ import de.infix.testBalloon.framework.core.testSuite
 import java.io.File
 
 /**
- * Submodule mutations: fetch, fetchAll, init, sync, deinit and updatePointer.
+ * Submodule mutations: fetch, fetchAll, init, sync, deinit, updatePointer and checkoutParentPointer.
  *
  * A submodule needs three repositories — the parent, the submodule's own origin, and the checkout
  * inside the parent — so these arrange more than the other suites. [withSubmodule] builds that
@@ -144,6 +144,86 @@ val SubmoduleOperations by testSuite {
             // Staged but not committed: recording it in the parent is the user's call.
             assert("lib" in git(parent, "diff", "--cached", "--name-only"))
             assert(git(parent, "log", "-1", "--format=%s").trim() == "add submodule")
+        }
+
+        test("load reports a submodule moved off the recorded commit, with both shas") {
+            val parent = withSubmodule()
+            val lib = File(parent, "lib")
+            advanceLibOrigin()
+            SubmoduleOps.fetch(parent.path, "lib")
+            val recorded = rev(lib, "HEAD")
+            git(lib, "checkout", "-q", "origin/${Sandbox.MAIN}")
+
+            val s = SubmoduleOps.load(parent.path).single()
+
+            assert(s.moved)
+            assert(s.head == rev(lib, "HEAD"))
+            assert(s.indexSha == recorded)
+            assert(s.head != s.indexSha)
+        }
+
+        test("checkoutParentPointer moves the submodule back to the recorded commit") {
+            val parent = withSubmodule()
+            val lib = File(parent, "lib")
+            advanceLibOrigin()
+            SubmoduleOps.fetch(parent.path, "lib")
+            val recorded = rev(lib, "HEAD")
+            git(lib, "checkout", "-q", "origin/${Sandbox.MAIN}")
+            assert(rev(lib, "HEAD") != recorded)
+
+            val result = SubmoduleOps.checkoutParentPointer(parent.path, "lib")
+
+            assert(result.ok)
+            assert(result.message == "Moved lib to the parent's commit")
+            assert(rev(lib, "HEAD") == recorded)
+            assert(!SubmoduleOps.load(parent.path).single().moved)
+        }
+
+        test("checkoutParentPointer targets the staged pointer, not the committed one") {
+            val parent = withSubmodule()
+            val lib = File(parent, "lib")
+            advanceLibOrigin()
+            // Stage the advanced pointer in the parent without committing it, then move the checkout
+            // away again: the parent's HEAD and index now name different commits.
+            SubmoduleOps.updatePointer(parent.path, "lib")
+            val staged = rev(lib, "HEAD")
+            git(lib, "checkout", "-q", "HEAD~1")
+            val s = SubmoduleOps.load(parent.path).single()
+            assert(s.indexSha == staged)
+            assert(s.recordedFull != staged)
+
+            val result = SubmoduleOps.checkoutParentPointer(parent.path, "lib")
+
+            assert(result.ok)
+            assert(rev(lib, "HEAD") == staged)
+        }
+
+        test("checkoutParentPointer refuses rather than discarding work inside the submodule") {
+            val parent = withSubmodule()
+            val lib = File(parent, "lib")
+            advanceLibOrigin()
+            SubmoduleOps.fetch(parent.path, "lib")
+            git(lib, "checkout", "-q", "origin/${Sandbox.MAIN}")
+            val moved = rev(lib, "HEAD")
+            File(lib, "lib.txt").writeText("uncommitted edit\n")
+
+            val result = SubmoduleOps.checkoutParentPointer(parent.path, "lib")
+
+            assert(!result.ok)
+            assert(result.message.isNotBlank())
+            // Neither the checkout nor the edit was touched.
+            assert(rev(lib, "HEAD") == moved)
+            assert(File(lib, "lib.txt").readText() == "uncommitted edit\n")
+        }
+
+        test("checkoutParentPointer reports a submodule that is not initialized") {
+            val parent = withSubmodule()
+            git(parent, "submodule", "deinit", "-f", "--", "lib")
+
+            val result = SubmoduleOps.checkoutParentPointer(parent.path, "lib")
+
+            assert(!result.ok)
+            assert(result.message == "lib not initialized")
         }
 
         test("updatePointer fails on a path that is not a submodule") {
