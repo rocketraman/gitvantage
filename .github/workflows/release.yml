@@ -36,7 +36,7 @@ jobs:
       # prerequisites (build.gradle enables graalvm { }). The GraalVM JDK itself is
       # auto-provisioned by the Nucleus Gradle plugin.
       # Pin @main to a released Nucleus tag once you've settled on a version.
-      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@764ed3f9b09445d011f9f078310a58c0747d4dca # main
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@9d9ce7fef532ffdf88e3ead616fe42e70f2b1f54 # main
         with:
           java-version: '25'
           packaging-tools: 'true'
@@ -138,7 +138,7 @@ jobs:
       # It shells out to `gh` but declares no token input and sets no GH_TOKEN itself, so the
       # calling workflow has to provide one or every gh call fails with "set the GH_TOKEN
       # environment variable". The job's `contents: write` permission covers what it needs.
-      - uses: NucleusFramework/Nucleus/.github/actions/publish-release@764ed3f9b09445d011f9f078310a58c0747d4dca # main
+      - uses: NucleusFramework/Nucleus/.github/actions/publish-release@9d9ce7fef532ffdf88e3ead616fe42e70f2b1f54 # main
         env:
           GH_TOKEN: ${{ github.token }}
           # This job never checks the repo out (it only downloads artifacts), so `gh` has no git
