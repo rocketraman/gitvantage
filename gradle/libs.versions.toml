@@ -1,5 +1,5 @@
 [versions]
-compose = "1.11.1"
+compose = "1.12.0"
 detekt = "2.0.0-alpha.6"
 dbusJava = "5.2.0"
 fileKit = "0.15.0"
