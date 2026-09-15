@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -16,8 +17,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -51,8 +56,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
+import com.gitvantage.app.ExternalTools
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
+import com.gitvantage.app.SettingsSection
 import com.gitvantage.app.Theme
 import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
@@ -73,7 +80,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
         is Popup.Confirm -> ConfirmPopup(state, popup)
-        is Popup.Appearance -> AppearancePopup(state)
+        is Popup.Settings -> SettingsPopup(state, popup.section)
     }
 }
 
@@ -223,7 +230,67 @@ private fun SnoozeWorktreePopup(state: AppState, p: Popup.SnoozeWorktree) {
 }
 
 /**
- * The appearance picker: Match system / Light / Dark.
+ * The app's settings: appearance, the external tools "Open in …" runs, and GitHub polling.
+ *
+ * It grew out of the appearance picker and keeps that dialog's entry point, because a settings
+ * dialog reached from its own new button is a settings dialog nobody opens. The three sections are
+ * one scrolling list rather than tabs or a left-hand nav — this app has no navigation mode and
+ * three headings do not justify inventing one.
+ *
+ * They are [LazyColumn] items rather than a plain scrolling [Column] for one reason: deep-linking.
+ * "Configure…" in the "Open in ▾" menu has to land on External tools, and an item index is an exact
+ * answer where a measured pixel offset would be a guess that has to be re-taken every time a section
+ * changes height.
+ *
+ * The tool overrides are recorded as they are typed and written to disk once, when this closes —
+ * see [ExternalTools.set]. Everything else here saves on the click, as it always did.
+ */
+@Composable
+private fun SettingsPopup(state: AppState, section: SettingsSection) {
+    val dismiss = {
+        ExternalTools.flush()
+        state.popup = null
+    }
+    val list = rememberLazyListState()
+    LaunchedEffect(section) { list.scrollToItem(section.ordinal) }
+    // takeFocus, even though this dialog now has text fields in it. Nothing here is focused on open
+    // — the fields are one of three sections and none of them is the point of the dialog — so the
+    // scrim taking focus costs nothing and is what makes Escape work before the first click. It
+    // keeps working *after* one too: the scrim's handler is a *preview*, so it sees Escape on the
+    // way down to a focused field and dismisses, which is the right answer in a dialog whose fields
+    // have no separate commit to cancel.
+    Modal(dismiss, width = 470, takeFocus = true) {
+        ModalHeader("Settings", "Applies immediately and is remembered.", onClose = dismiss)
+        LazyColumn(state = list, modifier = Modifier.fillMaxWidth()) {
+            items(SettingsSection.entries) { s ->
+                SectionHeading(s)
+                when (s) {
+                    SettingsSection.APPEARANCE -> AppearanceSection(state, dismiss)
+                    SettingsSection.TOOLS -> ToolsSection(state, dismiss)
+                    SettingsSection.GITHUB -> GitHubSection(state)
+                }
+            }
+        }
+    }
+}
+
+/** A section's name and what it is for. Ruled off from the one above, except the first. */
+@Composable
+private fun SectionHeading(s: SettingsSection) {
+    val first = s.ordinal == 0
+    Column(
+        Modifier.fillMaxWidth()
+            .then(if (first) Modifier else Modifier.drawTopBorder(Tokens.borderEd))
+            .padding(horizontal = 18.dp, vertical = if (first) 12.dp else 14.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Txt(s.label, 12.sp, Tokens.muted, FontWeight.Bold)
+        Txt(s.blurb, 11.sp, Tokens.muted2, maxLines = 3)
+    }
+}
+
+/**
+ * Match system / Light / Dark, plus zoom.
  *
  * A menu of the three modes rather than a light↔dark switch, because "follow the desktop" is a
  * distinct answer from either fixed choice and a two-state toggle has nowhere to put it.
@@ -234,68 +301,137 @@ private fun SnoozeWorktreePopup(state: AppState, p: Popup.SnoozeWorktree) {
  * back at them — "Match system · dark" purely because dark is what's on screen.
  */
 @Composable
-private fun AppearancePopup(state: AppState) {
-    // takeFocus: nothing here is typed into, and the zoom steps are meant to be tried one after
-    // another — so Escape has to work without first having clicked something.
-    Modal({ state.popup = null }, takeFocus = true) {
-        ModalHeader(
-            "Appearance", "How GitVantage looks. Applies immediately and is remembered.",
-            onClose = { state.popup = null },
-        )
-        Column(Modifier.padding(vertical = 6.dp)) {
-            ThemeMode.entries.forEach { m ->
-                val on = m == Theme.mode
-                val detail = when {
-                    m != ThemeMode.SYSTEM -> null
-                    Theme.systemDark -> "dark"
-                    else -> "light"
-                }
-                Row(
-                    Modifier.fillMaxWidth().onTap {
-                        Theme.switchTo(m)
-                        state.popup = null
-                    }.padding(horizontal = 18.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
-                ) {
-                    Txt(m.glyph, 13.sp, if (on) Tokens.accent else Tokens.muted)
-                    Txt(m.label, 13.sp, if (on) Tokens.accent else Tokens.text,
-                        if (on) FontWeight.SemiBold else FontWeight.Normal)
-                    detail?.let { Txt("· $it", 11.5.sp, Tokens.muted2) }
-                    Spacer(Modifier.weight(1f))
-                    if (on) Txt("✓", 13.sp, Tokens.accent, FontWeight.Bold)
-                }
+private fun AppearanceSection(state: AppState, dismiss: () -> Unit) {
+    Column(Modifier.padding(bottom = 6.dp)) {
+        ThemeMode.entries.forEach { m ->
+            val on = m == Theme.mode
+            val detail = when {
+                m != ThemeMode.SYSTEM -> null
+                Theme.systemDark -> "dark"
+                else -> "light"
             }
-            // Zoom. Its own row rather than another entry in the list above, because it answers a
-            // different question from light/dark — and it lives here, in the one dialog reachable
-            // from a single toolbar button, so it stays usable when the UI is the wrong size to
-            // read comfortably (see UiScale).
             Row(
-                Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 2.dp),
+                Modifier.fillMaxWidth().onTap {
+                    Theme.switchTo(m)
+                    dismiss()
+                }.padding(horizontal = 18.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Txt("Zoom", 13.sp, Tokens.text, FontWeight.SemiBold)
-                Txt("· ${UiScale.percent}%", 11.5.sp, Tokens.muted2)
-                // The chords step through the same list as the chips below (see UiScale.stepFrom),
-                // and this dialog is where someone looking for zoom ends up — so it is the one
-                // place the shortcut can be discovered rather than guessed at.
-                Txt("· Ctrl+Shift+= / −", 11.5.sp, Tokens.muted2)
+                Txt(m.glyph, 13.sp, if (on) Tokens.accent else Tokens.muted)
+                Txt(m.label, 13.sp, if (on) Tokens.accent else Tokens.text,
+                    if (on) FontWeight.SemiBold else FontWeight.Normal)
+                detail?.let { Txt("· $it", 11.5.sp, Tokens.muted2) }
                 Spacer(Modifier.weight(1f))
-                if (UiScale.percent != 100) {
-                    Txt("Reset", 11.5.sp, Tokens.accent, FontWeight.SemiBold,
-                        modifier = Modifier.onTap { UiScale.zoomTo(100) })
-                }
+                if (on) Txt("✓", 13.sp, Tokens.accent, FontWeight.Bold)
             }
-            FlowRow(
-                Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                UiScale.STEPS.forEach { step ->
-                    PresetChip("$step%", step == UiScale.percent, state.accent) { UiScale.zoomTo(step) }
-                }
+        }
+        // Zoom. Its own row rather than another entry in the list above, because it answers a
+        // different question from light/dark — and it lives here, in the one dialog reachable
+        // from a single toolbar button, so it stays usable when the UI is the wrong size to
+        // read comfortably (see UiScale).
+        Row(
+            Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Txt("Zoom", 13.sp, Tokens.text, FontWeight.SemiBold)
+            Txt("· ${UiScale.percent}%", 11.5.sp, Tokens.muted2)
+            // The chords step through the same list as the chips below (see UiScale.stepFrom),
+            // and this dialog is where someone looking for zoom ends up — so it is the one
+            // place the shortcut can be discovered rather than guessed at.
+            Txt("· Ctrl+Shift+= / −", 11.5.sp, Tokens.muted2)
+            Spacer(Modifier.weight(1f))
+            if (UiScale.percent != 100) {
+                Txt("Reset", 11.5.sp, Tokens.accent, FontWeight.SemiBold,
+                    modifier = Modifier.onTap { UiScale.zoomTo(100) })
             }
+        }
+        FlowRow(
+            Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            UiScale.STEPS.forEach { step ->
+                PresetChip("$step%", step == UiScale.percent, state.accent) { UiScale.zoomTo(step) }
+            }
+        }
+    }
+}
+
+/**
+ * The four "Open in …" commands a user can name for themselves.
+ *
+ * Monospaced, because these are command lines and a proportional font hides the difference between
+ * one space and two. No Save button and no per-field validation beyond the one thing that can be
+ * checked for free — an unbalanced quote, which is the only way to write something [ExternalTools]
+ * cannot read at all. Whether the command actually *exists* is deliberately not shown: answering it
+ * means a Launch Services probe on macOS, and doing that on every keystroke would stall the field on
+ * the platform where the fields are most likely to name an app bundle. The answer lives in
+ * `--smoke-test`, which prints what each action would run.
+ */
+@Composable
+private fun ToolsSection(state: AppState, dismiss: () -> Unit) {
+    Column(
+        Modifier.padding(horizontal = 18.dp).padding(bottom = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        ExternalTools.Tool.entries.forEach { tool ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Txt(tool.label, 12.5.sp, Tokens.text, FontWeight.SemiBold)
+                    if (ExternalTools.malformed(tool)) {
+                        Txt("· unbalanced quote — ignored", 11.sp, Tokens.amber)
+                    }
+                }
+                TextInput(
+                    ExternalTools.raw(tool), { ExternalTools.set(tool, it) }, tool.hint,
+                    state.accent, onDone = dismiss, onEscape = dismiss, font = MonoFont,
+                )
+            }
+        }
+        Txt(
+            "{path} marks where the repository goes — {url} does the same for the browser. " +
+                "Without one, it is added at the end; the terminal instead just starts in the " +
+                "repository, which is what terminals want. Quote anything containing spaces. " +
+                "A command that turns out not to be installed is skipped, and the built-in " +
+                "defaults run as before.",
+            11.sp, Tokens.muted2, maxLines = 8,
+        )
+    }
+}
+
+/**
+ * The global default for polling GitHub.
+ *
+ * Its home at last: this has been a real setting since issue tracking shipped and the only way to
+ * change it was to hand-edit registry.json. The per-repo Track toggle in the detail pane still wins
+ * over it, which is why this is worded as a default rather than a switch.
+ */
+@Composable
+private fun GitHubSection(state: AppState) {
+    Column(
+        Modifier.padding(horizontal = 18.dp).padding(bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Poll for open issues and PRs", 12.5.sp, Tokens.text, FontWeight.SemiBold)
+            InfoTip(
+                "The default for every repo with a github.com remote, and only while `gh` is " +
+                    "authenticated. Individual repos can override it with the Track toggle in " +
+                    "their detail pane — a fork you don't triage, or a repo whose tracker is " +
+                    "the one thing you do watch.",
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PresetPill("By default", state.githubEnabled, state.accent) { state.setIssuePolling(true) }
+            PresetPill("Never", !state.githubEnabled, state.accent) { state.setIssuePolling(false) }
         }
     }
 }
@@ -478,8 +614,15 @@ fun Toast(state: AppState, msg: String) {
  * with it. What it doesn't get is Escape before that first interaction, because nothing inside the
  * modal has focus yet and the keystroke goes elsewhere entirely.
  *
- * Hence the opt-in: modals built around a text field must not have focus taken from that field, so
- * they keep relying on the field's own `onEscape`. Modals with nothing to type into ask for it here.
+ * Hence the opt-in: modals that *focus* a text field on open must not have focus taken from it, so
+ * they keep relying on the field's own `onEscape`. Modals with nothing to type into ask for it here
+ * — and so does the settings dialog, which has fields but focuses none of them, and where Escape
+ * dismissing outright is the right answer because its fields have nothing to cancel.
+ *
+ * The height cap is what keeps a tall modal usable rather than merely centred: without it a dialog
+ * longer than the window overflows both ends equally, so the top of it is off-screen and there is
+ * nothing to scroll — the content is only reachable if the modal is bounded and scrolls inside that
+ * bound. Sized off the actual window, so it holds at every [UiScale] zoom.
  */
 @Composable
 private fun Modal(
@@ -492,7 +635,7 @@ private fun Modal(
     if (takeFocus) {
         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     }
-    Box(
+    BoxWithConstraints(
         Modifier.fillMaxSize().background(Tokens.scrimSoft).onTap(onDismiss)
             .then(if (takeFocus) Modifier.focusRequester(focus).focusable() else Modifier)
             .onPreviewKeyEvent {
@@ -502,12 +645,17 @@ private fun Modal(
     ) {
         val shape = RoundedCornerShape(14.dp)
         Column(
-            Modifier.width(width.dp).clip(shape).background(Tokens.surface, shape)
+            Modifier.width(width.dp).heightIn(max = maxHeight - MODAL_MARGIN).clip(shape)
+                .background(Tokens.surface, shape)
                 .border(1.dp, Tokens.borderDc, shape).onTap { },
             content = content,
         )
     }
 }
+
+/** How much of the window a modal always leaves showing, so it reads as a dialog over the app
+ *  rather than as a screen of its own. */
+private val MODAL_MARGIN = 48.dp
 
 /**
  * [onClose] adds a × at the trailing edge. Only for modals that have no button row of their own to

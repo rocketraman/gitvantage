@@ -102,8 +102,20 @@ sealed interface Popup {
         override val ids: Set<String> = setOf(repoId)
     }
 
-    /** The appearance picker (Match system / Light / Dark). App-wide, so it owns no repos. */
-    data object Appearance : Popup { override val ids: Set<String> = emptySet() }
+    /**
+     * The app's settings, opened at [section].
+     *
+     * One dialog rather than a page with its own navigation, and one scrolling column rather than
+     * tabs — so the toolbar button that used to open the appearance picker still opens everything,
+     * and a deep link is a scroll position rather than a mode. [section] is what the entry point
+     * asks to be shown: the toolbar wants Appearance, the "Open in ▾" menu's Configure… wants the
+     * tools it was opened from.
+     *
+     * App-wide, so it owns no repos.
+     */
+    data class Settings(val section: SettingsSection = SettingsSection.APPEARANCE) : Popup {
+        override val ids: Set<String> = emptySet()
+    }
     data class Confirm(
         val title: String,
         val message: String,
@@ -113,6 +125,18 @@ sealed interface Popup {
     ) : Popup {
         override val ids: Set<String> = emptySet()
     }
+}
+
+/**
+ * A heading in the settings dialog, and the unit a deep link addresses.
+ *
+ * [label] is what the dialog draws; the order is the order they appear in, so "scroll to this one"
+ * needs nothing but the entry itself.
+ */
+enum class SettingsSection(val label: String, val blurb: String) {
+    APPEARANCE("Appearance", "How GitVantage looks. Applies immediately and is remembered."),
+    TOOLS("External tools", "What \"Open in …\" runs. Leave blank to use the platform defaults."),
+    GITHUB("GitHub", "What the dashboard polls from GitHub, for repos with a github.com remote."),
 }
 
 /**
@@ -323,9 +347,9 @@ class AppState(private val scope: CoroutineScope) {
     var githubFetchedEpoch by mutableStateOf(0L)
         private set
 
-    /** Global default for polling open issues, overridable per repo. Registry-only (like the
-     *  global stale threshold): the per-repo control is the one with a UI. */
-    var githubEnabled = Registry.settings().githubIssues
+    /** Global default for polling open issues, overridable per repo. Set from the GitHub section
+     *  of the settings dialog; the per-repo Track toggle in the detail pane still wins over it. */
+    var githubEnabled by mutableStateOf(Registry.settings().githubIssues)
         private set
     var githubMineOnly by mutableStateOf(Registry.settings().githubMineOnly)
         private set
@@ -1127,6 +1151,25 @@ class AppState(private val scope: CoroutineScope) {
         val e = entries[id] ?: return
         entries[id] = e.copy(issuesImportant = important)
         persist()
+    }
+
+    /**
+     * Toggle the global "poll GitHub for open issues and PRs" default.
+     *
+     * Turning it off drops every cached tracker result, the way the per-repo toggle does, so the
+     * counts leave the rows at once instead of lingering as a picture of a poll that is no longer
+     * happening. Repos with an explicit per-repo Track override keep theirs, because that is what
+     * the override says; only the ones that were following this default lose their data.
+     */
+    fun setIssuePolling(on: Boolean) {
+        if (on == githubEnabled) return
+        githubEnabled = on
+        Registry.saveSettings(Registry.settings().copy(githubIssues = on))
+        if (on) {
+            refreshGitHub()
+        } else {
+            repos.filter { entries[it.id]?.issuesTracked != true }.forEach { githubState.remove(it.id) }
+        }
     }
 
     /** Toggle "only count issues that involve me" (global). Re-derives from cached data. */

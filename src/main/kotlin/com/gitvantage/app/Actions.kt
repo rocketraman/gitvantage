@@ -17,6 +17,13 @@ import java.util.concurrent.TimeUnit
  * chains share is that a rung is *resolved* before it is tried (see [Programs]) rather than being
  * tried to find out whether it exists — start-means-success is a Linux-only test, and building
  * macOS and Windows on it is why these did nothing at all there.
+ *
+ * Four of the chains begin with the user's own command where they have set one (see [ExternalTools]
+ * and [override]). It is prepended rather than substituted, so the platform defaults remain the
+ * floor under whatever anyone types.
+ *
+ * The chains are rebuilt per call, and must stay that way: an override changes as the settings field
+ * is typed into, so a chain held as a `val` would go on launching the previous command.
  */
 object Actions {
 
@@ -42,6 +49,7 @@ object Actions {
     private fun terminals(path: String): List<Candidate> {
         val term = System.getenv("TERMINAL")?.takeIf { it.isNotBlank() }
         return buildList {
+            override(ExternalTools.Tool.TERMINAL, path)?.let(::add)
             when (Os.current) {
                 Os.LINUX -> {
                     if (term != null) add(exe(term))
@@ -95,10 +103,13 @@ object Actions {
 
     /** `explorer.exe` is a GUI application, so it needs no `start` wrapper — and it exits 1 even
      *  when it succeeded, which costs nothing here because nothing waits on it. */
-    private fun folders(path: String): List<Candidate> = when (Os.current) {
-        Os.LINUX -> listOf(exe("xdg-open", path))
-        Os.MAC -> listOf(exe("open", path))
-        Os.WINDOWS -> listOf(exe("explorer.exe", path))
+    private fun folders(path: String): List<Candidate> = buildList {
+        override(ExternalTools.Tool.FILE_MANAGER, path)?.let(::add)
+        when (Os.current) {
+            Os.LINUX -> add(exe("xdg-open", path))
+            Os.MAC -> add(exe("open", path))
+            Os.WINDOWS -> add(exe("explorer.exe", path))
+        }
     }
 
     /** Open a URL in the default browser. */
@@ -111,13 +122,16 @@ object Actions {
      * URL with a second query parameter would be cut in half and the tail run as a command.
      * `explorer` is executed directly, with no shell in the way to reinterpret anything.
      */
-    private fun urls(url: String): List<Candidate> = when (Os.current) {
-        Os.LINUX -> listOf(exe("xdg-open", url))
-        Os.MAC -> listOf(exe("open", url))
-        Os.WINDOWS -> listOf(
-            exe("explorer.exe", url),
-            exe("rundll32.exe", "url.dll,FileProtocolHandler", url),
-        )
+    private fun urls(url: String): List<Candidate> = buildList {
+        override(ExternalTools.Tool.BROWSER, url)?.let(::add)
+        when (Os.current) {
+            Os.LINUX -> add(exe("xdg-open", url))
+            Os.MAC -> add(exe("open", url))
+            Os.WINDOWS -> {
+                add(exe("explorer.exe", url))
+                add(exe("rundll32.exe", "url.dll,FileProtocolHandler", url))
+            }
+        }
     }
 
     fun openIde(path: String): Boolean = launchFirst(ides(path), File(path)) != null
@@ -126,6 +140,7 @@ object Actions {
      *  and VS Code both leave their `PATH` shims out unless asked, so the editor is plainly there
      *  and no command names it. */
     private fun ides(path: String): List<Candidate> = buildList {
+        override(ExternalTools.Tool.IDE, path)?.let(::add)
         add(exe("idea", path))
         add(exe("idea.sh", path))
         add(exe("code", path))
@@ -252,6 +267,43 @@ object Actions {
     }
 
     /**
+     * The user's own command for [tool] with [arg] placed in it, as rung 0 — or null when they have
+     * not set one, or set one that doesn't parse.
+     *
+     * It is an ordinary rung and that is the point. It resolves through [Programs] like every other,
+     * so a command naming something that isn't installed is *detected* and the chain carries on to
+     * the platform defaults below it, rather than being launched into the void. A user who mistypes
+     * their terminal gets the old behaviour back, not a dead button — which matters more here than
+     * anywhere else in this file, because a fire-and-forget launch has no way to report the mistake.
+     *
+     * On macOS an override may name an application bundle, and a bundle is not an executable file:
+     * `Programs.resolve` would correctly find nothing for `/Applications/Zed.app`. Such a rung is
+     * rewritten to the `open -a` form the built-in [macApp] rungs use, and — the half that matters —
+     * probed with Launch Services first. `open -a` starts whether or not the app exists, so an
+     * unprobed rung would swallow the whole chain on every Mac, which is the failure the built-in
+     * rungs already had to be taught to avoid. Someone who spells the `open -a` out themselves gets
+     * the same probe, for the same reason.
+     */
+    private fun override(tool: ExternalTools.Tool, arg: String): Candidate? {
+        val raw = ExternalTools.command(tool, arg) ?: return null
+        val mac = Os.current == Os.MAC
+        val cmd = if (mac && raw.first().endsWith(APP_BUNDLE)) {
+            listOf("open", "-a") + raw
+        } else {
+            raw
+        }
+        val app = if (mac && cmd.size >= 3 && cmd[0] == "open" && cmd[1] == "-a") cmd[2] else null
+        return when (app) {
+            null -> Candidate(cmd) { Programs.resolve(cmd.first())?.plus(cmd.drop(1))?.let(::Launch) }
+            else -> Candidate(cmd) { Launch(cmd).takeIf { macAppInstalled(app) } }
+        }
+    }
+
+    /** What a macOS application bundle's name ends with — the one spelling that tells an override
+     *  naming an app apart from one naming a program. */
+    private const val APP_BUNDLE = ".app"
+
+    /**
      * A rung naming a macOS application bundle, opened with the directory as its argument.
      *
      * The guard is the point. `open -a Ghostty` starts, and returns, whether or not Ghostty is
@@ -306,6 +358,11 @@ object Actions {
      * looks exactly like a button that does nothing — and this is the only way to ask the question
      * on a machine without clicking, which matters most on the two platforms where the answer used
      * to be "nothing, on every rung".
+     *
+     * It calls the same chain functions the buttons do, so a user's override is reported here as the
+     * answer whenever it is the one that would run. That is the only reason the report stays worth
+     * reading once overrides exist: a diagnostic that described the built-in chain while a different
+     * command was actually being launched would be worse than none at all.
      */
     internal fun resolutions(path: String): List<Pair<String, List<String>?>> = listOf(
         "terminal" to firstResolved(terminals(path)),

@@ -112,6 +112,25 @@ data class Settings(
     // Count only issues/PRs you're involved in — you opened it, you're assigned, your review is
     // requested, or the last comment mentions you. Off = every open issue in the repo counts.
     val githubMineOnly: Boolean = false,
+    // What "Open in …" runs, when the platform chains in Actions are not what this user wants.
+    // Empty means unset, and unset means the platform defaults alone — an override is the *first*
+    // rung of the existing chain, never a replacement for it, so a command that turns out not to
+    // exist leaves a working button rather than a dead one.
+    //
+    // Each is a command line, tokenized quote-aware, with an optional {path} (or {url}) marking
+    // where the argument goes: `kitty --directory {path}` and `wt -d {path}` put it in different
+    // places, so a bare program name could not express both. Where no placeholder appears the
+    // argument is appended — except for the terminal, which gets the directory as its working
+    // directory instead, because that is what a terminal named with no arguments wants (and is
+    // what the $TERMINAL rung in Actions has always done).
+    //
+    // User config only, never repo-local: these strings are executed, so reading them from a file
+    // inside a cloned repository would make `git clone` arbitrary code execution. registry.json is
+    // the same trust level as a shell rc, and that is the line.
+    val terminalCommand: String = "",
+    val fileManagerCommand: String = "",
+    val ideCommand: String = "",
+    val browserCommand: String = "",
     // Whether the detail pane's Settings disclosure is open. App-wide rather than per repo: it's a
     // statement about how you use the pane, not about any one project, and having it remember per
     // repo would mean the pane's length changed as you arrowed down the list.

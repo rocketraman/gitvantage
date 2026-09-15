@@ -66,6 +66,7 @@ import com.gitvantage.app.GitHub
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
 import com.gitvantage.app.RepoView
+import com.gitvantage.app.SettingsSection
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.git.model.Branch
@@ -357,20 +358,33 @@ private fun OpenInMenu(state: AppState, repo: Repo) {
                     OpenInItem("IDE", UiFont, pick { state.openIde(repo.id) })
                     OpenInItem("Folder", UiFont, pick { state.openFolder(repo.id) })
                     if (repo.isGitHub && repo.webBase != null) {
-                        Box(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-                                .height(1.dp).background(Tokens.borderEd),
-                        )
+                        MenuDivider()
                         OpenInItem("Issues", UiFont, pick { state.openUrl("${repo.webBase}/issues") })
                         OpenInItem("Pull Requests", UiFont, pick { state.openUrl("${repo.webBase}/pulls") })
                         if (repo.hasWorkflows) {
                             OpenInItem("Actions", UiFont, pick { state.openUrl("${repo.webBase}/actions") })
                         }
                     }
+                    // Where the need arises. Which terminal or editor these entries open is exactly
+                    // the question this menu provokes, and a settings dialog reachable only from a
+                    // toolbar button on the other side of the window is one nobody thinks to try.
+                    MenuDivider()
+                    OpenInItem("Configure…", UiFont, pick {
+                        state.popup = Popup.Settings(SettingsSection.TOOLS)
+                    })
                 }
             }
         }
     }
+}
+
+/** A hairline between groups of menu items. */
+@Composable
+private fun MenuDivider() {
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .height(1.dp).background(Tokens.borderEd),
+    )
 }
 
 @Composable

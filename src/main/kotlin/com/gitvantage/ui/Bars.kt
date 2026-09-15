@@ -149,19 +149,21 @@ fun Toolbar(state: AppState) {
         Spacer(Modifier.weight(1f))
 
         Txt(state.fetchedLabel(), 12.sp, Tokens.muted2)
-        // Appearance. Glyph *and* label, like the Console and Fetch-all buttons it sits between:
+        // Settings, still wearing the current theme's glyph — it is the appearance control people
+        // look for here, and the other two sections are things you set once.
+        // Glyph *and* label, like the Console and Fetch-all buttons it sits between:
         // these buttons are a fill a single step off the toolbar's own, so it's the label that
         // gives them a body to find. Glyph-only, this one read as an empty outline — see the note
         // on ThemeMode for the half of that which was the sun turning into a colour emoji.
-        val themeTip = "Appearance: ${Theme.mode.label.lowercase()}" +
+        val themeTip = "Settings — appearance is ${Theme.mode.label.lowercase()}" +
             // systemDark, not isDark — the parenthetical reports what the *desktop* asked for.
             (if (Theme.mode == ThemeMode.SYSTEM) " (${if (Theme.systemDark) "dark" else "light"})" else "") +
-            ". Click to switch between light, dark, and matching your desktop."
+            ". Light, dark and zoom, the commands \"Open in …\" runs, and GitHub polling."
         HoverTip(themeTip) {
             Row(
                 Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
                     .border(1.dp, Tokens.borderD8, RoundedCornerShape(8.dp))
-                    .onTap { state.popup = Popup.Appearance }
+                    .onTap { state.popup = Popup.Settings() }
                     .padding(horizontal = 11.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
