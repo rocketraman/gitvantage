@@ -20,7 +20,7 @@ jobs:
       # Nucleus's own setup action: installs the JetBrains Runtime and Gradle. We pin the
       # JBR to 25. No packaging tools or Node needed for a plain build + test.
       # Pin @main to a released Nucleus tag once you've settled on a version.
-      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@764ed3f9b09445d011f9f078310a58c0747d4dca # main
+      - uses: NucleusFramework/Nucleus/.github/actions/setup-nucleus@1f7422bf3da14bb83b7923c3fafd1e5924ed483a # main
         with:
           java-version: '25'
           packaging-tools: 'false'
