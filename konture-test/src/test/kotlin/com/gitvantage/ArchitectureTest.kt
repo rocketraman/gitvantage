@@ -56,8 +56,8 @@ val Architecture by testSuite {
     test("only the state layer reaches the git runner") {
         architecture {
             files {
-                that().notResideInAPackage("com.gitvantage.git")
-                    .and().notHaveName { it in setOf("AppState.kt", "Registry.kt") }
+                that().notInPackage("com.gitvantage.git")
+                    .and().notNamed { it in setOf("AppState.kt", "Registry.kt") }
                 should().notReferenceClass("com.gitvantage.git.Git")
             }
         }
@@ -265,7 +265,7 @@ val Architecture by testSuite {
     test("process spawning is confined to Git and the three non-git callers") {
         architecture {
             files {
-                that().notHaveName { it in setOf("Git.kt", "Actions.kt", "GitHub.kt", "Theme.kt") }
+                that().notNamed { it in setOf("Git.kt", "Actions.kt", "GitHub.kt", "Theme.kt") }
                 should().notReferenceClass("java.lang.ProcessBuilder")
             }
         }
@@ -294,7 +294,7 @@ val Architecture by testSuite {
      */
     test("the process-spawning rule can see an unimported ProcessBuilder") {
         val rule = FilesRuleBuilder(Konture.projectGraph, SourceSets.production()).apply {
-            that().haveName("Git.kt")
+            that().named("Git.kt")
             should().notReferenceClass("java.lang.ProcessBuilder")
         }
         val failure = runCatching { rule.check() }.exceptionOrNull()
