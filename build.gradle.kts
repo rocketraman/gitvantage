@@ -290,17 +290,15 @@ nucleus.application {
 // whose context class loader is null. Linux and Windows have no thread-0 requirement, which is why
 // that particular defect was invisible there.
 //
-// Linux is not actually safe on the jpackage path either — it just fails differently, and we only
-// learned how in Aug 2026. jpackage's Linux launcher pipes a serialized JvmlLauncherData blob from
-// a forked child to the parent and reads it back with a single unlooped read(). Once the expanded
-// classpath makes that blob large enough, the read comes up short, the tail of the blob is left
-// uninitialized, and the launcher SIGSEGVs in setenv() before the JVM starts — silently, with no
-// output at all. It is a scheduling race rather than a size threshold, so it is not something a
-// build-time check can rule out. Fixed upstream in JDK mainline as JDK-8380085 but not backported
-// to 25u, which is what we package with. See NucleusFramework/Nucleus#454.
+// Linux was not safe on the jpackage path either, for a different reason: jpackage's Linux launcher
+// SIGSEGVed in setenv() before the JVM started once the expanded classpath grew large enough
+// (JDK-8380085, unfixed in the 25u we package with). The Nucleus plugin has sidestepped that with a
+// pathing jar since 2.3.0 — see NucleusFramework/Nucleus#454 — so a jpackage image would now start
+// there.
 //
-// So the gate below matters on all three platforms, not just macOS: there is no OS on which
-// silently falling back to jpackage produces a working release.
+// The gate below still matters on all three platforms, not just macOS: where falling back to
+// jpackage no longer produces a broken release, it silently produces a different one — a bundled
+// JVM instead of the native image this project ships.
 //
 // Every format task is registered on every OS and carries `enabled = isCompatibleWithCurrentOS`,
 // so depending on all four is correct: the three that don't apply are skipped, and this single

@@ -54,9 +54,10 @@ jobs:
       #
       # This task is gated by verifyGraalvmNativeImage, which fails the build if the bundle handed
       # to the packagers embeds a Java runtime — i.e. if we are silently back on the jpackage path.
-      # That gate is load-bearing on every platform, not just macOS: the jpackage launcher also
-      # SIGSEGVs at startup on Linux once the classpath is large enough (JDK-8380085, unfixed in
-      # the 25u we package with — see NucleusFramework/Nucleus#454 and the note in build.gradle.kts).
+      # That gate is load-bearing on every platform, not just macOS: elsewhere the jpackage image
+      # would start (the Linux launcher SIGSEGV, NucleusFramework/Nucleus#454, is worked around by
+      # the plugin since 2.3.0) but it is a bundled JVM, not the native image we ship — see the
+      # note in build.gradle.kts.
       #
       # Note the jpackage-era gates (verifyReleaseBytecode, smokeTestReleaseImage) do NOT run here
       # any more: they are finalizers of packageRelease*, and they inspect the jlink'd image that is

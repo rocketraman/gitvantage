@@ -154,14 +154,11 @@ private fun checkFsWatcher() = runBlocking {
 /**
  * A repo added via a symlinked path must still deliver events.
  *
- * The watcher matches incoming events against the root it was given, by path prefix. macOS reports
- * events with canonical paths, so a symlinked root never matches its own events: registration
- * succeeds and nothing is ever delivered. It is silent, and it is easy to hit — /tmp and /var are
- * both symlinks on macOS. AppState.watchRootFor resolves the path before watching; this is the
- * check that the technique actually holds on the platform that needs it.
- *
- * Linux and Windows echo back the path they were handed, so they pass either way — which is exactly
- * why this went unnoticed until the release build could produce a macOS image.
+ * AppState.watchRootFor resolves a repo's path before watching it, and this checks that a repo
+ * reached that way really does deliver events. It was written when a symlinked root registered and
+ * then silently delivered nothing on macOS (NucleusFramework/Nucleus#442, fixed in 2.3.0) — easy
+ * to hit, since /tmp and /var are both symlinks there. The app still resolves, for the reason
+ * given on watchRootFor, so this still exercises exactly what the app does.
  */
 private fun checkFsWatcherThroughSymlink() = runBlocking {
     val name = "filesystem watcher via symlinked path"
@@ -189,8 +186,7 @@ private fun checkFsWatcherThroughSymlink() = runBlocking {
         runCatching { watcher.events.collect { events++ } }
     }
     delay(300.milliseconds)
-    // Resolve exactly as AppState.watchRootFor does — the whole point is that this is what makes a
-    // symlinked repo work. Watching `link` unresolved is what silently fails on macOS.
+    // Resolve exactly as AppState.watchRootFor does, so this watches what the app watches.
     val registration = runCatching { watcher.watch(link.toRealPath(), true, "smoke-link") }.getOrNull()
     if (registration == null) {
         collector.cancel()

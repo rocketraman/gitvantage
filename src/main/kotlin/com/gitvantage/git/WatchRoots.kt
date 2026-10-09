@@ -30,8 +30,10 @@ data class WatchRoot(val path: String, val recursive: Boolean)
  * on a background thread; what it cost was half the machine's capacity to watch files at all.
  *
  * So this stays a single watch until the watcher can either share one inotify instance across
- * registrations or take an exclusion list directly — see NucleusFramework/Nucleus#570. The
- * `check-ignore` query that worked out what to skip is in the history, and the tests with it.
+ * registrations or take an exclusion list directly — see NucleusFramework/Nucleus#571. That one is
+ * fixed upstream (a shared native watcher) but only on the unreleased 2.6/3.0 line: it is not in
+ * any 2.5.x, 2.5.18 included, so check the release it ships in before bringing the pruning back.
+ * The `check-ignore` query that worked out what to skip is in the history, and the tests with it.
  */
 object WatchRoots {
 
