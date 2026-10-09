@@ -535,14 +535,14 @@ class AppState(private val scope: CoroutineScope) {
     /**
      * The path to hand the watcher for a repo, with symlinks resolved.
      *
-     * macOS delivers filesystem events with *canonical* paths (FSEvents), while the watcher matches
-     * events against the root it was given by prefix. Hand it a symlinked path and the two never
-     * line up: registration succeeds, and then no event ever arrives. Silently — the repo just
-     * stops refreshing on disk changes. Linux and Windows echo back whatever path they were given,
-     * so their prefix always matches and this only ever bites on macOS.
+     * The watcher echoes event paths back under whatever spelling of the root it was registered
+     * with, and the nested worktrees those paths are filtered against are stored canonical (see
+     * RepoScanner). Registering the real path is what keeps the two comparable: hand the watcher a
+     * symlinked spelling and a nested worktree's churn stops matching and counts as the repo's own.
      *
-     * Not exotic: /tmp and /var are symlinks on macOS, and a repo checked out under either — or
-     * under any symlink the user made themselves — hits it.
+     * This began as a workaround for a watcher bug — on macOS a symlinked root registered fine and
+     * then never delivered an event (NucleusFramework/Nucleus#442, fixed in 2.3.0). The watcher no
+     * longer needs it; the comparison above still does.
      *
      * Only the watch root is resolved. `name` stays the repo id, so event routing and the watchRegs
      * keys are unaffected (see startFsWatcher, which routes on source.name alone). If the repo has
