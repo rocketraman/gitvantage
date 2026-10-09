@@ -30,7 +30,7 @@ object BranchOps {
         // %(worktreepath) needs git 2.23 — older git fails the whole command and the branch list
         // comes back empty, which is the same way this file already treats a git too old to ask.
         val raw = Git.read(dir, "for-each-ref", "--sort=-committerdate",
-            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)",
+            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)$SEP%(objectname)",
             "refs/heads")
         val here = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
         val rows = raw.lineSequence().filter { it.isNotBlank() }.map { line ->
@@ -47,6 +47,7 @@ object BranchOps {
                 worktree = p.getOrNull(6)?.trim()?.takeIf {
                     it.isNotEmpty() && runCatching { File(it).canonicalPath }.getOrDefault(it) != here
                 },
+                sha = p.getOrElse(7) { "" }.trim(),
             )
         }.filter { it.name.isNotEmpty() && !it.name.startsWith("gitbutler/") }.toList() // ignore GitButler's virtual branches
         if (rows.isEmpty()) return@withContext emptyList()
@@ -55,13 +56,18 @@ object BranchOps {
         val mainline = listOf("main", "master").firstOrNull { it in names }
             ?: rows.firstOrNull { it.isCurrent }?.name ?: rows.first().name
         val nowSecs = System.currentTimeMillis() / 1000
+        // Trees that detached from their branch without leaving it — see Branch.detachedWorktreePath.
+        val detachedTrees =
+            if (WorktreeOps.mayHaveOtherWorktrees(dir)) WorktreeOps.list(repoPath).filter { it.detached && !it.isCurrent }
+            else emptyList()
 
         rows.map { r ->
             val isMainline = r.name == mainline
             val behind = if (isMainline) 0 else count(dir, "${r.name}..$mainline")
             val ahead = if (isMainline) 0 else count(dir, "$mainline..${r.name}")
             // merged = every commit on the branch is already in mainline (ancestor), excluding mainline itself
-            val merged = !isMainline && Git.exitCode(dir, "merge-base", "--is-ancestor", r.name, mainline) == 0
+            val contained = !isMainline && Git.exitCode(dir, "merge-base", "--is-ancestor", r.name, mainline) == 0
+            val merged = contained && hasOwnWork(dir, r.name, mainline)
             val ageDays = (nowSecs - r.epoch) / 86_400
             val stale = !r.isCurrent && !isMainline && ageDays > Meta.STALE_DAYS && behind > Meta.VERY_BEHIND
             val (uAhead, uBehind, gone) = parseTrack(r.track)
@@ -69,8 +75,36 @@ object BranchOps {
                 r.name, r.isCurrent, isMainline, behind, ahead, merged, stale, r.relative,
                 upstream = r.upstream, upstreamAhead = uAhead, upstreamBehind = uBehind, upstreamGone = gone,
                 worktreePath = r.worktree,
+                detachedWorktreePath = detachedTrees
+                    .firstOrNull { it.head == r.sha && WorktreeOps.namedFor(it.name, r.name) }?.path,
+                empty = contained && !merged,
             )
         }
+    }
+
+    /**
+     * Whether [branch] — already known to be an ancestor of [mainline] — ever carried commits of its
+     * own, which is the difference between "merged" and "nothing was ever done here".
+     *
+     * `merge-base --is-ancestor` can't tell them apart: a branch cut from main and never committed to
+     * is contained in main just as surely as one whose work landed. Two things can:
+     *  - Where the tip sits. Work that came in through a merge commit hangs off mainline's
+     *    *first-parent* line rather than lying on it, so a tip that isn't on that line had commits.
+     *  - The branch's reflog, for a tip that is on it. That is either an untouched branch or a
+     *    fast-forward merge, and only the second ever recorded a commit. Reflogs expire, so a
+     *    fast-forwarded branch left alone for months eventually reads as empty — the answer git can
+     *    still support by then, and either way one that says deleting it loses nothing.
+     */
+    internal fun hasOwnWork(dir: File, branch: String, mainline: String): Boolean {
+        val tip = Git.read(dir, "rev-parse", "--verify", "-q", branch).trim()
+        // The oldest commit on mainline's first-parent line that the branch doesn't have: its parent
+        // on that line is the branch tip exactly when the tip lies on the line.
+        val oldest = Git.read(dir, "rev-list", "--first-parent", "--parents", "$branch..$mainline")
+            .lineSequence().lastOrNull { it.isNotBlank() }
+        val onFirstParentLine = oldest == null || oldest.split(' ').getOrNull(1) == tip
+        if (!onFirstParentLine) return true
+        return Git.read(dir, "reflog", "show", "--format=%gs", "refs/heads/$branch").lineSequence()
+            .any { it.isNotBlank() && !it.startsWith("branch:") && !it.startsWith("reset:") }
     }
 
     /** Remote branches (those under `refs/remotes`), newest first, each with its tip author. */
@@ -198,6 +232,7 @@ object BranchOps {
         val upstream: String?,
         val track: String,
         val worktree: String? = null,
+        val sha: String = "",
     )
 
     private fun count(dir: File, range: String): Int =

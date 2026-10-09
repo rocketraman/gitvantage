@@ -155,6 +155,7 @@ private fun WorktreeBadges(state: AppState, wtv: WorktreeView) {
         wtv.vsMainline?.let { BadgeView(Badge(it, state.accent, Tokens.tintBlue)) }
         if (wt.agent) BranchBadge("agent", state.accent, Tokens.tintBlue)
         if (wt.branchMerged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+        if (wt.branchEmpty) NoCommitsBadge()
         if (wt.locked) BranchBadge("locked", Tokens.purple, Tokens.tintPurple)
     }
 }
@@ -392,6 +393,19 @@ private fun WorktreeStateBadges(state: AppState, wtv: WorktreeView) {
             ) { BranchBadge("agent", state.accent, Tokens.tintBlue) }
         }
         if (wt.branchMerged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+        if (wt.branchEmpty) NoCommitsBadge()
+    }
+}
+
+/**
+ * For a branch that was cut and never committed to. git reports it as contained in mainline, the
+ * same as one whose work landed, but "merged" on a tree nobody did anything in claims a history it
+ * hasn't got — so it's said quietly, as the absence it is.
+ */
+@Composable
+private fun NoCommitsBadge() {
+    HoverTip("Nothing has been committed on this branch — it's still on mainline's history.") {
+        QuietBadge("no commits")
     }
 }
 
@@ -602,17 +616,21 @@ private fun WorktreeSnoozeChip(rv: RepoView, wtv: WorktreeView, size: Int = 27) 
 /**
  * `git worktree remove` deliberately keeps the branch, which is right for a worktree you made — but
  * an agent worktree's `claude/…` branch existed only to hold that session's work, so once it has
- * landed the branch is residue that "Remove" alone leaves behind forever. Offered as its own action
- * rather than folded into Remove: the plain one promises the branch survives, and a button that
- * quietly stopped honouring that promise would be the worse design.
+ * landed — or if nothing was ever committed to it — the branch is residue that "Remove" alone
+ * leaves behind forever. Offered as its own action rather than folded into Remove: the plain one
+ * promises the branch survives, and a button that quietly stopped honouring that promise would be
+ * the worse design.
+ *
+ * Asked of [Worktree.ownBranch], not the checked-out one: a session that detached its tree after
+ * pushing left the same residue, and going by `branch` alone would hide the action exactly there.
  */
 private fun canRemoveWithBranch(wt: Worktree) =
-    wt.agent && wt.branchMerged && wt.branch != null && !wt.missing
+    wt.agent && (wt.branchMerged || wt.branchEmpty) && wt.ownBranch != null && !wt.missing
 
 private fun confirmRemove(state: AppState, rv: RepoView, wt: Worktree, alsoBranch: Boolean) {
-    val branch = wt.branch?.takeIf { alsoBranch }
+    val branch = wt.ownBranch?.takeIf { alsoBranch }
     state.popup = AppPopup.Confirm(
-        if (branch != null) "Remove worktree “${wt.branch}” and its branch?" else "Remove worktree “${wt.branch ?: wt.name}”?",
+        if (branch != null) "Remove worktree “$branch” and its branch?" else "Remove worktree “${wt.ownBranch ?: wt.name}”?",
         removeWorktreeDetail(wt, alsoBranch = branch),
         if (branch != null) "Remove both" else "Remove", danger = true,
     ) { state.removeWorktree(rv.id, wt, removeBranch = alsoBranch) }
@@ -633,10 +651,14 @@ private fun removeWorktreeDetail(wt: Worktree, alsoBranch: String? = null): Stri
         append(" ${wt.dirtyCount} uncommitted change${if (wt.dirtyCount == 1) "" else "s"} there will be lost.")
     }
     if (wt.locked) append(" It's locked — removing overrides that.")
-    // The reassurance flips into the extra consequence when the branch goes too; naming it as
-    // already-merged is what makes that safe to agree to at a glance.
-    if (alsoBranch != null) append(" The branch “$alsoBranch” is deleted too — it's already merged.")
-    else wt.branch?.let { append(" The branch “$it” is kept.") }
+    // The reassurance flips into the extra consequence when the branch goes too; naming why nothing
+    // is lost with it is what makes that safe to agree to at a glance.
+    if (alsoBranch != null) {
+        val why = if (wt.branchEmpty) "it has no commits of its own" else "it's already merged"
+        append(" The branch “$alsoBranch” is deleted too — $why.")
+    } else {
+        wt.ownBranch?.let { append(" The branch “$it” is kept.") }
+    }
 }
 
 /** "→ ~/work/checkout-service-retry · 2 hours ago · ↑2 vs main" — the card's meta line. */

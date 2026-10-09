@@ -18,8 +18,9 @@ import kotlinx.coroutines.withContext
  * Three entry points, deliberately split by cost:
  *  - [list] is one `git worktree list --porcelain` call — just how many working trees there are
  *    and which one this repo is.
- *  - [listWithWork] looks *inside* each other worktree: four reads per tree (status, rev-list,
- *    last commit, merge-base), and runs on every scan (see GitScan.kt). Repos with no linked
+ *  - [listWithWork] looks *inside* each other worktree: a handful of reads per tree (status,
+ *    rev-list, last commit, merge-base and what it takes to tell merged from untouched), and runs
+ *    on every scan (see GitScan.kt). Repos with no linked
  *    worktrees — nearly all of them — pay nothing, since there is nothing to look into.
  *  - [load] is the same over every tree including the current one, off the UI thread, for the
  *    detail panel.
@@ -145,10 +146,19 @@ object WorktreeOps {
         fun wanted(wt: Worktree) = !wt.bare && (includeCurrent || !wt.isCurrent)
         if (trees.none { wanted(it) }) return trees
         val mainline = mainlineRef(File(repoPath))
+        val held = trees.mapNotNull { it.branch }.toSet()
         return trees.map { wt ->
             if (!wanted(wt)) return@map wt
             val dir = File(wt.path)
             if (!dir.isDirectory) return@map wt.copy(missing = true)
+            val tipBranch = if (wt.detached) tipBranch(dir, wt, held) else null
+            // A branch can only be "merged" against something, and never against itself: mainline
+            // is trivially its own ancestor, and calling the main checkout's branch merged would
+            // offer to delete it.
+            val own = (wt.branch ?: tipBranch)?.takeIf { mainline != null && it != mainline.substringAfter('/') }
+            val contained = own != null && mainline != null &&
+                Git.exitCode(dir, "merge-base", "--is-ancestor", own, mainline) == 0
+            val merged = contained && BranchOps.hasOwnWork(dir, own!!, mainline!!)
             val log = Git.read(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct").trim().split(LOG_SEP)
             wt.copy(
                 dirtyCount = Git.read(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
@@ -157,15 +167,34 @@ object WorktreeOps {
                 lastRelative = log.getOrNull(0)?.trim().orEmpty(),
                 lastAuthor = log.getOrNull(1)?.trim().orEmpty(),
                 lastEpoch = log.getOrNull(2)?.trim()?.toLongOrNull(),
-                // A branch can only be "merged" against something, and never against itself: mainline
-                // is trivially its own ancestor, and calling the main checkout's branch merged would
-                // offer to delete it.
-                branchMerged = wt.branch != null && mainline != null &&
-                    wt.branch != mainline.substringAfter('/') &&
-                    Git.exitCode(dir, "merge-base", "--is-ancestor", wt.branch, mainline) == 0,
+                branchMerged = merged,
+                branchEmpty = contained && !merged,
+                tipBranch = tipBranch,
             )
         }
     }
+
+    /**
+     * The branch a detached tree is still on the tip of — see [Worktree.tipBranch].
+     *
+     * Deliberately narrow, because "Remove + branch" acts on the answer: the branch has to point at
+     * exactly the commit the tree has out, be free (git would refuse to delete one another tree
+     * holds), and share the folder's name. Any branch that merely happens to sit on the same commit
+     * is not this tree's to take with it.
+     */
+    private fun tipBranch(dir: File, wt: Worktree, held: Set<String>): String? =
+        Git.read(dir, "for-each-ref", "--points-at", wt.head, "--format=%(refname:short)", "refs/heads")
+            .lineSequence().map { it.trim() }
+            .firstOrNull { it.isNotEmpty() && it !in held && namedFor(wt.name, it) }
+
+    /**
+     * Whether a worktree folder called [folder] was made for [branch]: the same name, or the forms a
+     * session derives one from the other by — `claude/<folder>`, `worktree-<folder>`, or the branch
+     * with its slashes flattened.
+     */
+    internal fun namedFor(folder: String, branch: String): Boolean =
+        branch == folder || branch.substringAfterLast('/') == folder ||
+            branch.replace('/', '-') == folder || branch == "worktree-$folder"
 
     /** The ref to measure "landed" against: a local main/master if there is one, else the remote's. */
     private fun mainlineRef(dir: File): String? =

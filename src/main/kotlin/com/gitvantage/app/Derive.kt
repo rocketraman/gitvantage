@@ -111,8 +111,14 @@ data class WorktreeView(
     val path get() = wt.path
     val branch get() = wt.branch
 
-    /** The branch name is this row's identity; a detached worktree has only its folder to go on. */
-    val label: String get() = wt.branch ?: if (wt.bare) wt.name else "${wt.name} (detached)"
+    /**
+     * The branch name is this row's identity. A detached worktree keeps the branch it stepped off
+     * when there is one, and otherwise has only its folder to go on.
+     */
+    val label: String get() = wt.branch ?: when {
+        wt.bare -> wt.name
+        else -> "${wt.tipBranch ?: wt.name} (detached)"
+    }
 
     /** Whether [alert] fires for this worktree, after its own snooze, its override, and the parent. */
     fun effective(alert: WorktreeAlert): Boolean = when {
