@@ -1,10 +1,14 @@
 name: CI
 
-# Build and run tests for every branch push and pull request. Tag pushes (v*) don't
-# match the branch filter, so releases are handled by release.yml instead.
+# Build and run tests for every pull request, and for master after each merge. Tag pushes (v*)
+# don't match the branch filter, so releases are handled by release.yml instead.
+#
+# Pushes are limited to master on purpose: a push to a branch with an open PR fires both events,
+# and the two runs differ only in that pull_request builds the merge into master — the more useful
+# of the two. A branch pushed without a PR gets no CI until one is opened.
 on:
   push:
-    branches: ['**']
+    branches: [master]
   pull_request:
 
 concurrency:
