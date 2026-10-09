@@ -456,9 +456,9 @@ object GitHub {
      *
      * `comments(last: 1)` is the expensive-to-emulate part: it's what makes "the last comment
      * @-mentions me" answerable without a request per issue. Note it covers *conversation*
-     * comments only — a PR whose newest activity is an inline review comment reports the last
-     * conversation comment instead. `bodyText` (not `body`) so markdown and code fences can't
-     * produce a false @-mention.
+     * comments only — a review, or a reply on an inline review thread, is not one; [PR_ITEM]
+     * fetches those separately and [GqlNode.lastVoice] decides which spoke last. `bodyText` (not
+     * `body`) so markdown and code fences can't produce a false @-mention.
      *
      * The item's *own* `reactionGroups` sit alongside the comment's because an item nobody has
      * answered yet has no last comment to react to — there, the thing you'd 👍 is the body. See
@@ -470,13 +470,24 @@ object GitHub {
               assignees(first: 10) { nodes { login } }
               labels(first: 20) { nodes { name } }
               reactionGroups { viewerHasReacted }
-              comments(last: 1) { nodes { author { login } bodyText reactionGroups { viewerHasReacted } } }
+              comments(last: 1) { nodes { author { login } createdAt bodyText reactionGroups { viewerHasReacted } } }
     """
 
-    /** The extra fields only a pull request has. */
+    /**
+     * The extra fields only a pull request has.
+     *
+     * `reviews` and `commits` are the two ways a PR conversation moves without a conversation
+     * comment: a submitted review (which is also what a reply on an inline thread is, on the
+     * wire) and a push. PENDING is left out of `states` because your own unsubmitted draft review
+     * would otherwise be the "last" one, with no `submittedAt` and nobody else able to see it.
+     */
     private const val PR_ITEM = """
               isDraft
               reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } }
+              reviews(last: 1, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+                nodes { author { login } submittedAt reactionGroups { viewerHasReacted } }
+              }
+              commits(last: 1) { nodes { commit { committedDate author { user { login } } } } }
     """
 
     /**
@@ -589,6 +600,46 @@ object GitHub {
         get() = (comments.nodes.lastOrNull()?.reactionGroups ?: reactionGroups)
             .any { it.viewerHasReacted }
 
+    /** One turn in the conversation: who took it, when, and what you'd react to to say "seen". */
+    private class Voice(val by: String, val at: Long, val reactions: List<GqlReactionGroup>?) {
+        val acknowledged: Boolean get() = reactions.orEmpty().any { it.viewerHasReacted }
+    }
+
+    private fun String?.toMillis(): Long =
+        runCatching { Instant.parse(this.orEmpty()).toEpochMilli() }.getOrDefault(0L)
+
+    /**
+     * Who spoke last, counting everything that moves a pull request forward: a conversation
+     * comment, a submitted review, or a push. Comments alone get this wrong in both directions —
+     * a PR you answered with a "changes requested" review has no comment at all, so it read as
+     * the contributor still waiting on you; and a contributor who answers that review by pushing
+     * the fix, or by replying on the inline thread, never showed up as waiting.
+     *
+     * A push is attributed to whoever authored the head commit, falling back to the PR's author
+     * when the commit's e-mail isn't linked to an account. That way a fixup *you* push to a
+     * contributor's branch stays your turn taken, not theirs. It is dated by `committedDate`,
+     * the only timestamp GitHub still exposes: a commit made before your review but pushed after
+     * it is the one case this can't see.
+     *
+     * On an item nobody has answered the voice is whoever filed it: the body is a message waiting
+     * on a reply in exactly the way a follow-up comment is. Commits don't count there — every PR
+     * has them from the start, and they'd take the body's place as the thing to react to.
+     */
+    private fun GqlNode.lastVoice(authorLogin: String): Voice {
+        val comment = comments.nodes.lastOrNull()?.let {
+            Voice(it.author?.login.orEmpty().ifEmpty { authorLogin }, it.createdAt.toMillis(), it.reactionGroups)
+        }
+        val review = reviews.nodes.lastOrNull()?.let {
+            Voice(it.author?.login.orEmpty(), it.submittedAt.toMillis(), it.reactionGroups)
+        }
+        if (comment == null && review == null) return Voice(authorLogin, 0L, reactionGroups)
+        val push = commits.nodes.lastOrNull()?.commit?.let {
+            // Nothing to react to on a push, so it can't be acknowledged — only answered.
+            Voice(it.author?.user?.login.orEmpty().ifEmpty { authorLogin }, it.committedDate.toMillis(), null)
+        }
+        return listOfNotNull(comment, review, push).maxBy { it.at }
+    }
+
     private fun GqlNode.toItem(isPr: Boolean, viewer: String, canWrite: Boolean): Item {
         val authorLogin = author?.login.orEmpty()
         val assigned = assignees.nodes.any { it.login.isLogin(viewer) }
@@ -597,9 +648,9 @@ object GitHub {
         }
         val lastComment = comments.nodes.lastOrNull()
         val lastCommentBy = lastComment?.author?.login.orEmpty()
-        // Who spoke last. On an item nobody has answered that's whoever filed it: the body is a
-        // message waiting on a reply in exactly the way a follow-up comment is.
-        val lastVoiceBy = lastCommentBy.ifEmpty { authorLogin }
+        val lastReview = reviews.nodes.lastOrNull()
+        val lastReviewBy = lastReview?.author?.login.orEmpty()
+        val voice = lastVoice(authorLogin)
 
         /**
          * Reacting to a comment is how you say "seen". By the time you've hit 👍 you've either
@@ -607,17 +658,25 @@ object GitHub {
          * every poll is exactly the nagging this avoids. Any reaction counts, not just THUMBS_UP —
          * 🎉 or ❤️ says "seen" just as clearly, which is why `content` isn't in the query.
          *
-         * Only the two comment-derived signals below are gated on it. A review request or an
+         * Only the comment-derived signals below are gated on it. A review request or an
          * assignment is a standing obligation someone else has to clear; noticing the comment that
          * announced it doesn't discharge the work.
          */
         val acknowledged = acknowledgedBy
+        // A review on your own PR is a reply to it just as a comment is, and newer than any
+        // comment it follows. Its own reactions are what acknowledge it, not the comment's.
+        val reviewIsNewest = lastReview != null &&
+            lastReview.submittedAt.toMillis() >= lastComment?.createdAt.toMillis()
+        val reviewedMine = viewerDidAuthor && reviewIsNewest && !lastReviewBy.isLogin(viewer) &&
+            lastReviewBy.isNotEmpty() && lastReview?.reactionGroups.orEmpty().none { it.viewerHasReacted }
 
         val mentioned = lastComment != null && !acknowledged && mentionsMe(lastComment.bodyText, viewer)
         // "Someone replied on my own thread and I haven't answered." Only counts when the last
         // comment is by someone else — my own last word means the ball is in their court.
+        // A comment you already answered with a newer review doesn't count either.
         val repliedToMine = viewerDidAuthor && lastComment != null && !acknowledged &&
-            lastCommentBy.isNotEmpty() && !lastCommentBy.isLogin(viewer)
+            lastCommentBy.isNotEmpty() && !lastCommentBy.isLogin(viewer) &&
+            !(reviewIsNewest && lastReviewBy.isLogin(viewer))
 
         /**
          * The maintainer's inbox: on a repo you maintain, someone else having the last word is
@@ -628,10 +687,11 @@ object GitHub {
          * "Last word" includes the body of an item nobody has answered yet: a freshly filed issue
          * is owed a reply exactly as much as a follow-up comment is, and having none of them count
          * would hide the newest reports — the ones most likely to still matter — behind the ones
-         * that already got a conversation. [lastVoiceBy] is what makes the two the same case.
+         * that already got a conversation. [lastVoice] is what makes the two the same case, and
+         * what makes a review or a push count as a turn taken alongside comments.
          */
-        val awaitingMaintainer = canWrite && !acknowledged &&
-            lastVoiceBy.isNotEmpty() && !lastVoiceBy.isLogin(viewer)
+        val awaitingMaintainer = canWrite && !voice.acknowledged &&
+            voice.by.isNotEmpty() && !voice.by.isLogin(viewer)
 
         // Ordered by how specifically each signal says "you, now" — the first match is what the
         // UI shows as the explanation.
@@ -639,6 +699,7 @@ object GitHub {
             reviewRequested -> "review requested"
             mentioned -> "mentioned in the last comment"
             repliedToMine -> "replied to your thread"
+            reviewedMine -> "reviewed your pull request"
             assigned -> "assigned to you"
             awaitingMaintainer -> "awaiting your reply"
             else -> null
@@ -649,7 +710,7 @@ object GitHub {
             url = url,
             isPr = isPr,
             isDraft = isDraft,
-            updatedAt = runCatching { Instant.parse(updatedAt).toEpochMilli() }.getOrDefault(0L),
+            updatedAt = updatedAt.toMillis(),
             author = authorLogin,
             labels = labels.nodes.map { it.name },
             awaitingYou = reason != null,
@@ -667,7 +728,8 @@ object GitHub {
             // *suppresses* the reason, so a thread you were only ever @-mentioned in would drop
             // out of "only mine" the moment you reacted to the mention. Reacting is participation.
             involvesYou = reason != null || acknowledged || viewerDidAuthor ||
-                authorLogin.isLogin(viewer) || lastCommentBy.isLogin(viewer),
+                authorLogin.isLogin(viewer) || lastCommentBy.isLogin(viewer) ||
+                lastReviewBy.isLogin(viewer),
             reason = reason,
         )
     }
@@ -715,6 +777,8 @@ object GitHub {
         val labels: GqlLabelConn = GqlLabelConn(),
         val reviewRequests: GqlReviewConn = GqlReviewConn(),
         val comments: GqlCommentConn = GqlCommentConn(),
+        val reviews: GqlSubmittedReviewConn = GqlSubmittedReviewConn(),
+        val commits: GqlPrCommitConn = GqlPrCommitConn(),
         val reactionGroups: List<GqlReactionGroup> = emptyList(),
     ) {
         /** Only ever populated on search results; the connection form knows the type up front. */
@@ -737,9 +801,27 @@ object GitHub {
 
     @Serializable private data class GqlComment(
         val author: GqlActor? = null,
+        val createdAt: String = "",
         val bodyText: String = "",
         val reactionGroups: List<GqlReactionGroup> = emptyList(),
     )
+
+    @Serializable private data class GqlSubmittedReviewConn(val nodes: List<GqlSubmittedReview> = emptyList())
+
+    @Serializable private data class GqlSubmittedReview(
+        val author: GqlActor? = null,
+        val submittedAt: String? = null,
+        val reactionGroups: List<GqlReactionGroup> = emptyList(),
+    )
+
+    @Serializable private data class GqlPrCommitConn(val nodes: List<GqlPrCommit> = emptyList())
+
+    @Serializable private data class GqlPrCommit(val commit: GqlCommit? = null)
+
+    @Serializable private data class GqlCommit(val committedDate: String = "", val author: GqlGitActor? = null)
+
+    /** A commit's author: `user` is null when the commit's e-mail isn't linked to an account. */
+    @Serializable private data class GqlGitActor(val user: GqlActor? = null)
 
     /**
      * GitHub returns all eight groups on every comment, reacted or not, so only the flag matters —
