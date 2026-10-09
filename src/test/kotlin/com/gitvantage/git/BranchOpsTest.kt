@@ -5,6 +5,7 @@ package com.gitvantage.git
 
 import com.gitvantage.git.model.RemoteBranch
 import de.infix.testBalloon.framework.core.testSuite
+import java.io.File
 
 /** Branch mutations: switch, checkout of a remote branch, push, and local/remote delete. */
 val BranchOperations by testSuite {
@@ -131,6 +132,35 @@ val BranchOperations by testSuite {
         }
 
         // --- delete -------------------------------------------------------------------------
+
+        test("load tells a merged branch from one nothing was committed to") {
+            val work = repo()
+            git(work, "branch", "untouched")
+            git(work, "switch", "-q", "-c", "landed")
+            commit(work, "f.txt", "landed\n", "work")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            git(work, "merge", "-q", "--no-ff", "-m", "merge landed", "landed")
+
+            val branches = BranchOps.load(work.path).associateBy { it.name }
+
+            assert(branches.getValue("landed").merged)
+            assert(!branches.getValue("landed").empty)
+            assert(!branches.getValue("untouched").merged)
+            assert(branches.getValue("untouched").empty)
+        }
+
+        test("load names the worktree detached on a branch's tip") {
+            val work = repo()
+            val tree = File(root, "side")
+            git(work, "worktree", "add", "-q", "-b", "claude/side", tree.path)
+            git(tree, "checkout", "-q", "--detach")
+
+            val side = BranchOps.load(work.path).single { it.name == "claude/side" }
+
+            // Labelled, but not held: git lets a branch nobody has checked out be switched to.
+            assert(side.detachedWorktreePath == tree.path) { "got ${side.detachedWorktreePath}" }
+            assert(!side.inOtherWorktree)
+        }
 
         test("delete removes a merged branch") {
             val work = repo()

@@ -1176,6 +1176,9 @@ private fun BranchRow(
                 b.isMainline -> QuietBadge("mainline")
                 // Merged wins over stale: a branch already folded into mainline is "done", not neglected.
                 b.merged -> BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+                // Contained in mainline like a merged branch, but only because nothing was ever
+                // committed to it — "merged" would credit it with work it never had.
+                b.empty -> QuietBadge("no commits")
                 b.stale -> BranchBadge("stale", Tokens.amber, Tokens.tintAmber)
                 b.behind > 0 -> BranchBadge("behind ${b.behind}", Tokens.snoozeBtnText, Tokens.snoozeBtnBg)
                 else -> QuietBadge("up to date")
@@ -1188,6 +1191,12 @@ private fun BranchRow(
                     "Checked out in the “${b.worktreeName}” worktree (${b.worktreePath}). " +
                         "A branch can only live in one working tree, so it can't be switched to or " +
                         "deleted from here — open that worktree instead.",
+                ) { BranchBadge("in ⑂ ${b.worktreeName}", state.accent, Tokens.tintBlue) }
+            } else if (b.detachedWorktreePath != null) {
+                HoverTip(
+                    "The “${b.worktreeName}” worktree (${b.detachedWorktreePath}) is on this branch's " +
+                        "latest commit with a detached HEAD. That doesn't hold the branch, so it can " +
+                        "still be switched to or deleted from here.",
                 ) { BranchBadge("in ⑂ ${b.worktreeName}", state.accent, Tokens.tintBlue) }
             }
             if (b.ahead > 0 && !b.isMainline) Txt("↑${b.ahead}", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
@@ -1269,7 +1278,7 @@ private fun BranchRow(
                     // lost). We use -D because "merged" is measured against mainline — `git branch -d`
                     // would refuse when you're on a different branch, even though the commits are safely
                     // in mainline. An unmerged branch still needs an explicit force-delete confirmation.
-                    if (b.merged) {
+                    if (b.merged || b.empty) {
                         state.deleteBranch(id, b.name, force = true)
                     } else {
                         state.popup = Popup.Confirm(

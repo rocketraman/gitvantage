@@ -131,18 +131,75 @@ val WorktreeOperations by testSuite {
             assert(!side.branchMerged)
         }
 
-        test("a branch already contained in mainline reads as merged on the scan path") {
+        test("a branch merged into mainline reads as merged on the scan path") {
             val work = repo()
             val tree = File(root, "wt")
-            // No commits of its own, so main already contains everything on it.
             git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
 
             val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
 
             // Gates the "merged" badge and whether "Remove + branch" is offered at all, both of which
             // the table's sub-rows show — so it cannot be a detail-panel-only field.
             assert(side.branchMerged)
+            assert(!side.branchEmpty)
             assert(!side.unlanded)
+        }
+
+        test("a fast-forwarded branch still reads as merged, though its tip lies on mainline") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(work, "merge", "-q", "--ff-only", "side")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.branchMerged)
+            assert(!side.branchEmpty)
+        }
+
+        test("a branch nothing was committed to reads as empty, not merged") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            // Mainline moving on is what leaves such a branch "behind" — and still not merged.
+            commit(work, "b.txt", "later\n", "main moves on")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(!side.branchMerged)
+            assert(side.branchEmpty)
+            assert(side.verdict == "no commits") { "got ${side.verdict}" }
+            assert(!side.unlanded)
+        }
+
+        test("a tree detached on the tip of the branch named for it keeps that branch") {
+            val work = repo()
+            val tree = File(work, ".claude/worktrees/thing-1a2b3c")
+            git(work, "worktree", "add", "-q", "-b", "claude/thing-1a2b3c", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge", "claude/thing-1a2b3c")
+            git(tree, "checkout", "-q", "--detach")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.branch == null)
+            assert(side.tipBranch == "claude/thing-1a2b3c") { "got ${side.tipBranch}" }
+            assert(side.branchMerged)
+        }
+
+        test("a detached tree does not adopt a branch that merely shares its commit") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "--detach", tree.path)
+            git(work, "branch", "unrelated")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.tipBranch == null) { "got ${side.tipBranch}" }
+            assert(!side.branchMerged && !side.branchEmpty)
         }
 
         test("changes lists modified and untracked files, with a diffstat for the tracked ones") {

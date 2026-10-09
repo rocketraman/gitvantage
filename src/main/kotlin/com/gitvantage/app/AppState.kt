@@ -1959,7 +1959,8 @@ class AppState(private val scope: CoroutineScope) {
      * to delete the directory it is standing in.
      *
      * [removeBranch] also deletes the branch it held — offered only for an agent worktree whose
-     * branch has already landed, where the branch is leftover bookkeeping rather than work.
+     * branch has already landed or never held anything, where the branch is leftover bookkeeping
+     * rather than work.
      */
     fun removeWorktree(id: String, wt: Worktree, removeBranch: Boolean = false) {
         if (worktreesBusy) return
@@ -1968,7 +1969,7 @@ class AppState(private val scope: CoroutineScope) {
             val r = withContext(Dispatchers.IO) {
                 WorktreeOps.remove(
                     id, wt.path, force = wt.dirtyCount > 0, locked = wt.locked,
-                    alsoBranch = wt.branch?.takeIf { removeBranch },
+                    alsoBranch = wt.ownBranch?.takeIf { removeBranch },
                 )
             }
             toast(r.message)

@@ -21,7 +21,14 @@ data class Worktree(
     val dirtyCount: Int = 0, // uncommitted changes inside (filled in by listWithWork)
     val unmerged: Int = 0, // commits here that mainline hasn't got (ditto)
     val mainline: String? = null, // the ref [unmerged] and [branchMerged] were measured against
-    val branchMerged: Boolean = false, // its branch is fully contained in mainline (only load)
+    val branchMerged: Boolean = false, // its branch's own commits have all landed in mainline
+    // Its branch never got a commit of its own: it sits on mainline's history, at or behind the tip.
+    // git calls that "merged" too, but nothing was — see BranchOps.hasOwnWork.
+    val branchEmpty: Boolean = false,
+    // The branch a *detached* tree is still sitting on the tip of, when the folder is named for it.
+    // Sessions detach their worktree once the work is pushed, which leaves the tree and its branch
+    // unconnected as far as git is concerned while being one piece of work as far as anyone else is.
+    val tipBranch: String? = null,
     val lastRelative: String = "", // git's relative date for the worktree's HEAD commit
     val lastAuthor: String = "", // who made that commit
     // Epoch *seconds* of that commit, as git reports them. Carried alongside the relative string
@@ -32,6 +39,9 @@ data class Worktree(
     val detached get() = branch == null && !bare
     val name: String get() = File(path).name
 
+    /** The branch this tree's work belongs to: the one checked out, else the one it detached from. */
+    val ownBranch: String? get() = branch ?: tipBranch
+
     /**
      * Made by a Claude Code session rather than by hand. Those land under the repo's
      * `.claude/worktrees/` on a `claude/…` branch, and either signal alone is enough: a tree
@@ -41,7 +51,7 @@ data class Worktree(
      * which trees a session left behind and which the user made deliberately.
      */
     val agent: Boolean get() =
-        path.replace('\\', '/').contains("/.claude/worktrees/") || branch?.startsWith("claude/") == true
+        path.replace('\\', '/').contains("/.claude/worktrees/") || ownBranch?.startsWith("claude/") == true
 
     /**
      * Holds work that deleting this folder would destroy — uncommitted changes, or commits
@@ -53,13 +63,15 @@ data class Worktree(
     /**
      * How this worktree's state reads in one phrase, for the surfaces that have room for a verdict
      * and not for a row of badges (the card view's strip). Ordered by what would be lost: work
-     * still in the tree first, then commits that haven't landed, then the fact that its branch has.
+     * still in the tree first, then commits that haven't landed, then the fact that its branch has —
+     * or that there was never anything on it to land.
      */
     val verdict: String get() = when {
         missing -> "folder gone"
         dirtyCount > 0 -> "$dirtyCount uncommitted"
         unmerged > 0 && !branchMerged -> "↑$unmerged unlanded"
         branchMerged -> "merged"
+        branchEmpty -> "no commits"
         else -> "clean"
     }
 }

@@ -12,7 +12,7 @@ data class Branch(
     val isMainline: Boolean,
     val behind: Int, // commits mainline is ahead of this branch
     val ahead: Int, // commits on this branch not in mainline
-    val merged: Boolean, // fully merged into mainline
+    val merged: Boolean, // its own commits have all landed in mainline
     val stale: Boolean, // old and very behind mainline
     val lastRelative: String,
     val upstream: String?, // tracking branch short name (e.g. "origin/main"), null if none
@@ -25,12 +25,23 @@ data class Branch(
      * so this is what makes "Switch" unavailable rather than merely failing.
      */
     val worktreePath: String? = null,
+    /**
+     * A working tree sitting on this branch's tip with a detached HEAD, in a folder named for the
+     * branch. git doesn't count that as holding the branch — it can still be switched to or deleted
+     * from here — so this is a label and nothing more.
+     */
+    val detachedWorktreePath: String? = null,
+    /**
+     * No commits of its own: the branch sits on mainline's history, so there is nothing on it that
+     * could have been merged. Never true together with [merged].
+     */
+    val empty: Boolean = false,
 ) {
     /** Held by another working tree — see [worktreePath]. */
     val inOtherWorktree get() = worktreePath != null
 
-    /** Just the folder name of [worktreePath], which is how the worktree list names it too. */
-    val worktreeName get() = worktreePath?.let { File(it).name }
+    /** Just the folder name of the tree it's in, which is how the worktree list names it too. */
+    val worktreeName get() = (worktreePath ?: detachedWorktreePath)?.let { File(it).name }
 }
 
 data class RemoteBranch(
