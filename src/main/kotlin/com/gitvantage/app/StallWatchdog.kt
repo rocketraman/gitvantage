@@ -29,7 +29,8 @@ import kotlin.concurrent.thread
  *
  * Always on, because a diagnostic that has to be switched on before it can see anything is a
  * diagnostic that is off when the report arrives. It costs one empty coroutine per [INTERVAL_MS]
- * and prints nothing until something is wrong. `GITVANTAGE_STALL_MS=0` turns it off; any other
+ * and says nothing until something is wrong — and then says it through [DiagLog], so the report
+ * exists whether or not anything was attached to stderr at the time. `GITVANTAGE_STALL_MS=0` turns it off; any other
  * number sets the threshold.
  */
 object StallWatchdog {
@@ -45,6 +46,9 @@ object StallWatchdog {
      * dashboard feeling sticky would never be named.
      */
     private const val DEFAULT_THRESHOLD_MS = 500L
+
+    /** A round trip this long is recorded as sluggish — several dropped frames, short of a stall. */
+    private const val SLUGGISH_NANOS = 100_000_000L
 
     /** Giving up on a heartbeat that never comes back — a cancelled scope at shutdown, normally. */
     private const val ABANDON_MS = 30_000L
@@ -108,7 +112,7 @@ object StallWatchdog {
             // Far enough in that startup has settled, so the stall stands out from the composition
             // and class-loading work that legitimately occupies the first second or two.
             delay(DELIBERATE_STALL_AFTER_MS)
-            System.err.println(
+            DiagLog.write(
                 "GitVantage: blocking the UI thread for ${blockMs}ms on purpose " +
                     "(GITVANTAGE_DEBUG_STALL_MS is set) — the watchdog should report this",
             )
@@ -131,7 +135,11 @@ object StallWatchdog {
             }.onFailure { return }
 
             if (arrived.await(thresholdMs, TimeUnit.MILLISECONDS)) {
-                Perf.time("ui.dispatch", System.nanoTime() - sent)
+                val took = System.nanoTime() - sent
+                Perf.time("ui.dispatch", took)
+                // Below the threshold for a report and still long enough to feel: a dashboard that
+                // is "sticky" rather than frozen is a great many of these and no stall at all.
+                if (took >= SLUGGISH_NANOS) Perf.count("ui.dispatch.sluggish")
                 continue
             }
             // Still waiting, so the thread is stuck *now* — take the stack before it recovers.
@@ -157,6 +165,6 @@ object StallWatchdog {
             stack.take(STACK_FRAMES).forEach { err.append("    at ").append(it).append('\n') }
             if (stack.size > STACK_FRAMES) err.append("    … ${stack.size - STACK_FRAMES} more frames\n")
         }
-        System.err.print(err)
+        DiagLog.write(err.toString())
     }
 }

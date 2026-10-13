@@ -12,23 +12,112 @@ import de.infix.testBalloon.framework.core.testSuite
  * off, since these sit inside every `git` spawn and every filesystem event; and the maximum has to
  * survive concurrent recording, because a scan records from every repo's thread at once.
  *
- * The suite runs against whatever the environment says, so it asserts the *relationship* between
- * enabled and recorded rather than assuming either — a test that only passes with the variable set
- * is a test nobody runs.
+ * Recording is switched on and off by the suite itself, now that it can be, and left as the
+ * environment had it afterwards. The one thing that cannot be asserted from here is "off" when
+ * `GITVANTAGE_PERF=1` is exported, since that deliberately cannot be undone — so the disabled case
+ * is skipped there rather than failed.
  */
 val PerfCounters by testSuite {
 
     test("recording is a no-op when disabled, and lands when enabled") {
         Perf.reset()
+        Perf.enable(false)
+        if (!Perf.forcedOn) {
+            Perf.count("probe")
+            Perf.time("probe.timed", 1_000_000)
+            Perf.concurrent("probe.level") { }
+            val lines = Perf.report()
+            assert(lines.isEmpty()) { "recorded while disabled — this runs inside every git spawn: $lines" }
+        }
+
+        Perf.enable(true)
         Perf.count("probe")
         Perf.time("probe.timed", 1_000_000)
         val lines = Perf.report()
+        assert(lines.any { it.contains("probe.timed") }) { "nothing recorded while enabled: $lines" }
 
-        if (Perf.enabled) {
-            assert(lines.any { it.contains("probe") }) { "nothing recorded while enabled: $lines" }
-        } else {
-            assert(lines.isEmpty()) { "recorded while disabled — this runs inside every git spawn: $lines" }
+        Perf.enable(false)
+        Perf.reset()
+    }
+
+    test("what was recorded can still be read after collection is switched off") {
+        // The order people actually do it in: notice the slowness, switch off, then copy.
+        Perf.reset()
+        Perf.enable(true)
+        Perf.time("probe.kept", 2_000_000)
+        Perf.enable(false)
+
+        assert(Perf.report().any { it.contains("probe.kept") })
+        Perf.reset()
+    }
+
+    test("how long collection has run is known only while it is on") {
+        Perf.enable(false)
+        if (!Perf.forcedOn) assert(Perf.collectingSeconds() == null)
+        Perf.enable(true)
+        assert(Perf.collectingSeconds() == 0L)
+        Perf.enable(false)
+    }
+
+    test("a marked report separates the recent interval from the running total") {
+        Perf.reset()
+        Perf.enable(true)
+        Perf.time("probe.interval", 50_000_000)
+        Perf.time("probe.interval", 10_000_000)
+        Perf.report(markInterval = true)
+
+        // One more, smaller, after the mark: the total keeps the 50ms maximum, the interval must not.
+        Perf.time("probe.interval", 4_000_000)
+        val line = Perf.report(markInterval = true).single { it.contains("probe.interval") }
+        val (overall, recent) = line.split("|").map { it.trim().replace(Regex("\\s+"), " ") }
+
+        assert(overall.contains("n=3 ") && overall.contains("max= 50.0ms"))
+        assert(recent == "recent n=1 total= 4.0ms max= 4.0ms")
+
+        Perf.enable(false)
+        Perf.reset()
+    }
+
+    test("reading the report without marking leaves the interval where it was") {
+        // The clipboard report must not move the baseline the periodic dump measures from.
+        Perf.reset()
+        Perf.enable(true)
+        Perf.time("probe.unmarked", 1_000_000)
+        Perf.report()
+        Perf.report()
+        val line = Perf.report(markInterval = true).single { it.contains("probe.unmarked") }
+
+        assert(line.substringAfter("|").contains("n=1 "))
+        Perf.enable(false)
+        Perf.reset()
+    }
+
+    test("a level remembers the most that ran at once, and returns to zero") {
+        Perf.reset()
+        Perf.enable(true)
+        val inside = java.util.concurrent.CountDownLatch(4)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val threads = (1..4).map {
+            Thread { Perf.concurrent("probe.level") { inside.countDown(); release.await() } }.apply { start() }
         }
+        inside.await()
+        release.countDown()
+        threads.forEach { it.join() }
+
+        val line = Perf.report().single { it.contains("probe.level") }.trim().replace(Regex("\\s+"), " ")
+        assert(line == "probe.level peak=4 now=0")
+        Perf.enable(false)
+        Perf.reset()
+    }
+
+    test("a level is not left raised when collection is switched off mid-flight") {
+        // Enter with recording on, leave with it off: skipping the leave would strand the level at
+        // one for the rest of the session, and every later reading would be off by it.
+        Perf.reset()
+        Perf.enable(true)
+        Perf.concurrent("probe.toggle") { Perf.enable(false) }
+
+        if (!Perf.forcedOn) assert(Perf.report().single { it.contains("probe.toggle") }.trim().endsWith("now=0"))
         Perf.reset()
     }
 

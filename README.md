@@ -138,6 +138,22 @@ It's a Kotlin + Compose Desktop app on the [Nucleus](https://nucleusframework.de
 Release installers are built from a **GraalVM native image** and produced per-OS by CI on a version tag: `.deb` + `.rpm` (Linux), `.msi` (Windows), `.dmg` (macOS).
 See `.github/workflows/` for the CI (build + test on every push/PR; native installers on `v*` tags).
 
+## Reporting a slow or frozen dashboard
+
+GitVantage records every freeze of its window, with a stack trace of what it was doing, in
+`diagnostics.log` next to `registry.json`. Nothing leaves your machine unless you send it.
+
+To report a slowdown, open **Settings → Diagnostics**:
+
+1. Turn on **Collect performance data**. It is remembered across restarts.
+2. Restart GitVantage, so that startup is measured too.
+3. Use the app until it is slow again.
+4. Click **Copy diagnostics report** and paste it into an [issue](https://github.com/rocketraman/gitvantage/issues).
+
+The report holds the app version, your OS, how many repos are tracked, timings by command name and
+any freeze stack traces. It contains no paths, remotes or branch names, except that a failed folder
+watch is recorded with that folder's name.
+
 ## Support
 
 GitVantage is free and open source.

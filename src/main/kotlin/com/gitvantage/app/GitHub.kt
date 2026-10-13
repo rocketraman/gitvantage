@@ -6,6 +6,7 @@ package com.gitvantage.app
 import com.gitvantage.git.GitLog
 import com.gitvantage.git.model.OpResult
 import com.gitvantage.model.Meta
+import com.gitvantage.model.Perf
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -875,7 +876,15 @@ object GitHub {
      * Deliberately not routed through [GitLog]: that console records the mutating `git`
      * commands the user asked for, and a background poll every few minutes would bury them.
      */
-    private fun exec(args: List<String>, timeoutSeconds: Long, dir: File? = null): Run = runCatching {
+    private fun exec(args: List<String>, timeoutSeconds: Long, dir: File? = null): Run =
+        // Keyed like the git counters, on the subcommand alone: "gh.api", "gh.auth". These are
+        // network calls made on a timer for every tracked repo, so they are the first thing to
+        // look at when the app is slow only while a connection is.
+        Perf.concurrent("proc.gh") {
+            Perf.timed("gh." + (args.getOrNull(1) ?: "?")) { execNow(args, timeoutSeconds, dir) }
+        }
+
+    private fun execNow(args: List<String>, timeoutSeconds: Long, dir: File?): Run = runCatching {
         val proc = ProcessBuilder(args)
             // GH_PAGER/PAGER would make gh block forever waiting on a pager that has no tty.
             .apply { environment()["GH_PAGER"] = "cat"; environment()["PAGER"] = "cat"; environment()["GH_PROMPT_DISABLED"] = "1" }
