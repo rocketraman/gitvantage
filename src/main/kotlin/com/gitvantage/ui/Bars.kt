@@ -89,7 +89,7 @@ fun Toolbar(state: AppState) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Search field (fixed 300dp so the single Spacer right-aligns the trailing group)
+        // Search field (fixed 300dp; the fetch status below is what flexes and right-aligns the rest)
         Row(
             Modifier.width(300.dp)
                 .clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
@@ -146,19 +146,23 @@ fun Toolbar(state: AppState) {
             ),
         )
 
-        Spacer(Modifier.weight(1f))
-
-        Txt(state.fetchedLabel(), 12.sp, Tokens.muted2)
-        // Settings, still wearing the current theme's glyph — it is the appearance control people
-        // look for here, and the other two sections are things you set once.
+        // The fetch status takes whatever width is left and gives it up first. It used to follow a
+        // spacer at its full width, which left the buttons after it to absorb a narrow window —
+        // and the last of them, Add repo, is the one that then lost its label.
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            Txt(state.fetchedLabel(), 12.sp, Tokens.muted2)
+        }
+        // Settings, named and drawn as what it opens. It used to wear the current theme's glyph
+        // and name ("◐ System"), from when appearance was the only thing behind it; with tools,
+        // GitHub and diagnostics in there too, a button that reads as a theme switch hides the
+        // other three. The tooltip still reports the appearance in force.
         // Glyph *and* label, like the Console and Fetch-all buttons it sits between:
         // these buttons are a fill a single step off the toolbar's own, so it's the label that
-        // gives them a body to find. Glyph-only, this one read as an empty outline — see the note
-        // on ThemeMode for the half of that which was the sun turning into a colour emoji.
+        // gives them a body to find.
         val themeTip = "Settings — appearance is ${Theme.mode.label.lowercase()}" +
             // systemDark, not isDark — the parenthetical reports what the *desktop* asked for.
             (if (Theme.mode == ThemeMode.SYSTEM) " (${if (Theme.systemDark) "dark" else "light"})" else "") +
-            ". Light, dark and zoom, the commands \"Open in …\" runs, and GitHub polling."
+            ". Light, dark and zoom, the commands \"Open in …\" runs, GitHub polling, and diagnostics."
         HoverTip(themeTip) {
             Row(
                 Modifier.clip(RoundedCornerShape(8.dp)).background(Tokens.surface)
@@ -168,8 +172,8 @@ fun Toolbar(state: AppState) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Txt(Theme.mode.glyph, 13.sp, Tokens.text)
-                Txt(Theme.mode.short, 12.5.sp, Tokens.text, FontWeight.Bold)
+                GearIcon(Tokens.text)
+                Txt("Settings", 12.5.sp, Tokens.text, FontWeight.Bold)
             }
         }
         // Git console toggle — opens the log of git commands the app has run

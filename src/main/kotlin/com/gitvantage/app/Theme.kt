@@ -15,8 +15,6 @@ import java.util.function.Consumer
  * Which appearance the app wears. [SYSTEM] follows the desktop's own light/dark preference;
  * the other two override it and stay put.
  *
- * [short] is the toolbar button's label, [label] the picker's fuller phrasing.
- *
  * The sun is U+263C WHITE SUN WITH RAYS, **not** U+2600 BLACK SUN WITH RAYS — do not "fix" it
  * back. U+2600 carries the Unicode Emoji property, so a colour-emoji font claims it and wins the
  * fallback: it renders as a large orange emoji that ignores the requested colour, while the moon
@@ -24,10 +22,10 @@ import java.util.function.Consumer
  * button then changed visual weight drastically with its own state, and reading as good as
  * invisible in dark. U+263C is claimed only by text fonts, so all three stay consistent.
  */
-enum class ThemeMode(val key: String, val label: String, val short: String, val glyph: String) {
-    SYSTEM("system", "Match system", "System", "◐"),
-    LIGHT("light", "Light", "Light", "☼"),
-    DARK("dark", "Dark", "Dark", "☾"),
+enum class ThemeMode(val key: String, val label: String, val glyph: String) {
+    SYSTEM("system", "Match system", "◐"),
+    LIGHT("light", "Light", "☼"),
+    DARK("dark", "Dark", "☾"),
     ;
 
     companion object {
