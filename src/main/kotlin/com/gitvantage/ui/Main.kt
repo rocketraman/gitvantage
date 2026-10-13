@@ -49,7 +49,6 @@ import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiScale
 import com.gitvantage.smoke.runSmokeChecks
 import dev.nucleusframework.application.DecoratedWindow
-import dev.nucleusframework.application.NucleusBackend
 import dev.nucleusframework.application.nucleusApplication
 import dev.nucleusframework.window.NucleusDecoratedWindowTheme
 import dev.nucleusframework.window.TitleBar
@@ -115,7 +114,7 @@ private val appIcon: Painter by lazy {
 }
 
 @OptIn(FlowPreview::class)
-private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
+private fun runApp() = nucleusApplication {
     adoptContextClassLoader()
     val saved = Registry.settings()
     // Before the first frame, so the window is painted in the right theme rather than flashing
