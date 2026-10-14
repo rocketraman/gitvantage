@@ -135,4 +135,8 @@ data class Settings(
     // statement about how you use the pane, not about any one project, and having it remember per
     // repo would mean the pane's length changed as you arrowed down the list.
     val settingsExpanded: Boolean = false,
+    // Record the performance counters (see Perf) and write them to diagnostics.log. Off by default
+    // and remembered, so that someone chasing a slowdown that takes hours to appear can leave it on
+    // across restarts. GITVANTAGE_PERF=1 forces it on regardless of what is saved here.
+    val collectPerf: Boolean = false,
 )

@@ -66,6 +66,11 @@ import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** A 1px bottom hairline, like CSS `border-bottom`. */
 fun Modifier.drawBottomBorder(color: Color): Modifier = this.drawBehind {
@@ -623,6 +628,36 @@ fun Modifier.dismissOnEscape(onDismiss: () -> Unit): Modifier {
         .onPreviewKeyEvent { ev ->
             if (ev.type == KeyEventType.KeyDown && ev.key == Key.Escape) { onDismiss(); true } else false
         }
+}
+
+/**
+ * A gear, drawn rather than typed.
+ *
+ * The obvious glyph, U+2699, carries the Unicode Emoji property, so a colour-emoji font claims it
+ * and draws a blue-grey cog that ignores the colour asked for — the trap the note on `ThemeMode`
+ * describes for the sun. The sun had a text-only twin to switch to; the gear has none, and asking
+ * for text presentation with U+FE0E was tried and made no difference. Drawn, it is the same shape
+ * in the requested colour on every platform and in both themes.
+ */
+@Composable
+fun GearIcon(color: Color, size: Dp = 13.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val r = this.size.minDimension / 2f
+        val tooth = r * 0.34f
+        // Eight teeth as short radial strokes, then the body as a ring drawn over their roots.
+        for (i in 0 until 8) {
+            val angle = Math.toRadians(i * 45.0)
+            val dx = cos(angle).toFloat()
+            val dy = sin(angle).toFloat()
+            drawLine(
+                color,
+                start = Offset(center.x + dx * r * 0.55f, center.y + dy * r * 0.55f),
+                end = Offset(center.x + dx * r, center.y + dy * r),
+                strokeWidth = tooth,
+            )
+        }
+        drawCircle(color, radius = r * 0.52f, style = Stroke(width = r * 0.34f))
+    }
 }
 
 /** A small filled circle of the given diameter. */

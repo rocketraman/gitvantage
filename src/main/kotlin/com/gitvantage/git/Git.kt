@@ -151,8 +151,10 @@ object Git {
     private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result =
         // Keyed on the subcommand, not the full argument list: "status" is the useful grouping, and
         // the arguments would make a cardinality explosion out of a handful of real commands.
-        Perf.timed("git." + subcommandOf(args)) {
-            spawnNow(dir, args, timeoutSeconds, captureErr)
+        Perf.concurrent("proc.git") {
+            Perf.timed("git." + subcommandOf(args)) {
+                spawnNow(dir, args, timeoutSeconds, captureErr)
+            }
         }
 
     /**

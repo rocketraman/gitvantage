@@ -4,12 +4,16 @@
 package com.gitvantage.smoke
 
 import com.gitvantage.app.Actions
+import com.gitvantage.app.DiagSink
+import com.gitvantage.app.Diagnostics
 import com.gitvantage.app.Os
 import dev.nucleusframework.darkmodedetector.NoopDarkModeDetector
 import dev.nucleusframework.darkmodedetector.getPlatformDarkModeDetector
 import dev.nucleusframework.fswatcher.FsWatchers
 import dev.nucleusframework.notification.common.NotificationManager
+import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
 import kotlin.io.path.createTempDirectory
 import kotlin.system.exitProcess
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +75,8 @@ fun runSmokeChecks(): Int {
     checkMacOsFileChooserBridge()
     checkNotifications()
     checkOpenInTargets()
+    checkStallStackCapture()
+    checkDiagnosticsReport()
 
     val failed = results.filter { it.first == Status.FAIL }
     println()
@@ -534,4 +540,68 @@ private fun checkOpenInTargets() {
             else -> record(Status.SKIP, name, "nothing installed to handle it")
         }
     }
+}
+
+/**
+ * That one thread can read another's stack, which is the whole of what the stall watchdog reports.
+ *
+ * On a JVM this is not worth checking. In a native image it is a capability of the image rather
+ * than of the language: walking a *different* thread's stack needs that thread brought to a
+ * safepoint, and an image built without it answers with an empty array instead of an error. The
+ * watchdog would then go on reporting every stall, correctly timed, with no frames — which reads as
+ * a diagnostic that works and tells you nothing.
+ */
+private fun checkStallStackCapture() {
+    val name = "stall watchdog stack capture"
+    val parked = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val subject = Thread({ parked.countDown(); release.await() }, "gitvantage-smoke-parked")
+        .apply { isDaemon = true; start() }
+    parked.await()
+    // Until it is actually waiting, a sample can land on the frame before the park.
+    while (subject.state == Thread.State.RUNNABLE) Thread.sleep(5)
+    val stack = runCatching { subject.stackTrace }.getOrElse { emptyArray() }
+    release.countDown()
+
+    when {
+        stack.isEmpty() -> record(Status.FAIL, name, "another thread's stack came back empty — stalls would be reported with no frames")
+        stack.none { it.methodName == "await" } ->
+            record(Status.FAIL, name, "the stack has ${stack.size} frames but not the one it is parked in: ${stack.take(4)}")
+        else -> record(Status.PASS, name, "${stack.size} frames, parked in ${stack.first { it.methodName == "await" }}")
+    }
+}
+
+/**
+ * That the diagnostics report can be produced inside the image, and written where it will be read.
+ *
+ * The heap figures come from `Runtime` and are safe anywhere; the collector and thread figures come
+ * from the platform management beans, which a native image implements only in part. They are
+ * fetched defensively, so their absence is reported here rather than failed — the point is to know
+ * which lines a report from a shipped build will actually carry.
+ */
+private fun checkDiagnosticsReport() {
+    val name = "diagnostics report"
+    val vitals = runCatching { Diagnostics.vitals() }.getOrElse {
+        record(Status.FAIL, name, "vitals threw: $it")
+        return
+    }
+    if (vitals.none { it.startsWith("heap ") }) {
+        record(Status.FAIL, name, "no heap line in $vitals")
+        return
+    }
+    val dir = createTempDirectory("gitvantage-smoke-diag").toFile()
+    try {
+        val sink = DiagSink(File(dir, "diagnostics.log"))
+        sink.append("smoke\n    at one.Frame")
+        val back = sink.tail()
+        if (!back.contains("smoke") || !back.contains("at one.Frame")) {
+            record(Status.FAIL, name, "wrote an entry and read back: '${back.trim()}'")
+            return
+        }
+    } finally {
+        dir.deleteRecursively()
+    }
+    val missing = listOf("gc ", "threads ").filter { p -> vitals.none { it.startsWith(p) } }
+    val note = if (missing.isEmpty()) "" else " (not available here: ${missing.joinToString { it.trim() }})"
+    record(Status.PASS, name, "${Diagnostics.environment} · ${vitals.joinToString(" · ")}$note")
 }

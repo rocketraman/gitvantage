@@ -137,6 +137,7 @@ enum class SettingsSection(val label: String, val blurb: String) {
     APPEARANCE("Appearance", "How GitVantage looks. Applies immediately and is remembered."),
     TOOLS("External tools", "What \"Open in …\" runs. Leave blank to use the platform defaults."),
     GITHUB("GitHub", "What the dashboard polls from GitHub, for repos with a github.com remote."),
+    DIAGNOSTICS("Diagnostics", "For reporting a slow or frozen dashboard. Nothing leaves this machine unless you send it."),
 }
 
 /**
@@ -162,8 +163,13 @@ private const val SAVE_DEBOUNCE_MS = 500L
  */
 private const val ALL_REPOS = "\u0000all-repos"
 
-/** How often [AppState.startPerfReporter] prints, when `GITVANTAGE_PERF=1`. */
-private const val PERF_REPORT_MS = 30_000L
+/**
+ * How often [AppState.startPerfReporter] writes the counters out, while they are being collected.
+ *
+ * A minute, where this was thirty seconds when it only went to a terminal: it is now written to a
+ * bounded file, and the cadence is what decides how many hours of history that file holds.
+ */
+private const val PERF_REPORT_MS = 60_000L
 
 /**
  * Observable app state (README § State Management) plus the derived filtering,
@@ -351,6 +357,10 @@ class AppState(private val scope: CoroutineScope) {
      *  of the settings dialog; the per-repo Track toggle in the detail pane still wins over it. */
     var githubEnabled by mutableStateOf(Registry.settings().githubIssues)
         private set
+
+    /** Whether the perf counters are being recorded. Observable, for the switch in Settings. */
+    var perfCollecting by mutableStateOf(Registry.settings().collectPerf || Perf.forcedOn)
+        private set
     var githubMineOnly by mutableStateOf(Registry.settings().githubMineOnly)
         private set
 
@@ -462,6 +472,10 @@ class AppState(private val scope: CoroutineScope) {
         Registry.loadFailure?.let { toast(it, sticky = true) }
         startRegistryWriter()
         StallWatchdog.start(scope)
+        Perf.enable(Registry.settings().collectPerf)
+        // One line per launch, so everything after it in the log can be read against a version and
+        // a machine. Off this thread: it is the UI thread, and this touches the disk.
+        watchScope.launch { DiagLog.write("GitVantage started — ${Diagnostics.environment}") }
         startPerfReporter()
         refreshAll(fetch = false) // fast initial scan (no network)
         startAutoRefresh()
@@ -524,7 +538,7 @@ class AppState(private val scope: CoroutineScope) {
      */
     private fun reportWatchError(e: FsWatchError) {
         val kind = if (e.recoverable) "warning" else "error"
-        System.err.println(
+        DiagLog.write(
             "GitVantage: filesystem watch $kind${e.source?.name?.let { " on $it" }.orEmpty()} — ${e.message}",
         )
         if (e.recoverable || watchErrorReported) return
@@ -1317,13 +1331,58 @@ class AppState(private val scope: CoroutineScope) {
      * the user has already given up on.
      */
     private fun startPerfReporter() {
-        if (!Perf.enabled) return
+        // Started whether or not collection is on, since it can be switched on at any point; an
+        // idle timer once a minute is cheaper than starting and stopping one correctly.
         watchScope.launch {
             while (currentCoroutineContext().isActive) {
                 delay(PERF_REPORT_MS.milliseconds)
-                Perf.dump("every ${PERF_REPORT_MS / 1000}s")
+                if (Perf.enabled) dumpPerf("every ${PERF_REPORT_MS / 1000}s")
             }
         }
+    }
+
+    /** Write the counters and the process's vitals to the log as one entry, under [label]. */
+    private fun dumpPerf(label: String) {
+        val lines = Perf.report(markInterval = true)
+        if (lines.isEmpty()) return
+        DiagLog.write(
+            "GitVantage perf [$label] · ${Diagnostics.vitals().joinToString(" · ")}\n" + lines.joinToString("\n"),
+        )
+    }
+
+    /** True when `GITVANTAGE_PERF=1` is what switched collection on, so the switch can't undo it. */
+    val perfForcedOn: Boolean get() = Perf.forcedOn
+
+    /**
+     * Start or stop recording the counters, and remember the choice.
+     *
+     * Switching off writes what was gathered first — the counters are about to stop moving, and the
+     * minute since the last dump is the one that was being watched.
+     */
+    fun setPerfCollection(on: Boolean) {
+        if (on == perfCollecting) return
+        if (!on) watchScope.launch { dumpPerf("collection switched off") }
+        Perf.enable(on)
+        perfCollecting = Perf.enabled
+        Registry.saveSettings(Registry.settings().copy(collectPerf = on))
+    }
+
+    /**
+     * The report for the clipboard — see [Diagnostics.report].
+     *
+     * The inventory is read here, on the caller's (UI) thread, because [repos] is Compose state;
+     * only the assembly, which reads the log from disk, is moved off it.
+     */
+    suspend fun diagnosticsReport(): String {
+        val inventory = "${repos.size} repos · ${repos.sumOf { it.worktrees.size }} worktrees · " +
+            "GitHub polling ${if (githubEnabled) "on" else "off"}"
+        return withContext(Dispatchers.IO) { Diagnostics.report(inventory) }
+    }
+
+    /** Show the folder holding the log, for attaching the file itself rather than an excerpt. */
+    fun revealDiagnosticsLog() {
+        val dir = DiagLog.file.absoluteFile.parentFile
+        if (!Actions.openFolder(dir.path)) toast("Couldn't open ${dir.path}")
     }
 
     /** Record the current registry and ask for it to reach disk. See [persist] for the why. */
@@ -1388,7 +1447,7 @@ class AppState(private val scope: CoroutineScope) {
         Registry.recordRepos(order.mapNotNull { entries[it] })
         // On the UI thread by design (see above), so it is exactly the kind of thing worth timing.
         Perf.timed("registry.write.onClose") { Registry.flush() }
-        Perf.dump("at exit")
+        if (Perf.enabled) dumpPerf("at exit")
     }
 
     // ---- scanning ----
@@ -1459,7 +1518,7 @@ class AppState(private val scope: CoroutineScope) {
                 // Also to stderr: the app deliberately carries no logging framework, and this is
                 // the one thing worth having when someone runs it from a terminal to find out why
                 // "Add repo" did nothing.
-                System.err.println("GitVantage: the folder picker failed to open — $e")
+                DiagLog.write("GitVantage: the folder picker failed to open — $e")
                 e.printStackTrace()
                 toast("Couldn't open the folder picker: ${e.message ?: e::class.simpleName}")
                 return@launch

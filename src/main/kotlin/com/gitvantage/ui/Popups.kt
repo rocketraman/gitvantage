@@ -66,6 +66,15 @@ import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
 import com.gitvantage.model.Meta
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import com.gitvantage.app.DiagLog
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 /** Dispatches [AppState.popup] to the right modal. */
 @Composable
@@ -268,6 +277,7 @@ private fun SettingsPopup(state: AppState, section: SettingsSection) {
                     SettingsSection.APPEARANCE -> AppearanceSection(state, dismiss)
                     SettingsSection.TOOLS -> ToolsSection(state, dismiss)
                     SettingsSection.GITHUB -> GitHubSection(state)
+                    SettingsSection.DIAGNOSTICS -> DiagnosticsSection(state)
                 }
             }
         }
@@ -433,6 +443,96 @@ private fun GitHubSection(state: AppState) {
             PresetPill("By default", state.githubEnabled, state.accent) { state.setIssuePolling(true) }
             PresetPill("Never", !state.githubEnabled, state.accent) { state.setIssuePolling(false) }
         }
+    }
+}
+
+/**
+ * What to do when the dashboard is slow: collect, reproduce, copy.
+ *
+ * The copy button is the reason this section exists. The app has always known why it stalled — the
+ * watchdog names the frame — but said so on stderr, which someone who launched from a dock cannot
+ * see and cannot be walked through redirecting. This is the same information one click from a
+ * paste.
+ *
+ * Collection is a switch rather than always on only because of what it writes: a block of counters
+ * a minute, which is the right thing to have for a day and noise to have for a year. Stalls are
+ * recorded either way, so the report is worth copying even with this off.
+ */
+@Composable
+private fun DiagnosticsSection(state: AppState) {
+    Column(
+        Modifier.padding(horizontal = 18.dp).padding(bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Collect performance data", 12.5.sp, Tokens.text, FontWeight.SemiBold)
+            InfoTip(
+                "Times every git and gh command, every scan and every file-change burst, and " +
+                    "writes the totals to ${DiagLog.file.name} once a minute. Turn it on, use the " +
+                    "app until it is slow again, then copy the report. Freezes of the window are " +
+                    "recorded whether this is on or not.",
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            PresetPill("Off", !state.perfCollecting, state.accent, dimmed = state.perfForcedOn) {
+                state.setPerfCollection(false)
+            }
+            PresetPill("On", state.perfCollecting, state.accent) { state.setPerfCollection(true) }
+            if (state.perfForcedOn) Txt("· set by GITVANTAGE_PERF", 11.sp, Tokens.muted2)
+        }
+        Row(
+            Modifier.padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CopyReportPill(state)
+            FlatAction("Show log folder", size = 12.sp) { state.revealDiagnosticsLog() }
+        }
+        Txt(
+            "The report holds the app version, your OS, how many repos are tracked, timings by " +
+                "command name, and stack traces of any freezes. No paths, remotes or branch names — " +
+                "though a failed folder watch is recorded with that folder's name.",
+            11.sp, Tokens.muted2, maxLines = 6,
+        )
+    }
+}
+
+/**
+ * [CopyPill], for a value that has to be built first.
+ *
+ * The report reads the log from disk, so it is assembled off the UI thread and only then put on the
+ * clipboard — a diagnostics button that froze the window to produce its report would be reporting
+ * on itself.
+ */
+@Composable
+private fun CopyReportPill(state: AppState) {
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier.clip(shape)
+            .background(if (copied) Tokens.tintGreen else Tokens.tintBlue, shape)
+            .border(1.dp, if (copied) Tokens.okBorder else Tokens.accentBorder, shape)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onTap {
+                scope.launch {
+                    clipboard.setText(AnnotatedString(state.diagnosticsReport()))
+                    copied = true
+                }
+            }
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Txt(if (copied) "✓ Copied" else "⧉ Copy diagnostics report", 11.5.sp,
+            if (copied) Tokens.addFg else Tokens.accent, FontWeight.SemiBold)
     }
 }
 
