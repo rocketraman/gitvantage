@@ -116,6 +116,23 @@ sealed interface Popup {
     data class Settings(val section: SettingsSection = SettingsSection.APPEARANCE) : Popup {
         override val ids: Set<String> = emptySet()
     }
+
+    /**
+     * A [Confirm] with one checkbox, for a destructive action with an optional extra reach — the
+     * worktree "Remove + branch" that can also delete the remote branch. The box is in the dialog,
+     * not a second button on the row, so the choice is stated where the consequences are.
+     */
+    data class ConfirmWithOption(
+        val title: String,
+        val message: String,
+        val option: String,
+        val optionDefault: Boolean,
+        val confirmLabel: (Boolean) -> String,
+        val danger: Boolean,
+        val onConfirm: (Boolean) -> Unit,
+    ) : Popup {
+        override val ids: Set<String> = emptySet()
+    }
     data class Confirm(
         val title: String,
         val message: String,
@@ -2019,9 +2036,10 @@ class AppState(private val scope: CoroutineScope) {
      *
      * [removeBranch] also deletes the branch it held — offered only for an agent worktree whose
      * branch has already landed or never held anything, where the branch is leftover bookkeeping
-     * rather than work.
+     * rather than work. [removeUpstream] takes its remote branch with it too, when
+     * [Worktree.deletableUpstream] says that's safe.
      */
-    fun removeWorktree(id: String, wt: Worktree, removeBranch: Boolean = false) {
+    fun removeWorktree(id: String, wt: Worktree, removeBranch: Boolean = false, removeUpstream: Boolean = false) {
         if (worktreesBusy) return
         worktreesBusy = true
         scope.launch {
@@ -2029,6 +2047,7 @@ class AppState(private val scope: CoroutineScope) {
                 WorktreeOps.remove(
                     id, wt.path, force = wt.dirtyCount > 0, locked = wt.locked,
                     alsoBranch = wt.ownBranch?.takeIf { removeBranch },
+                    alsoUpstream = wt.deletableUpstream?.takeIf { removeBranch && removeUpstream },
                 )
             }
             toast(r.message)
@@ -2279,6 +2298,23 @@ class AppState(private val scope: CoroutineScope) {
             toast(result.message)
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
+        }
+    }
+
+    /**
+     * Delete a merged branch together with its upstream (see [BranchOps.deleteWithUpstream]).
+     * Shares [deletingRemoteBranch] with the remote list's delete: it's the same network round
+     * trip, and both rows for the pair then say "Deleting…".
+     */
+    fun deleteBranchWithUpstream(id: String, name: String, upstream: String) {
+        if (deletingRemoteBranch != null) return
+        deletingRemoteBranch = upstream
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.deleteWithUpstream(id, name, upstream) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            deletingRemoteBranch = null
         }
     }
 

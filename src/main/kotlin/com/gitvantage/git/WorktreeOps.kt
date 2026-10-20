@@ -27,9 +27,8 @@ import kotlinx.coroutines.withContext
  *
  * Everything is read on the scan path because the *list* views show it now, not only the panel:
  * a worktree is a sub-row under its repo, and that row's badges are "3 modified", "↑2 vs main",
- * "merged", its right-hand column is "2 hours ago · Ada Okafor", and whether its branch has landed
- * is what decides if "Remove + branch" is offered at all. A lazily-loaded field would mean a row
- * that silently omits a badge and hides an action until something else happened to open the pane.
+ * "merged", and its right-hand column is "2 hours ago · Ada Okafor". A lazily-loaded field would
+ * mean a row that silently omits a badge until something else happened to open the pane.
  *
  * That makes a repo with linked worktrees about twice the scan it used to be. It buys the four
  * questions the row asks, it is bounded by the number of worktrees the repo actually has, and it is
@@ -170,6 +169,7 @@ object WorktreeOps {
                 branchMerged = merged,
                 branchEmpty = contained && !merged,
                 tipBranch = tipBranch,
+                deletableUpstream = if (merged) BranchOps.deletableUpstream(dir, own!!) else null,
             )
         }
     }
@@ -263,6 +263,11 @@ object WorktreeOps {
      * only offers this for a branch it has already seen land, and if that changed underneath us
      * the branch survives and the message says so. Removal itself still counts as success — the
      * folder is gone either way, and reporting failure would invite a retry that can't help.
+     *
+     * [alsoUpstream] (only alongside [alsoBranch]) deletes the branch's remote counterpart as well,
+     * leased the way [BranchOps.deleteUpstreamLeased] describes. It goes before the local branch so
+     * the local `-d` still has the tracking ref around to be checked against. If the remote refuses,
+     * the rest still happens: the remote branch stays in the remote list, deletable from there.
      */
     suspend fun remove(
         runFrom: String,
@@ -270,6 +275,7 @@ object WorktreeOps {
         force: Boolean,
         locked: Boolean,
         alsoBranch: String? = null,
+        alsoUpstream: String? = null,
     ): OpResult = withContext(Dispatchers.IO) {
         val dir = File(runFrom)
         val args = buildList {
@@ -284,12 +290,22 @@ object WorktreeOps {
         val name = File(path).name
         tidyAgentParent(path)
         if (alsoBranch == null) return@withContext OpResult(runFrom, true, "Removed worktree $name")
+        val upstreamRes = alsoUpstream?.let { BranchOps.deleteUpstreamLeased(dir, it) }
         val branchRes = Git.run(dir, listOf("branch", "-d", alsoBranch))
-        OpResult(
-            runFrom, true,
-            if (branchRes.ok) "Removed worktree $name and branch $alsoBranch"
-            else "Removed worktree $name — branch kept: ${branchRes.firstError("delete failed")}",
-        )
+        val removed = buildList {
+            add("worktree $name")
+            if (branchRes.ok) add("branch $alsoBranch")
+            if (upstreamRes?.ok == true) add(alsoUpstream)
+        }
+        val kept = buildList {
+            if (!branchRes.ok) add("branch kept: ${branchRes.firstError("delete failed")}")
+            if (upstreamRes?.ok == false) add("$alsoUpstream kept: ${upstreamRes.firstError("remote delete failed")}")
+        }
+        val said = "Removed " + when (removed.size) {
+            1 -> removed[0]
+            else -> removed.dropLast(1).joinToString(", ") + " and " + removed.last()
+        }
+        OpResult(runFrom, true, if (kept.isEmpty()) said else "$said — ${kept.joinToString("; ")}")
     }
 
     /**
