@@ -216,6 +216,56 @@ object BranchOps {
             else OpResult(repoPath, false, res.firstError("remote delete failed"))
         }
 
+    /**
+     * Delete a local branch *and* the remote branch it tracks, for a branch whose work has landed
+     * — the clean-up after a merged PR, which otherwise takes two deletes in two lists.
+     *
+     * The remote goes first, because it's the half that can fail (network, permissions, a
+     * protected branch): if it does, the local branch is left alone and the whole thing can just be
+     * tried again. Deleting local first would strand the remote branch with nothing on this side
+     * left to offer the retry from.
+     *
+     * The remote delete carries a lease on the tip we last fetched. The caller only offers this
+     * when that tip had nothing the local branch lacks, but the fetch may be old — if someone has
+     * pushed to the branch since, git refuses the delete instead of throwing their commits away.
+     */
+    suspend fun deleteWithUpstream(repoPath: String, name: String, upstream: String): OpResult =
+        withContext(Dispatchers.IO) {
+            val dir = File(repoPath)
+            val pushed = deleteUpstreamLeased(dir, upstream)
+            if (!pushed.ok) return@withContext OpResult(repoPath, false, pushed.firstError("remote delete failed"))
+            val local = Git.run(dir, listOf("branch", "-D", name))
+            if (local.ok) OpResult(repoPath, true, "Deleted $name and $upstream")
+            else OpResult(repoPath, false, "Deleted $upstream, but not $name: ${local.firstError("delete failed")}")
+        }
+
+    /**
+     * `git push <remote> --delete refs/heads/<branch>` for [upstream] (e.g. "origin/foo"), leased on
+     * the tip last fetched into `refs/remotes/<upstream>`: a branch someone pushed to since is
+     * refused rather than deleted. Shared by [deleteWithUpstream] and the worktree "Remove + branch".
+     */
+    internal fun deleteUpstreamLeased(dir: File, upstream: String): Git.Result {
+        val ref = "refs/heads/${upstream.substringAfter('/')}"
+        val seen = Git.read(dir, "rev-parse", "--verify", "-q", "refs/remotes/$upstream").trim()
+        val lease = if (seen.isNotEmpty()) "--force-with-lease=$ref:$seen" else "--force-with-lease"
+        return Git.run(dir, listOf("push", lease, upstream.substringBefore('/'), "--delete", ref), Git.NETWORK_TIMEOUT)
+    }
+
+    /**
+     * The upstream of local [branch] when deleting it on the remote loses nothing *beyond* the local
+     * branch: it still exists, has no commits [branch] lacks (so if [branch] is merged, so is it),
+     * and isn't a shared integration branch. Null otherwise, and for a branch with no upstream.
+     */
+    internal fun deletableUpstream(dir: File, branch: String): String? {
+        val (upstream, track) = Git.read(
+            dir, "for-each-ref", "--format=%(upstream:short)$SEP%(upstream:track)", "refs/heads/$branch",
+        ).trim().split(SEP).let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+        if (upstream.isEmpty() || !upstream.contains('/')) return null
+        val (_, behind, gone) = parseTrack(track)
+        if (gone || behind > 0 || Meta.isIntegrationBranch(upstream.substringAfter('/'))) return null
+        return upstream
+    }
+
     /** Parse git's `%(upstream:track)` — "[ahead 2, behind 1]", "[gone]", or "". */
     private fun parseTrack(track: String): Triple<Int, Int, Boolean> {
         if ("gone" in track) return Triple(0, 0, true)

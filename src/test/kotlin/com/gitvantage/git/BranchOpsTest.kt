@@ -238,5 +238,43 @@ val BranchOperations by testSuite {
             assert(!result.message.startsWith("remote:"))
             assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", Sandbox.MAIN) == 0)
         }
+
+        // --- deleteWithUpstream -------------------------------------------------------------
+
+        test("deleteWithUpstream removes both the local branch and its remote branch") {
+            val work = repo()
+            git(work, "switch", "-q", "-c", "feature")
+            commit(work, "f.txt", "mine\n", "feature work")
+            git(work, "push", "-q", "-u", "origin", "feature")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            git(work, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+
+            val result = BranchOps.deleteWithUpstream(work.path, "feature", "origin/feature")
+
+            assert(result.ok)
+            assert(result.message == "Deleted feature and origin/feature")
+            assert("feature" !in branches(work))
+            assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "feature") != 0)
+            assert(gitAllowingFailure(work, "rev-parse", "--verify", "-q", "refs/remotes/origin/feature") != 0)
+        }
+
+        test("deleteWithUpstream keeps both when someone pushed to the remote since the last fetch") {
+            val work = repo()
+            git(work, "switch", "-q", "-c", "feature")
+            commit(work, "f.txt", "mine\n", "feature work")
+            git(work, "push", "-q", "-u", "origin", "feature")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            val other = clone(originOf(work), "other")
+            git(other, "switch", "-q", "feature")
+            commit(other, "g.txt", "theirs\n", "their follow-up")
+            git(other, "push", "-q", "origin", "feature")
+
+            val result = BranchOps.deleteWithUpstream(work.path, "feature", "origin/feature")
+
+            assert(!result.ok)
+            // Their commit survives on the remote, and the local branch is still here to retry from.
+            assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "feature") == 0)
+            assert("feature" in branches(work))
+        }
     }
 }

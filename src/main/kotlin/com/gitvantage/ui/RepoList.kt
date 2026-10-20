@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gitvantage.app.AppState
@@ -113,21 +115,26 @@ private fun EmptyState(registryEmpty: Boolean, onAdd: () -> Unit) {
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun TableView(state: AppState, groups: List<RepoGroup>) {
+private fun TableView(state: AppState, groups: List<RepoGroup>) = BoxWithConstraints(Modifier.fillMaxSize()) {
+    // The name column's width, decided once for the whole table so a repo row and its worktree
+    // sub-rows keep one column edge between them. A share of the table rather than a fixed width:
+    // on a wide window the names — long `claude/…` branch names especially — are what's worth the
+    // room, and the badge and last-commit columns already had more slack than they could use.
+    val nameWidth = (maxWidth * NAME_SHARE).coerceIn(NAME_MIN, NAME_MAX)
     LazyColumn(Modifier.fillMaxSize()) {
         groups.forEach { group ->
             if (group.showHeader) {
                 stickyHeader(key = "h-${group.nsLabel}-${group.name}") { GroupHeaderTable(group) }
             }
             group.repos.forEach { rv ->
-                item(key = "${group.name}-${rv.id}") { RepoRow(state, rv) }
+                item(key = "${group.name}-${rv.id}") { RepoRow(state, rv, nameWidth) }
                 // Sub-rows are separate list items rather than a Column inside the parent's row, so
                 // a repo with a dozen worktrees doesn't build a dozen rows' worth of layout to
                 // scroll past off-screen — the same reason the parents are items and not one Column.
                 if (state.worktreeRowsOpen(rv.id)) {
                     rv.worktrees.forEach { wtv ->
                         item(key = "${group.name}-${rv.id}-${wtv.path}") {
-                            WorktreeSubRow(state, rv, wtv, barWidth(state))
+                            WorktreeSubRow(state, rv, wtv, barWidth(state), nameWidth - WORKTREE_INDENT)
                         }
                     }
                 }
@@ -135,6 +142,19 @@ private fun TableView(state: AppState, groups: List<RepoGroup>) {
         }
     }
 }
+
+/** The table's name column: [NAME_SHARE] of its width, within these bounds. */
+private const val NAME_SHARE = 0.3f
+private val NAME_MIN = 262.dp
+private val NAME_MAX = 560.dp
+
+/**
+ * How much narrower a worktree sub-row's name column is than its repo's: the sub-row's name starts
+ * further right, and this is what's left of that once the two rows' leading pieces are summed, so
+ * the badge columns start on one edge. Measured on screen, at 1× — it was 24 when both widths were
+ * fixed, which left the sub-row's badges 16dp left of the repo's.
+ */
+private val WORKTREE_INDENT = 8.dp
 
 /** The row accent bar's width, which the sub-rows continue. */
 private fun barWidth(state: AppState) = if (state.emphasis == Emphasis.SUBTLE) 2f else 3f
@@ -156,7 +176,7 @@ private fun GroupHeaderTable(group: RepoGroup) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun RepoRow(state: AppState, rv: RepoView) {
+private fun RepoRow(state: AppState, rv: RepoView, nameWidth: Dp) {
     val selected = rv.id == state.selectedId
     val checked = rv.id in state.bulkSelected
     val rowBg = when {
@@ -184,11 +204,11 @@ private fun RepoRow(state: AppState, rv: RepoView) {
         Box(Modifier.width(12.dp), contentAlignment = Alignment.CenterStart) {
             StatusDot(rv.accent, 9)
         }
-        // Name stays tight on the left; the badges and last-commit columns share the row's slack by
-        // weight, so on wide windows the space sits as one balanced center gap rather than a single
-        // huge empty box — and the last-commit column is wide enough to never truncate.
+        // Name takes its share of the table (see TableView); the badges and last-commit columns
+        // split what's left by weight, so the remaining space sits as one balanced center gap rather
+        // than a single huge empty box — and the last-commit column is wide enough to never truncate.
         // Col 2 — name / branch / tags
-        Column(Modifier.width(262.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.width(nameWidth), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Txt(rv.repo.name, 13.5.sp, Tokens.text, FontWeight.Bold, modifier = Modifier.weight(1f, fill = false))
                 // Only where there is something to disclose. A chevron on every repo would promise a

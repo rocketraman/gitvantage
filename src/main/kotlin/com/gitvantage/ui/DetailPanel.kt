@@ -1156,6 +1156,14 @@ private fun BranchRow(
         else -> null
     }
     val pushing = state.pushingBranch == b.name
+    // The upstream to take down with the branch, when that loses nothing: the branch is merged, and
+    // its upstream has no commits the branch lacks — so the upstream is merged too. Off for the
+    // shared branches the remote list won't delete either, and for an upstream already gone.
+    val deletableUpstream = b.upstream?.takeIf {
+        canDelete && hasRemote && b.merged && !b.upstreamGone && b.upstreamBehind == 0 &&
+            !Meta.isIntegrationBranch(it.substringAfter('/'))
+    }
+    val deletingUpstream = deletableUpstream != null && state.deletingRemoteBranch == deletableUpstream
     HoverRow { hovered ->
         // Line 1: branch name · mainline-relationship badge · ahead-of-mainline
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1286,6 +1294,19 @@ private fun BranchRow(
                             "It has ${b.ahead} unmerged commit${if (b.ahead == 1) "" else "s"} — force-deleting discards them.",
                             "Force delete", danger = true,
                         ) { state.deleteBranch(id, b.name, force = true) }
+                    }
+                }
+                // The after-a-merged-PR clean-up in one click rather than a delete in each list.
+                // No prompt, for the same reason neither half has one on its own: both are merged.
+                if (deletableUpstream != null) {
+                    HoverTip(
+                        "Deletes “${b.name}” here and “$deletableUpstream” on the remote. Both are " +
+                            "already in mainline, so nothing is lost — and if someone has pushed to " +
+                            "it since your last fetch, the remote refuses and both stay.",
+                    ) {
+                        RowAction(if (deletingUpstream) "Deleting…" else "Delete both", danger = true) {
+                            if (!deletingUpstream) state.deleteBranchWithUpstream(id, b.name, deletableUpstream)
+                        }
                     }
                 }
             }

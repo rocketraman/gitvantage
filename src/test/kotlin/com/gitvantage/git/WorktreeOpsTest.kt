@@ -140,8 +140,7 @@ val WorktreeOperations by testSuite {
 
             val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
 
-            // Gates the "merged" badge and whether "Remove + branch" is offered at all, both of which
-            // the table's sub-rows show — so it cannot be a detail-panel-only field.
+            // Gates the "merged" badge, which the table's sub-rows show — so it cannot be a detail-panel-only field.
             assert(side.branchMerged)
             assert(!side.branchEmpty)
             assert(!side.unlanded)
@@ -245,6 +244,81 @@ val WorktreeOperations by testSuite {
             assert(result.ok)
             assert(result.message == "Pruned stale worktree entries")
             assert(WorktreeOps.list(work.path).size == 1)
+        }
+
+        // --- the remote branch alongside "Remove + branch" ----------------------------------
+
+        test("a merged worktree branch with a pushed upstream offers that upstream for deletion") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(tree, "push", "-q", "-u", "origin", "side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.deletableUpstream == "origin/side")
+        }
+
+        test("an upstream with commits the local branch lacks is not offered") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(tree, "push", "-q", "-u", "origin", "side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+            val other = clone(originOf(work), "other")
+            git(other, "switch", "-q", "side")
+            commit(other, "g.txt", "theirs\n", "their follow-up")
+            git(other, "push", "-q", "origin", "side")
+            git(work, "fetch", "-q")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+
+            assert(side.branchMerged)
+            assert(side.deletableUpstream == null)
+        }
+
+        test("remove with alsoUpstream deletes the worktree, its branch and the remote branch") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(tree, "push", "-q", "-u", "origin", "side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+
+            val result = WorktreeOps.remove(
+                work.path, tree.path, force = false, locked = false, alsoBranch = "side", alsoUpstream = "origin/side",
+            )
+
+            assert(result.ok)
+            assert(result.message == "Removed worktree wt, branch side and origin/side")
+            assert(!tree.exists())
+            assert("side" !in branches(work))
+            assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "side") != 0)
+        }
+
+        test("remove keeps a remote branch someone pushed to since the last fetch, and says so") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(tree, "push", "-q", "-u", "origin", "side")
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+            val other = clone(originOf(work), "other")
+            git(other, "switch", "-q", "side")
+            commit(other, "g.txt", "theirs\n", "their follow-up")
+            git(other, "push", "-q", "origin", "side")
+
+            val result = WorktreeOps.remove(
+                work.path, tree.path, force = false, locked = false, alsoBranch = "side", alsoUpstream = "origin/side",
+            )
+
+            assert(result.ok)
+            assert("origin/side kept" in result.message)
+            assert("side" !in branches(work))
+            assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "side") == 0)
         }
     }
 }

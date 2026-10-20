@@ -37,6 +37,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -84,7 +85,7 @@ import com.gitvantage.model.WorktreeChange
  * remote.
  */
 @Composable
-fun WorktreeSubRow(state: AppState, rv: RepoView, wtv: WorktreeView, barWidth: Float) {
+fun WorktreeSubRow(state: AppState, rv: RepoView, wtv: WorktreeView, barWidth: Float, nameWidth: Dp) {
     val wt = wtv.wt
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
@@ -103,7 +104,7 @@ fun WorktreeSubRow(state: AppState, rv: RepoView, wtv: WorktreeView, barWidth: F
         StatusDot(wtv.accent, 8)
         // Identity: the branch is the name, the folder is the footnote — the inverse of the old
         // worktree row, where a generated slug like "fix-rounding-9f3ab2" was the headline.
-        Column(Modifier.width(238.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(Modifier.width(nameWidth), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Txt("⑂ ${wtv.label}", 12.5.sp, Tokens.text, FontWeight.SemiBold, font = MonoFont)
             PathTip(wt.path) { Txt(shortPath(wt.path), 10.5.sp, Tokens.muted2, font = MonoFont) }
         }
@@ -125,9 +126,8 @@ fun WorktreeSubRow(state: AppState, rv: RepoView, wtv: WorktreeView, barWidth: F
                     RowAction("Log") { state.openWorktreeLog(wt.path) }
                     RowAction("Terminal") { state.openTerminal(wt.path) }
                 }
-                if (canRemoveWithBranch(wt)) {
-                    RowAction("Remove + branch", danger = true) { confirmRemove(state, rv, wt, alsoBranch = true) }
-                }
+                // No "Remove + branch" here: deleting a branch — and maybe its remote — is a call to
+                // make with the card open, looking at the branch, not from a lane a pass-over reveals.
             }
             WorktreeSnoozeChip(rv, wtv)
         }
@@ -359,7 +359,7 @@ private fun WorktreeCard(state: AppState, rv: RepoView, wtv: WorktreeView) {
             if (!state.worktreesBusy && !wt.missing) {
                 RowAction("Remove", danger = true) { confirmRemove(state, rv, wt, alsoBranch = false) }
                 if (canRemoveWithBranch(wt)) {
-                    RowAction("Remove + branch", danger = true) { confirmRemove(state, rv, wt, alsoBranch = true) }
+                    RemoveWithBranchAction(state, rv, wt)
                 }
             }
         }
@@ -627,8 +627,45 @@ private fun WorktreeSnoozeChip(rv: RepoView, wtv: WorktreeView, size: Int = 27) 
 private fun canRemoveWithBranch(wt: Worktree) =
     wt.agent && (wt.branchMerged || wt.branchEmpty) && wt.ownBranch != null && !wt.missing
 
+/**
+ * "Remove + branch", or "Remove + branch + origin" when the remote branch can go too — the remote
+ * named in the label, because reaching the server is the part that shouldn't be a surprise. The
+ * dialog still has the box to leave it out.
+ */
+@Composable
+private fun RemoveWithBranchAction(state: AppState, rv: RepoView, wt: Worktree) {
+    val upstream = wt.deletableUpstream
+    HoverTip(
+        if (upstream != null) {
+            "Deletes this folder and the branch “${wt.ownBranch}” — and offers to delete " +
+                "“$upstream” on the remote too, since it's merged as well."
+        } else {
+            "Deletes this folder and the branch “${wt.ownBranch}”."
+        },
+    ) {
+        RowAction(if (upstream != null) "Remove + branch + ${upstream.substringBefore('/')}" else "Remove + branch", danger = true) {
+            confirmRemove(state, rv, wt, alsoBranch = true)
+        }
+    }
+}
+
 private fun confirmRemove(state: AppState, rv: RepoView, wt: Worktree, alsoBranch: Boolean) {
     val branch = wt.ownBranch?.takeIf { alsoBranch }
+    // The branch has a remote counterpart that's merged too: offer to take it as well, ticked —
+    // after a merged PR that's what's wanted — but as a box in the dialog, because unlike the rest
+    // this reaches the server, and it should be seen being agreed to.
+    val upstream = wt.deletableUpstream?.takeIf { branch != null }
+    if (branch != null && upstream != null) {
+        state.popup = AppPopup.ConfirmWithOption(
+            "Remove worktree “$branch” and its branch?",
+            removeWorktreeDetail(wt, alsoBranch = branch),
+            "Also delete “$upstream” on ${upstream.substringBefore('/')} — it's merged too",
+            optionDefault = true,
+            confirmLabel = { if (it) "Remove all" else "Remove both" },
+            danger = true,
+        ) { alsoUpstream -> state.removeWorktree(rv.id, wt, removeBranch = true, removeUpstream = alsoUpstream) }
+        return
+    }
     state.popup = AppPopup.Confirm(
         if (branch != null) "Remove worktree “$branch” and its branch?" else "Remove worktree “${wt.ownBranch ?: wt.name}”?",
         removeWorktreeDetail(wt, alsoBranch = branch),

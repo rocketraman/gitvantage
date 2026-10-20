@@ -89,6 +89,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
         is Popup.Confirm -> ConfirmPopup(state, popup)
+        is Popup.ConfirmWithOption -> ConfirmWithOptionPopup(state, popup)
         is Popup.Settings -> SettingsPopup(state, popup.section)
     }
 }
@@ -679,6 +680,30 @@ private fun ConfirmPopup(state: AppState, p: Popup.Confirm) {
             ModalButtons({ state.popup = null }, p.confirmLabel, true, p.danger) {
                 state.popup = null
                 p.onConfirm()
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfirmWithOptionPopup(state: AppState, p: Popup.ConfirmWithOption) {
+    var checked by remember(p) { mutableStateOf(p.optionDefault) }
+    Modal({ state.popup = null }) {
+        ModalHeader(p.title, p.message)
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                Modifier.onTap { checked = !checked },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectBox(checked = checked)
+                // Wraps rather than truncating: the option names a ref, and agent branch names are
+                // long enough that one line would cut off the half saying where it's deleted.
+                Txt(p.option, 12.sp, Tokens.text2, maxLines = 3, modifier = Modifier.weight(1f))
+            }
+            ModalButtons({ state.popup = null }, p.confirmLabel(checked), true, p.danger) {
+                state.popup = null
+                p.onConfirm(checked)
             }
         }
     }

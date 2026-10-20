@@ -29,6 +29,9 @@ data class Worktree(
     // Sessions detach their worktree once the work is pushed, which leaves the tree and its branch
     // unconnected as far as git is concerned while being one piece of work as far as anyone else is.
     val tipBranch: String? = null,
+    // The remote branch [ownBranch] tracks, when [branchMerged] and deleting it too loses nothing —
+    // see BranchOps.deletableUpstream. What lets "Remove + branch" offer to clean up the remote too.
+    val deletableUpstream: String? = null,
     val lastRelative: String = "", // git's relative date for the worktree's HEAD commit
     val lastAuthor: String = "", // who made that commit
     // Epoch *seconds* of that commit, as git reports them. Carried alongside the relative string
