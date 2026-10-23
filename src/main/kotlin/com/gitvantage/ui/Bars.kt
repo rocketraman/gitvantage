@@ -276,7 +276,7 @@ fun StatusBar(state: AppState) {
     // key, label, and the hover explanation of what the filter selects.
     val chips = listOf(
         Triple("all", "All", "Every tracked repository."),
-        Triple("dirty", "Dirty", "Repos with uncommitted changes — staged, modified, or untracked files."),
+        Triple("dirty", "Dirty", "Repos with uncommitted changes — staged, modified, or untracked files — in the main checkout or any of its worktrees."),
         Triple("aging", "Aging", "Repos whose uncommitted changes have been sitting for over 24 hours."),
         Triple("unpushed", "Unpushed", "Repos with local commits that haven't been pushed to their upstream yet."),
         Triple("behind", "Behind", "Repos whose branch is behind its upstream — there are commits to pull in."),

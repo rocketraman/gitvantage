@@ -2770,7 +2770,7 @@ class AppState(private val scope: CoroutineScope) {
         val vms = views()
         return mapOf(
             "all" to vms.size,
-            "dirty" to vms.count { it.isDirty },
+            "dirty" to vms.count { it.dirtyAnywhere },
             "aging" to vms.count { it.aging },
             "unpushed" to vms.count { it.ahead > 0 },
             "behind" to vms.count { it.repo.behind > 0 },
@@ -2803,7 +2803,7 @@ class AppState(private val scope: CoroutineScope) {
         entries[id]?.addedAt?.let { System.currentTimeMillis() - it.toEpochMilli() < Meta.RECENT_MS } ?: false
 
     private fun statusPredicate(v: RepoView): Boolean = when (status) {
-        "dirty" -> v.isDirty
+        "dirty" -> v.dirtyAnywhere
         "aging" -> v.aging
         "unpushed" -> v.ahead > 0
         "behind" -> v.repo.behind > 0

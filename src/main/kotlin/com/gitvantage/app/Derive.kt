@@ -205,6 +205,14 @@ data class RepoView(
      * [Repo.worktreesUnlanded] counts folders; this counts the ones still allowed to speak up.
      */
     val worktreesUnlanded get() = worktrees.count { it.rollsUp }
+
+    /**
+     * Uncommitted changes in this checkout or in any of its linked worktrees — what the Dirty
+     * filter selects. Kept apart from [isDirty], which stays about this checkout alone because it
+     * drives the row's badges and its Commit button, and neither of those can act on another folder.
+     * Read raw like [isDirty]: a snooze silences alerts, it doesn't make a tree clean.
+     */
+    val dirtyAnywhere get() = isDirty || worktrees.any { it.wt.dirtyCount > 0 }
 }
 
 /** Contextual primary action pill. */
