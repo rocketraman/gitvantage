@@ -250,7 +250,7 @@ fun deriveView(
         repo.warning?.let { add(Badge(it, Tokens.redText, Tokens.tintRed)) }
         // Sync status as pills (prominent, and in-line with the other badges) rather than a faint
         // arrow tucked onto the branch line.
-        if (repo.ahead > 0) add(Badge("↑${repo.ahead} ahead", accent, Tokens.tintBlue))
+        if (repo.unpushed > 0) add(Badge("↑${repo.unpushed} ahead", accent, Tokens.tintBlue))
         if (repo.behind > 0) add(Badge("↓${repo.behind} behind", Tokens.snoozeBtnText, Tokens.snoozeBtnBg))
         if (repo.stale) {
             if (staleImportant) add(Badge("stale", Tokens.amber, Tokens.tintAmber))
@@ -331,7 +331,7 @@ fun deriveView(
         // Unlanded work in another checkout is amber for the reason the tier exists — it is work
         // sitting on this machine — even though it isn't sitting in *this* folder. Snoozing drops
         // it out, like every other call to action.
-        isDirty || repo.ahead > 0 || staleImportant ||
+        isDirty || repo.unpushed > 0 || staleImportant ||
             (unlandedTrees > 0 && !snoozed) ||
             issueLevel == IssueLevel.IMPORTANT -> { acc = Tokens.amber; accBg = Tokens.tintAmber }
         repo.behind > 0 || repo.stale || issueLevel == IssueLevel.INFO -> { acc = accent; accBg = Tokens.tintBlue }
@@ -341,7 +341,7 @@ fun deriveView(
     val statusLabel = when {
         repo.warning != null -> repo.warning
         isDirty -> "$changed changed"
-        repo.ahead > 0 -> "${repo.ahead} to push"
+        repo.unpushed > 0 -> "${repo.unpushed} to push"
         repo.behind > 0 -> "${repo.behind} behind"
         else -> "Clean"
     }
@@ -356,7 +356,7 @@ fun deriveView(
 
     val primary = when {
         isDirty -> Primary("Commit", Tokens.snoozeBtnBg, Tokens.snoozeBtnText, Tokens.snoozeBtnBorder)
-        repo.ahead > 0 -> Primary("Push", Tokens.tintBlue, accent, Tokens.accentBorder)
+        repo.unpushed > 0 -> Primary("Push", Tokens.tintBlue, accent, Tokens.accentBorder)
         else -> null
     }
 
@@ -367,7 +367,7 @@ fun deriveView(
     // only place it can be said. A worktree whose Unlanded-work alert is Off has already dropped out
     // of [unlandedTrees], so silencing one silences its pull here too.
     val attention = (
-        repo.warning != null || repo.stale || (repo.ahead > 0 && !isDirty) || aging ||
+        repo.warning != null || repo.stale || (repo.unpushed > 0 && !isDirty) || aging ||
             unlandedTrees > 0 ||
             issueLevel == IssueLevel.IMPORTANT || issueLevel == IssueLevel.CRITICAL
         ) && !snoozed
@@ -381,7 +381,8 @@ fun deriveView(
         accentBg = accBg,
         statusLabel = statusLabel,
         segments = segments,
-        ahead = repo.ahead,
+        // Commits to push, which on a fork's branch isn't [Repo.ahead] — see [Repo.unpushed].
+        ahead = repo.unpushed,
         behind = repo.behind,
         upstream = repo.upstream ?: if (repo.warning != null) "—" else "origin/${repo.branch}",
         isDirty = isDirty,

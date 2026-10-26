@@ -154,7 +154,7 @@ private fun WorktreeBadges(state: AppState, wtv: WorktreeView) {
         if (wt.dirtyCount > 0) BadgeView(Badge("${wt.dirtyCount} modified", Tokens.modifiedHdr, Tokens.tintAmber))
         wtv.vsMainline?.let { BadgeView(Badge(it, state.accent, Tokens.tintBlue)) }
         if (wt.agent) BranchBadge("agent", state.accent, Tokens.tintBlue)
-        if (wt.branchMerged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+        if (wt.branchMerged || wt.squashed) MergedBadge(wt.squashed)
         if (wt.branchEmpty) NoCommitsBadge()
         if (wt.locked) BranchBadge("locked", Tokens.purple, Tokens.tintPurple)
     }
@@ -199,7 +199,7 @@ fun WorktreeStrip(state: AppState, rv: RepoView) {
 private fun verdictColor(wt: Worktree): Color = when {
     wt.missing -> Tokens.redText
     wt.dirtyCount > 0 || (wt.unmerged > 0 && !wt.branchMerged) -> Tokens.modifiedHdr
-    wt.branchMerged -> Tokens.purple
+    wt.branchMerged || wt.squashed -> Tokens.purple
     else -> Tokens.cleanText
 }
 
@@ -392,7 +392,7 @@ private fun WorktreeStateBadges(state: AppState, wtv: WorktreeView) {
                     "left in them.",
             ) { BranchBadge("agent", state.accent, Tokens.tintBlue) }
         }
-        if (wt.branchMerged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+        if (wt.branchMerged || wt.squashed) MergedBadge(wt.squashed)
         if (wt.branchEmpty) NoCommitsBadge()
     }
 }

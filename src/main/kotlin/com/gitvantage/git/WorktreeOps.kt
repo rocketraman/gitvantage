@@ -157,11 +157,19 @@ object WorktreeOps {
             val own = (wt.branch ?: tipBranch)?.takeIf { mainline != null && it != mainline.substringAfter('/') }
             val contained = own != null && mainline != null &&
                 Git.exitCode(dir, "merge-base", "--is-ancestor", own, mainline) == 0
-            val merged = contained && BranchOps.hasOwnWork(dir, own!!, mainline!!)
+            // Commits here mainline lacks by history — unless their changes are in it anyway, squash-
+            // or rebase-merged, which then holds nothing to lose, detached or not.
+            val ahead = mainline?.let { count(dir, "$it..HEAD") } ?: 0
+            val squashed = ahead > 0 && mainline != null && BranchOps.landedByContent(dir, "HEAD", mainline)
+            // The tree's own branch is the one at HEAD (checked out, or the tip it detached from),
+            // so whether that landed by content is the same question about HEAD.
+            val merged = own != null && mainline != null &&
+                if (contained) BranchOps.hasOwnWork(dir, own, mainline) else squashed
             val log = Git.read(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct").trim().split(LOG_SEP)
             wt.copy(
                 dirtyCount = Git.read(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
-                unmerged = mainline?.let { count(dir, "$it..HEAD") } ?: 0,
+                unmerged = if (squashed) 0 else ahead,
+                squashed = squashed,
                 mainline = mainline,
                 lastRelative = log.getOrNull(0)?.trim().orEmpty(),
                 lastAuthor = log.getOrNull(1)?.trim().orEmpty(),
@@ -169,7 +177,7 @@ object WorktreeOps {
                 branchMerged = merged,
                 branchEmpty = contained && !merged,
                 tipBranch = tipBranch,
-                deletableUpstream = if (merged) BranchOps.deletableUpstream(dir, own!!) else null,
+                deletableUpstream = if (merged && own != null) BranchOps.deletableUpstream(dir, own) else null,
             )
         }
     }
@@ -258,11 +266,14 @@ object WorktreeOps {
      * for a locked one. They're passed from the state the user was shown and agreed to, so a
      * confirmed removal doesn't then fail on a technicality and ask again.
      *
-     * [alsoBranch] additionally deletes the branch the worktree held, with a plain `branch -d` —
-     * never `-D`. git refuses an unmerged branch, and that refusal is the safety net: the caller
-     * only offers this for a branch it has already seen land, and if that changed underneath us
-     * the branch survives and the message says so. Removal itself still counts as success — the
-     * folder is gone either way, and reporting failure would invite a retry that can't help.
+     * [alsoBranch] additionally deletes the branch the worktree held, with a plain `branch -d`.
+     * git refuses an unmerged branch, and that refusal is the safety net: the caller only offers
+     * this for a branch it has already seen land, and if that changed underneath us the branch
+     * survives and the message says so. The one exception is a squash- or rebase-merged branch,
+     * which git always calls unmerged: `-D` goes ahead only once [BranchOps.landedByContent] has
+     * checked again, here and now, that its changes are in mainline. Removal itself still counts as
+     * success — the folder is gone either way, and reporting failure would invite a retry that
+     * can't help.
      *
      * [alsoUpstream] (only alongside [alsoBranch]) deletes the branch's remote counterpart as well,
      * leased the way [BranchOps.deleteUpstreamLeased] describes. It goes before the local branch so
@@ -291,7 +302,11 @@ object WorktreeOps {
         tidyAgentParent(path)
         if (alsoBranch == null) return@withContext OpResult(runFrom, true, "Removed worktree $name")
         val upstreamRes = alsoUpstream?.let { BranchOps.deleteUpstreamLeased(dir, it) }
-        val branchRes = Git.run(dir, listOf("branch", "-d", alsoBranch))
+        val branchRes = Git.run(dir, listOf("branch", "-d", alsoBranch)).let { plain ->
+            val main = mainlineRef(dir)
+            if (plain.ok || main == null || !BranchOps.landedByContent(dir, alsoBranch, main)) plain
+            else Git.run(dir, listOf("branch", "-D", alsoBranch))
+        }
         val removed = buildList {
             add("worktree $name")
             if (branchRes.ok) add("branch $alsoBranch")

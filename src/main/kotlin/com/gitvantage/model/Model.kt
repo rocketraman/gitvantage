@@ -39,7 +39,16 @@ data class Repo(
     val lastCommitEpoch: Long? = null,
     val author: String = "",
     val upstream: String? = null,
+    /**
+     * Where `git push` sends the current branch when that isn't [upstream] — a fork pulling from
+     * one remote and pushing to another. Null in the ordinary case. See `Branch.pushRef`.
+     */
+    val pushTarget: String? = null,
+    val pushAhead: Int = 0, // commits [pushTarget] doesn't have yet
     val hasRemote: Boolean = false,
+    // Where a branch with no upstream gets published — `remote.pushDefault`, else origin. See
+    // BranchOps.publishRemote; carried here so the prompts can name it.
+    val publishRemote: String = "origin",
     val webBase: String? = null, // browsable https base for the remote, e.g. https://github.com/owner/repo
     val isGitHub: Boolean = false, // remote host is github.com (enables commit/issue/PR/actions links)
     val hasWorkflows: Boolean = false, // repo defines .github/workflows (enables the Actions link)
@@ -94,6 +103,12 @@ data class Repo(
      * meaningless to copy or hand back to git.
      */
     val hasNamedBranch get() = isGitRepo && branch != DETACHED_BRANCH
+
+    /**
+     * Commits a push would send. [ahead] is measured against [upstream], which is also where they'd
+     * go — except on a fork's branch, where it's where they come *from*, and [pushAhead] counts them.
+     */
+    val unpushed get() = if (pushTarget != null) pushAhead else ahead
 
     /**
      * How many changed entries the working tree actually has — always exact, where [files] may have

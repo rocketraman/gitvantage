@@ -61,12 +61,15 @@ object RepoScanner {
         }
 
         // Best-effort: ignore offline/errors. Logged only when the user asked for it (see [scan]).
-        if (fetch) Git.run(dir, listOf("fetch"), Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
+        // Every remote, not just the current branch's: a fork's other remote is what its mainline
+        // pulls from, and a plain `git fetch` only ever refreshes the one the current branch tracks.
+        if (fetch) Git.run(dir, listOf("fetch", "--all"), Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
 
         // Whether the repo has ANY remote configured, and origin's URL for the web links. Gates
         // Push/Fetch/Fast-forward: a branch can be pushable (via `push -u origin`) even without a
         // tracking upstream, as long as a remote exists.
-        val (hasRemote, remoteUrl) = parseRemotes(Git.readOrNull(dir, "remote", "-v").orEmpty())
+        val remotesOut = Git.readOrNull(dir, "remote", "-v").orEmpty()
+        val (hasRemote, remoteUrl) = parseRemotes(remotesOut)
         val (webBase, isGitHub) = Meta.webBase(remoteUrl)
         val hasWorkflows = File(dir, ".github/workflows").isDirectory
 
@@ -95,6 +98,19 @@ object RepoScanner {
                     behind = parts.getOrNull(1)?.toIntOrNull() ?: 0
                 }
             }
+        }
+
+        // Where a push goes, when that isn't the upstream. Only a repo with a second remote can be
+        // set up that way, and `remote -v` has already said whether there is one, so the usual
+        // single-remote repo pays nothing for asking.
+        val push = if (head?.upstream != null && remoteCount(remotesOut) > 1) {
+            val p = Git.readOrNull(
+                dir, "for-each-ref", "--format=%(upstream:remotename)$SEP%(push:remotename)$SEP%(push:short)",
+                "refs/heads/$symbolic",
+            ).orEmpty().trim().split(SEP)
+            BranchOps.pushSide(dir, symbolic, upstream, p.getOrElse(0) { "" }, p.getOrElse(1) { "" }, p.getOrElse(2) { "" })
+        } else {
+            null
         }
 
         val warning = when {
@@ -191,7 +207,8 @@ object RepoScanner {
             stash = stashes.size,
             last = lastRel.ifEmpty { "—" }, lastCommitEpoch = commitEpoch, author = author.ifEmpty { "—" },
             dirtyFor = dirtyForLabel, dirtySince = dirtySince, modifiedAt = modifiedAt,
-            upstream = upstream, hasRemote = hasRemote,
+            upstream = upstream, pushTarget = push?.ref, pushAhead = push?.ahead ?: 0, hasRemote = hasRemote,
+            publishRemote = if (hasRemote) BranchOps.publishRemote(dir) else "origin",
             webBase = webBase, isGitHub = isGitHub, hasWorkflows = hasWorkflows,
             hasSubmodules = File(dir, ".gitmodules").exists(),
             superproject = Git.readOrNull(dir, "rev-parse", "--show-superproject-working-tree")
@@ -294,6 +311,10 @@ object RepoScanner {
             ?.substringAfter('\t')?.substringBeforeLast(" (fetch)")?.trim()?.takeIf { it.isNotEmpty() }
         return lines.isNotEmpty() to origin
     }
+
+    /** How many remotes `git remote -v` lists — each appears once per direction, so by name. */
+    fun remoteCount(out: String): Int =
+        out.lineSequence().map { it.substringBefore('\t').trim() }.filter { it.isNotEmpty() }.distinct().count()
 
     /**
      * How many changed files a scan keeps.

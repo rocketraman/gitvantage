@@ -30,7 +30,7 @@ object BranchOps {
         // %(worktreepath) needs git 2.23 — older git fails the whole command and the branch list
         // comes back empty, which is the same way this file already treats a git too old to ask.
         val raw = Git.read(dir, "for-each-ref", "--sort=-committerdate",
-            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)$SEP%(objectname)",
+            "--format=%(refname:short)$SEP%(committerdate:unix)$SEP%(HEAD)$SEP%(committerdate:relative)$SEP%(upstream:short)$SEP%(upstream:track)$SEP%(worktreepath)$SEP%(objectname)$SEP%(upstream:remotename)$SEP%(push:remotename)$SEP%(push:short)",
             "refs/heads")
         val here = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
         val rows = raw.lineSequence().filter { it.isNotBlank() }.map { line ->
@@ -48,6 +48,9 @@ object BranchOps {
                     it.isNotEmpty() && runCatching { File(it).canonicalPath }.getOrDefault(it) != here
                 },
                 sha = p.getOrElse(7) { "" }.trim(),
+                upstreamRemote = p.getOrElse(8) { "" }.trim(),
+                pushRemote = p.getOrElse(9) { "" }.trim(),
+                push = p.getOrElse(10) { "" }.trim(),
             )
         }.filter { it.name.isNotEmpty() && !it.name.startsWith("gitbutler/") }.toList() // ignore GitButler's virtual branches
         if (rows.isEmpty()) return@withContext emptyList()
@@ -60,6 +63,9 @@ object BranchOps {
         val detachedTrees =
             if (WorktreeOps.mayHaveOtherWorktrees(dir)) WorktreeOps.list(repoPath).filter { it.detached && !it.isCurrent }
             else emptyList()
+        // The mainline as it stands on each remote, for offering to pull it from a different one.
+        val mainlineOnRemotes = Git.read(dir, "for-each-ref", "--format=%(refname:short)", "refs/remotes/*/$mainline")
+            .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
 
         rows.map { r ->
             val isMainline = r.name == mainline
@@ -67,10 +73,13 @@ object BranchOps {
             val ahead = if (isMainline) 0 else count(dir, "$mainline..${r.name}")
             // merged = every commit on the branch is already in mainline (ancestor), excluding mainline itself
             val contained = !isMainline && Git.exitCode(dir, "merge-base", "--is-ancestor", r.name, mainline) == 0
-            val merged = contained && hasOwnWork(dir, r.name, mainline)
+            // Not in mainline's history, yet its changes are: squash- or rebase-merged.
+            val squashed = !isMainline && !contained && landedByContent(dir, r.name, mainline)
+            val merged = squashed || (contained && hasOwnWork(dir, r.name, mainline))
             val ageDays = (nowSecs - r.epoch) / 86_400
             val stale = !r.isCurrent && !isMainline && ageDays > Meta.STALE_DAYS && behind > Meta.VERY_BEHIND
             val (uAhead, uBehind, gone) = parseTrack(r.track)
+            val push = pushSide(dir, r.name, r.upstream, r.upstreamRemote, r.pushRemote, r.push)
             Branch(
                 r.name, r.isCurrent, isMainline, behind, ahead, merged, stale, r.relative,
                 upstream = r.upstream, upstreamAhead = uAhead, upstreamBehind = uBehind, upstreamGone = gone,
@@ -78,8 +87,52 @@ object BranchOps {
                 detachedWorktreePath = detachedTrees
                     .firstOrNull { it.head == r.sha && WorktreeOps.namedFor(it.name, r.name) }?.path,
                 empty = contained && !merged,
+                squashed = squashed,
+                pushRef = push?.ref, pushAhead = push?.ahead ?: 0, pushBehind = push?.behind ?: 0,
+                pushMissing = push?.missing ?: false,
+                pullCandidates = if (isMainline) pullCandidates(mainlineOnRemotes, r.upstream) else emptyList(),
             )
         }
+    }
+
+    /**
+     * Where `git push` would send [branch], when that's somewhere other than its [upstream] — or null.
+     *
+     * `%(push)` can't be taken at its word. Under `push.default=simple`, git's default, it resolves to
+     * nothing at all once the push remote differs from the upstream's ("cannot resolve 'simple' push
+     * to a single destination"), even though `git push` itself goes on to push the branch under its
+     * own name. `%(push:remotename)` still resolves, so the ref is rebuilt from it the way the push
+     * builds it. A branch with no upstream isn't triangular, whatever `remote.pushDefault` says: it
+     * has nothing to pull from, and the ordinary publish covers it.
+     */
+    internal fun pushSide(
+        dir: File, branch: String, upstream: String?, upstreamRemote: String, pushRemote: String, push: String,
+    ): PushSide? {
+        if (upstream == null || pushRemote.isEmpty()) return null
+        val ref = push.ifEmpty { if (pushRemote != upstreamRemote) "$pushRemote/$branch" else "" }
+        if (ref.isEmpty() || ref == upstream) return null
+        val exists = Git.exitCode(dir, "rev-parse", "--verify", "-q", "refs/remotes/$ref") == 0
+        if (!exists) {
+            // Nothing there to compare against: count what the remote has nowhere at all.
+            return PushSide(ref, count(dir, branch, "--not", "--remotes=$pushRemote"), 0, missing = true)
+        }
+        val counts = Git.read(dir, "rev-list", "--left-right", "--count", "$branch...refs/remotes/$ref")
+            .trim().split(Regex("\\s+")).map { it.toIntOrNull() ?: 0 }
+        return PushSide(ref, counts.getOrElse(0) { 0 }, counts.getOrElse(1) { 0 }, missing = false)
+    }
+
+    internal data class PushSide(val ref: String, val ahead: Int, val behind: Int, val missing: Boolean)
+
+    /**
+     * The mainline on each remote other than the one [upstream] is on — what it could pull from
+     * instead. A remote called `upstream` goes first, being the usual name for the project a fork
+     * came from; that ordering is the only thing any name is given.
+     */
+    internal fun pullCandidates(onRemotes: List<String>, upstream: String?): List<String> {
+        val current = upstream?.substringBefore('/')
+        return onRemotes
+            .filter { it.contains('/') && !it.endsWith("/HEAD") && it.substringBefore('/') != current }
+            .sortedWith(compareBy({ it.substringBefore('/') != "upstream" }, { it }))
     }
 
     /**
@@ -107,6 +160,48 @@ object BranchOps {
             .any { it.isNotBlank() && !it.startsWith("branch:") && !it.startsWith("reset:") }
     }
 
+    /**
+     * Whether [branch]'s changes are already in [mainline] by content, though not by history — what a
+     * squash or rebase merge leaves behind. git's own "merged" is ancestry, and a squash writes a new
+     * commit, so the branch's commits never reach mainline and git calls it unmerged forever.
+     *
+     * First: would merging it change anything? `merge-tree` does the merge without touching a branch
+     * or the working tree, and a result identical to mainline's tree means every change is there.
+     * That covers squash, rebase and cherry-pick alike. It fails once mainline has since edited the
+     * same lines (a conflict), so then: is there a commit on mainline whose diff is the branch's whole
+     * diff — the squash commit itself — compared the way `git patch-id` does, ignoring line numbers
+     * and whitespace. A squash the maintainer edited on the way in matches neither.
+     *
+     * Callers only ask for a branch that isn't an ancestor of mainline; that case is [hasOwnWork]'s.
+     */
+    internal fun landedByContent(dir: File, branch: String, mainline: String): Boolean {
+        // Clean merge prints the tree; a conflict exits 1, and git before 2.38 rejects --write-tree.
+        val merged = Git.run(dir, listOf("merge-tree", "--write-tree", mainline, branch))
+        val mainTree = Git.read(dir, "rev-parse", "--verify", "-q", "$mainline^{tree}").trim()
+        if (merged.ok && mainTree.isNotEmpty() && merged.out.lineSequence().firstOrNull()?.trim() == mainTree) {
+            return true
+        }
+        val base = Git.read(dir, "merge-base", mainline, branch).trim()
+        if (base.isEmpty()) return false
+        val files = Git.read(dir, "diff", "--no-renames", "--name-only", base, branch)
+            .lines().filter { it.isNotBlank() }
+        if (files.isEmpty()) return false
+        val want = patchKey(Git.read(dir, "diff", *DIFF_OPTS, base, branch))
+        // Only mainline commits that touched those files, and only their diff of those files: a
+        // squash commit carrying the branch plus a fix elsewhere still matches.
+        return Git.read(dir, "log", "-p", *DIFF_OPTS, "--no-merges", "--format=%x00", "$base..$mainline", "--", *files.toTypedArray())
+            .split('\u0000').any { it.isNotBlank() && patchKey(it) == want }
+    }
+
+    private val DIFF_OPTS = arrayOf("--no-renames", "--no-color", "--no-ext-diff")
+
+    /** A diff reduced the way `git patch-id` reduces it: no blob ids, line numbers or whitespace. */
+    private fun patchKey(diff: String): String = diff.lineSequence()
+        .filter { it.isNotEmpty() && !it.startsWith("index ") && !it.startsWith("@@") }
+        .map { it.filterNot(Char::isWhitespace) }
+        .filter { it.isNotEmpty() }
+        .joinToString("\n")
+
     /** Remote branches (those under `refs/remotes`), newest first, each with its tip author. */
     suspend fun loadRemotes(repoPath: String, localNames: Set<String>): List<RemoteBranch> =
         withContext(Dispatchers.IO) {
@@ -125,15 +220,18 @@ object BranchOps {
                 // some git versions instead keep it as "origin/HEAD".
                 if (name.isEmpty() || name.endsWith("/HEAD") || !name.contains('/')) return@mapNotNull null
                 val short = name.substringAfter('/') // drop the remote name prefix
-                val merged = mainline != null && mainline.substringAfter('/') != short &&
-                    Git.exitCode(dir, "merge-base", "--is-ancestor", name, mainline) == 0
+                // The mainline itself, on whichever remote, is never "merged" into itself.
+                val against = mainline?.takeIf { it.substringAfter('/') != short }
+                val contained = against != null && Git.exitCode(dir, "merge-base", "--is-ancestor", name, against) == 0
+                val squashed = against != null && !contained && landedByContent(dir, name, against)
                 RemoteBranch(
                     name = name,
                     shortName = short,
                     author = p.getOrElse(2) { "" }.ifBlank { "—" },
                     lastRelative = p.getOrElse(1) { "" },
                     hasLocal = short in localNames,
-                    merged = merged,
+                    merged = contained || squashed,
+                    squashed = squashed,
                 )
             }.toList()
         }
@@ -161,29 +259,100 @@ object BranchOps {
 
     /**
      * Send a local branch to the remote. A null [upstream] means the branch isn't tracking
-     * anything yet, so this publishes it — `push -u origin <name>` — the same operation the
-     * repo-level Push does for the current branch, spelled out here for a branch that may not be
-     * checked out. That's safe: pushing a ref reads it, so the working tree is never involved and
-     * a branch held by another worktree pushes fine.
+     * anything yet, so this publishes it — `push -u <remote> <name>`, to the remote [publishRemote]
+     * picks — the same operation the repo-level Push does for the current branch, spelled out here
+     * for a branch that may not be checked out. That's safe: pushing a ref reads it, so the working
+     * tree is never involved and a branch held by another worktree pushes fine.
      *
      * With an upstream we push to exactly the ref the branch tracks, as an explicit refspec: a
      * branch may track a remote branch of a different name, and `push <remote> <name>` would
      * quietly create a second one beside it. Never `--force` — a diverged branch is refused by
      * git rather than overwritten, which is why the caller doesn't offer this on one.
+     *
+     * A [pushRef] (see [Branch.pushRef]) wins over the upstream: a fork's branch pulls from one
+     * remote and is pushed to another. That push never takes `-u`, even when it creates the ref —
+     * `-u` would re-point the upstream at the fork and quietly undo the setup.
      */
-    suspend fun push(repoPath: String, name: String, upstream: String?): OpResult =
+    suspend fun push(repoPath: String, name: String, upstream: String?, pushRef: String? = null): OpResult =
         withContext(Dispatchers.IO) {
             val dir = File(repoPath)
+            val target = pushRef ?: upstream
             val args =
-                if (upstream == null) listOf("push", "-u", "origin", name)
-                else listOf("push", upstream.substringBefore('/'), "$name:${upstream.substringAfter('/')}")
+                if (target == null) listOf("push", "-u", publishRemote(dir), name)
+                else listOf("push", target.substringBefore('/'), "refs/heads/$name:refs/heads/${target.substringAfter('/')}")
             val res = Git.run(dir, args, Git.NETWORK_TIMEOUT)
             if (res.ok) {
-                OpResult(repoPath, true, if (upstream == null) "Published $name" else "Pushed $name")
+                OpResult(repoPath, true, if (target == null) "Published $name" else "Pushed $name to $target")
             } else {
                 OpResult(repoPath, false, res.firstError("push failed"))
             }
         }
+
+    /**
+     * The remote a branch with no upstream is published to: `remote.pushDefault` when it's set —
+     * a fork's own remote, whatever it's called — and `origin` otherwise.
+     */
+    internal fun publishRemote(dir: File): String =
+        Git.readOrNull(dir, "config", "--get", "remote.pushDefault")?.trim()?.takeIf { it.isNotEmpty() } ?: "origin"
+
+    /**
+     * Make [branch] pull from [candidate] (e.g. "upstream/master") while still pushing where it does
+     * now — git's own fork setup, so a terminal `git pull` / `git push` agree with the app.
+     *
+     * `remote.pushDefault` goes first and only when it's unset: pinned to the remote the branch
+     * tracks today, it keeps pushes going there once the upstream moves. Set in that order, a
+     * failure of the second step leaves pushing exactly as it was. An existing `pushDefault` is the
+     * user's own choice and left alone.
+     */
+    suspend fun trackUpstream(repoPath: String, branch: String, candidate: String): OpResult =
+        withContext(Dispatchers.IO) {
+            val dir = File(repoPath)
+            val current = Git.readOrNull(dir, "config", "--get", "branch.$branch.remote")?.trim().orEmpty()
+            val pushDefault = Git.readOrNull(dir, "config", "--get", "remote.pushDefault")?.trim().orEmpty()
+            if (pushDefault.isEmpty() && current.isNotEmpty() && current != ".") {
+                val set = Git.run(dir, listOf("config", "remote.pushDefault", current))
+                if (!set.ok) return@withContext OpResult(repoPath, false, set.firstError("config failed"))
+            }
+            val res = Git.run(dir, listOf("branch", "--set-upstream-to=$candidate", branch))
+            if (res.ok) OpResult(repoPath, true, "$branch now tracks $candidate")
+            else OpResult(repoPath, false, res.firstError("set upstream failed"))
+        }
+
+    /**
+     * Bring a fork's branch up to date with its upstream and pass that on to its push target, in one
+     * go — `merge --ff-only @{u}` then `git push`, without the branch having to be checked out.
+     *
+     * The fast-forward is the half that can't be done to a branch that isn't checked out by merging,
+     * so for one that isn't, `fetch . <upstream>:<branch>` moves the ref instead: git refuses it
+     * unless it's a fast-forward, and refuses it for a branch checked out in any working tree. Only
+     * offered where the branch has no commits of its own against its upstream, so neither step ever
+     * needs a force.
+     */
+    suspend fun sync(repoPath: String, b: Branch): OpResult {
+        val upstream = b.upstream ?: return OpResult(repoPath, false, "${b.name} has no upstream")
+        val pushRef = b.pushRef ?: return OpResult(repoPath, false, "${b.name} pushes to its upstream")
+        return sync(repoPath, b.name, upstream, pushRef, b.isCurrent, b.upstreamBehind > 0)
+    }
+
+    /** [sync] for a branch known by name — the repo's current one, from the scan rather than the branch list. */
+    suspend fun sync(
+        repoPath: String, name: String, upstream: String, pushRef: String, isCurrent: Boolean, behind: Boolean,
+    ): OpResult = withContext(Dispatchers.IO) {
+        val dir = File(repoPath)
+        if (behind) {
+            val ff =
+                if (isCurrent) Git.run(dir, listOf("merge", "--ff-only", "refs/remotes/$upstream"))
+                else Git.run(dir, listOf("fetch", ".", "refs/remotes/$upstream:refs/heads/$name"))
+            if (!ff.ok) return@withContext OpResult(repoPath, false, ff.firstError("fast-forward failed"))
+        }
+        val pushed = Git.run(
+            dir,
+            listOf("push", pushRef.substringBefore('/'), "refs/heads/$name:refs/heads/${pushRef.substringAfter('/')}"),
+            Git.NETWORK_TIMEOUT,
+        )
+        if (pushed.ok) OpResult(repoPath, true, "Synced $name from $upstream to $pushRef")
+        else OpResult(repoPath, false, "Updated $name, but not $pushRef: ${pushed.firstError("push failed")}")
+    }
 
     /** Delete a local branch. [force] uses -D (also deletes unmerged). Never the current branch. */
     suspend fun delete(repoPath: String, name: String, force: Boolean): OpResult = withContext(Dispatchers.IO) {
@@ -252,18 +421,28 @@ object BranchOps {
     }
 
     /**
-     * The upstream of local [branch] when deleting it on the remote loses nothing *beyond* the local
-     * branch: it still exists, has no commits [branch] lacks (so if [branch] is merged, so is it),
-     * and isn't a shared integration branch. Null otherwise, and for a branch with no upstream.
+     * The remote copy of local [branch] when deleting it on the remote loses nothing *beyond* the
+     * local branch: it still exists, has no commits [branch] lacks (so if [branch] is merged, so is
+     * it), and isn't a shared integration branch. Null otherwise, and for a branch with no upstream.
+     *
+     * The remote copy is where the branch is pushed, which is its upstream unless it's a fork's
+     * branch pulling from elsewhere (see [pushSide]). Then it's the push ref — the branch's own copy
+     * on the fork — and never the upstream, which belongs to someone else.
      */
     internal fun deletableUpstream(dir: File, branch: String): String? {
-        val (upstream, track) = Git.read(
-            dir, "for-each-ref", "--format=%(upstream:short)$SEP%(upstream:track)", "refs/heads/$branch",
-        ).trim().split(SEP).let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+        val p = Git.read(
+            dir, "for-each-ref",
+            "--format=%(upstream:short)$SEP%(upstream:track)$SEP%(upstream:remotename)$SEP%(push:remotename)$SEP%(push:short)",
+            "refs/heads/$branch",
+        ).trim().split(SEP)
+        val upstream = p.getOrElse(0) { "" }
         if (upstream.isEmpty() || !upstream.contains('/')) return null
-        val (_, behind, gone) = parseTrack(track)
-        if (gone || behind > 0 || Meta.isIntegrationBranch(upstream.substringAfter('/'))) return null
-        return upstream
+        val push = pushSide(dir, branch, upstream, p.getOrElse(2) { "" }, p.getOrElse(3) { "" }, p.getOrElse(4) { "" })
+        val (target, behind, gone) =
+            if (push != null) Triple(push.ref, push.behind, push.missing)
+            else parseTrack(p.getOrElse(1) { "" }).let { (_, behind, gone) -> Triple(upstream, behind, gone) }
+        if (gone || behind > 0 || Meta.isIntegrationBranch(target.substringAfter('/'))) return null
+        return target
     }
 
     /** Parse git's `%(upstream:track)` — "[ahead 2, behind 1]", "[gone]", or "". */
@@ -283,8 +462,11 @@ object BranchOps {
         val track: String,
         val worktree: String? = null,
         val sha: String = "",
+        val upstreamRemote: String = "",
+        val pushRemote: String = "",
+        val push: String = "",
     )
 
-    private fun count(dir: File, range: String): Int =
-        Git.read(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0
+    private fun count(dir: File, vararg range: String): Int =
+        Git.read(dir, "rev-list", "--count", *range).trim().toIntOrNull() ?: 0
 }

@@ -36,7 +36,30 @@ data class Branch(
      * could have been merged. Never true together with [merged].
      */
     val empty: Boolean = false,
+    /**
+     * Where `git push` sends this branch, when that isn't [upstream] — a fork set up to pull from one
+     * remote and push to another (`remote.pushDefault` / `branch.<b>.pushRemote`). Null in the
+     * ordinary case, where the two are the same ref and [upstreamAhead] already says what to push.
+     */
+    val pushRef: String? = null,
+    val pushAhead: Int = 0, // local commits [pushRef] doesn't have
+    val pushBehind: Int = 0, // [pushRef] commits the local branch doesn't have
+    val pushMissing: Boolean = false, // [pushRef] doesn't exist on its remote yet
+    /**
+     * For the mainline only: the same branch on every *other* remote, e.g. `["upstream/master"]` —
+     * the refs it could be set to pull from instead of the one it tracks. A remote named `upstream`
+     * sorts first; nothing else about the names is assumed.
+     */
+    val pullCandidates: List<String> = emptyList(),
+    /**
+     * [merged] by content rather than history: squash- or rebase-merged, so git itself still calls
+     * it unmerged (`git branch -d` refuses it). See BranchOps.landedByContent.
+     */
+    val squashed: Boolean = false,
 ) {
+    /** Pulls from one remote and pushes to another — see [pushRef]. */
+    val isTriangular get() = pushRef != null
+
     /** Held by another working tree — see [worktreePath]. */
     val inOtherWorktree get() = worktreePath != null
 
@@ -51,6 +74,7 @@ data class RemoteBranch(
     val lastRelative: String,
     val hasLocal: Boolean, // a local branch of the same short name already exists
     val merged: Boolean, // fully merged into mainline
+    val squashed: Boolean = false, // merged by content only — see Branch.squashed
 ) {
     /** The remote this branch lives on, e.g. "origin" — the prefix [shortName] drops. */
     val remote get() = name.substringBefore('/')
@@ -60,4 +84,15 @@ data class RemoteBranch(
      * one. Covers mainline too, so it's the single test the delete action asks.
      */
     val integration get() = Meta.isIntegrationBranch(shortName)
+}
+
+/**
+ * [branches] split by remote, each group keeping its incoming order (newest first). Remotes named
+ * in [first] lead in that order — the ones the mainline pushes to and pulls from, so a fork lists
+ * your own copy before the project's — and the rest follow alphabetically.
+ */
+fun groupByRemote(branches: List<RemoteBranch>, first: List<String>): List<Pair<String, List<RemoteBranch>>> {
+    val groups = branches.groupBy { it.remote }
+    val lead = first.distinct().filter { it in groups }
+    return (lead + (groups.keys - lead.toSet()).sorted()).map { it to groups.getValue(it) }
 }

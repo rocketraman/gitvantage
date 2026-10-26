@@ -80,6 +80,52 @@ val WorktreeOperations by testSuite {
             assert("side" in branches(work))
         }
 
+        test("a squash-merged worktree branch reads as merged, and remove with alsoBranch deletes it") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(work, "merge", "-q", "--squash", "side")
+            git(work, "commit", "-q", "-m", "Side (#1)")
+
+            val side = WorktreeOps.load(work.path).single { it.branch == "side" }
+            assert(side.branchMerged && !side.branchEmpty)
+            assert(side.unmerged == 0 && !side.unlanded) // nothing in it to lose
+
+            val result = WorktreeOps.remove(work.path, tree.path, force = false, locked = false, alsoBranch = "side")
+
+            assert(result.message == "Removed worktree wt and branch side") { result.message }
+            assert("side" !in branches(work))
+        }
+
+        test("a detached tree whose commits were squash-merged holds nothing unlanded") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            git(tree, "switch", "-q", "--detach")
+            git(work, "branch", "-D", "side")
+            git(work, "merge", "-q", "--squash", rev(tree, "HEAD"))
+            git(work, "commit", "-q", "-m", "Side (#1)")
+
+            val wt = WorktreeOps.load(work.path).single { it.name == "wt" }
+
+            assert(wt.detached && wt.ownBranch == null)
+            assert(wt.squashed && wt.unmerged == 0 && !wt.unlanded)
+            assert(wt.verdict == "merged") { wt.verdict }
+        }
+
+        test("a detached tree with commits of its own still counts them") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "--detach", tree.path)
+            commit(tree, "f.txt", "mine\n", "unlanded work")
+
+            val wt = WorktreeOps.load(work.path).single { it.name == "wt" }
+
+            assert(!wt.squashed && wt.unmerged == 1 && wt.unlanded)
+        }
+
         test("remove tidies the empty .claude/worktrees parent a session left behind") {
             val work = repo()
             val agentTree = File(work, ".claude/worktrees/claude-abc")

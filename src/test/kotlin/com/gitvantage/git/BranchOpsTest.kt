@@ -110,7 +110,7 @@ val BranchOperations by testSuite {
             val result = BranchOps.push(work.path, "feature", upstream = "origin/renamed")
 
             assert(result.ok)
-            assert(result.message == "Pushed feature")
+            assert(result.message == "Pushed feature to origin/renamed")
             assert(rev(originOf(work), "renamed") == rev(work, "feature"))
             assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "feature") != 0)
         }

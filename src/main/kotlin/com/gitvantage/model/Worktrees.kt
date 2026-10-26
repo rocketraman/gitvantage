@@ -19,12 +19,15 @@ data class Worktree(
     val isCurrent: Boolean = false, // the repo being viewed *is* this worktree
     val missing: Boolean = false, // the directory is gone from disk (the usual cause of prunable)
     val dirtyCount: Int = 0, // uncommitted changes inside (filled in by listWithWork)
-    val unmerged: Int = 0, // commits here that mainline hasn't got (ditto)
+    val unmerged: Int = 0, // commits here that mainline hasn't got (ditto) — by content, see [squashed]
     val mainline: String? = null, // the ref [unmerged] and [branchMerged] were measured against
     val branchMerged: Boolean = false, // its branch's own commits have all landed in mainline
     // Its branch never got a commit of its own: it sits on mainline's history, at or behind the tip.
     // git calls that "merged" too, but nothing was — see BranchOps.hasOwnWork.
     val branchEmpty: Boolean = false,
+    // HEAD's commits aren't in mainline's history, but their changes are in mainline: squash- or
+    // rebase-merged. [unmerged] is 0 then — nothing here is lost by removing it, branch or not.
+    val squashed: Boolean = false,
     // The branch a *detached* tree is still sitting on the tip of, when the folder is named for it.
     // Sessions detach their worktree once the work is pushed, which leaves the tree and its branch
     // unconnected as far as git is concerned while being one piece of work as far as anyone else is.
@@ -73,7 +76,7 @@ data class Worktree(
         missing -> "folder gone"
         dirtyCount > 0 -> "$dirtyCount uncommitted"
         unmerged > 0 && !branchMerged -> "↑$unmerged unlanded"
-        branchMerged -> "merged"
+        branchMerged || squashed -> "merged"
         branchEmpty -> "no commits"
         else -> "clean"
     }

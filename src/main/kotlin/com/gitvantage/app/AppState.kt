@@ -1848,11 +1848,55 @@ class AppState(private val scope: CoroutineScope) {
         if (pushingBranch != null) return
         pushingBranch = b.name
         scope.launch {
-            val r = withContext(Dispatchers.IO) { BranchOps.push(id, b.name, b.upstream) }
+            val r = withContext(Dispatchers.IO) { BranchOps.push(id, b.name, b.upstream, b.pushRef) }
             toast(r.message)
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
             pushingBranch = null
+        }
+    }
+
+    /** Catch a fork's branch up with its upstream and push it on to its push target — see
+     *  [BranchOps.sync]. Shares [pushingBranch]: it ends in the same push, and one at a time. */
+    fun syncBranch(id: String, b: Branch) {
+        if (pushingBranch != null) return
+        pushingBranch = b.name
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.sync(id, b) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            pushingBranch = null
+        }
+    }
+
+    /** [syncBranch] for the repo's current branch, from the behind banner — the scan, not the
+     *  branch list, which may not be loaded, is what knows about it there. */
+    fun syncCurrent(id: String) {
+        val repo = repos.firstOrNull { it.id == id } ?: return
+        val upstream = repo.upstream ?: return
+        val pushTarget = repo.pushTarget ?: return
+        if (pushingBranch != null) return
+        pushingBranch = repo.branch
+        scope.launch {
+            toast("Syncing ${repo.name}…")
+            val r = withContext(Dispatchers.IO) {
+                BranchOps.sync(id, repo.branch, upstream, pushTarget, isCurrent = true, behind = repo.behind > 0)
+            }
+            toast(r.message)
+            if (branchesRepo == id) reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            pushingBranch = null
+        }
+    }
+
+    /** Point [branch] at [candidate] to pull from, keeping where it pushes — see [BranchOps.trackUpstream]. */
+    fun trackUpstream(id: String, branch: String, candidate: String) {
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.trackUpstream(id, branch, candidate) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
         }
     }
 
@@ -2854,7 +2898,7 @@ class AppState(private val scope: CoroutineScope) {
      *  and a snooze can't make them untrue. [sorted] sinks them within their rank instead. */
     private fun attentionRank(v: RepoView): Int = when {
         v.repo.warning != null || v.issueLevel == IssueLevel.CRITICAL -> 0
-        v.isDirty || v.repo.ahead > 0 || (v.isStale && v.repo.staleImportant) ||
+        v.isDirty || v.repo.unpushed > 0 || (v.isStale && v.repo.staleImportant) ||
             v.worktreesUnlanded > 0 ||
             v.issueLevel == IssueLevel.IMPORTANT -> 1
         v.repo.behind > 0 || v.isStale || v.issueLevel == IssueLevel.INFO -> 2

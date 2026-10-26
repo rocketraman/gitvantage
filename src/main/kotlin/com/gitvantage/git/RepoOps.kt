@@ -21,8 +21,9 @@ import kotlinx.coroutines.withContext
 object RepoOps {
 
     /** `git push` in the repo. If the current branch has no tracking upstream, publishes it
-     *  with `push -u origin HEAD` (sets the upstream too). Fails (not throws) on rejection,
-     *  auth, offline, or detached HEAD. */
+     *  with `push -u <remote> HEAD` (sets the upstream too), to `remote.pushDefault` or else
+     *  `origin` — see [BranchOps.publishRemote]. Fails (not throws) on rejection, auth, offline,
+     *  or detached HEAD. */
     suspend fun push(entry: RegistryEntry): OpResult = withContext(Dispatchers.IO) {
         val dir = File(entry.path)
         if (!Git.isRepo(dir)) return@withContext OpResult(entry.path, false, "Not a git repo")
@@ -33,7 +34,7 @@ object RepoOps {
         ).ok
         val res =
             if (hasUpstream) Git.run(dir, listOf("push"), Git.NETWORK_TIMEOUT, repoName = name)
-            else Git.run(dir, listOf("push", "-u", "origin", "HEAD"), Git.NETWORK_TIMEOUT, repoName = name)
+            else Git.run(dir, listOf("push", "-u", BranchOps.publishRemote(dir), "HEAD"), Git.NETWORK_TIMEOUT, repoName = name)
         if (res.ok) {
             OpResult(entry.path, true, "$name pushed")
         } else {

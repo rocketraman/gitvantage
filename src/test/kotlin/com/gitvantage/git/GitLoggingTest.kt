@@ -83,7 +83,7 @@ val GitConsoleRecording by testSuite {
 
             // The one mutating command in a scan. Every status/rev-list/log around it stays out,
             // which is what keeps a polling dashboard from filling the console.
-            assert(commands == listOf("git fetch"))
+            assert(commands == listOf("git fetch --all"))
         }
 
         test("a background scan's fetch stays out of the console") {

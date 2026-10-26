@@ -71,6 +71,7 @@ import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.RemoteBranch
+import com.gitvantage.git.model.groupByRemote
 import com.gitvantage.git.model.Submodule
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
@@ -138,7 +139,9 @@ fun DetailPanel(state: AppState, rv: RepoView) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Txt("⎇ ${repo.branch} → ${rv.upstream}", 12.sp, Tokens.secondary, font = MonoFont,
+                // A fork's branch names both ends: where it pulls from, then where it pushes to.
+                val ends = repo.pushTarget?.let { "← ${rv.upstream} · → $it" } ?: "→ ${rv.upstream}"
+                Txt("⎇ ${repo.branch} $ends", 12.sp, Tokens.secondary, font = MonoFont,
                     modifier = Modifier.weight(1f, fill = false))
                 // Only when there's a real branch name to copy — a detached HEAD or a non-repo has none.
                 if (repo.hasNamedBranch) CopyPill(repo.branch, "Copy branch")
@@ -266,8 +269,8 @@ private fun ActionRow(state: AppState, rv: RepoView) {
         ActionButton("Push", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
             state.popup = Popup.Confirm(
                 "Push ${repo.name}?",
-                if (repo.upstream != null) "Runs git push to ${repo.upstream}."
-                else "Publishes “${repo.branch}” to origin and sets it as the upstream.",
+                if (repo.upstream != null) "Runs git push to ${repo.pushTarget ?: repo.upstream}."
+                else "Publishes “${repo.branch}” to ${repo.publishRemote} and sets it as the upstream.",
                 "Push", danger = false,
             ) { state.push(listOf(repo.id)) }
         }
@@ -872,7 +875,9 @@ private fun CleanBanner(rv: RepoView) {
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Txt("✓ Working tree clean", 14.sp, Tokens.cleanText, FontWeight.Bold)
-        if (rv.ahead > 0) Txt("${rv.ahead} commit(s) ready to push to ${rv.upstream}.", 12.5.sp, Tokens.secondary, maxLines = 2)
+        if (rv.ahead > 0) {
+            Txt("${rv.ahead} commit(s) ready to push to ${rv.repo.pushTarget ?: rv.upstream}.", 12.5.sp, Tokens.secondary, maxLines = 2)
+        }
         // "behind" is handled by BehindBanner so its Diff/Log actions have a consistent home.
     }
 }
@@ -889,7 +894,14 @@ private fun BehindBanner(state: AppState, rv: RepoView) {
     val upstream = repo.upstream ?: return
     val n = rv.behind
     val commits = "$n commit${if (n == 1) "" else "s"}"
-    val how = if (rv.ahead == 0) "Fast Forward to catch up" else "diverged — rebase or merge to catch up"
+    // Against the upstream, not the push target: what decides whether a fast-forward is possible.
+    // A fork's branch can go one better and pass the commits straight on to where it pushes.
+    val canSync = repo.ahead == 0 && repo.pushTarget != null
+    val how = when {
+        canSync -> "Sync to catch up and update ${repo.pushTarget}"
+        repo.ahead == 0 -> "Fast Forward to catch up"
+        else -> "diverged — rebase or merge to catch up"
+    }
     Column(
         Modifier.fillMaxWidth().padding(top = 18.dp).clip(RoundedCornerShape(10.dp))
             .background(Tokens.cleanBg).border(1.dp, Tokens.cleanBorder, RoundedCornerShape(10.dp))
@@ -899,6 +911,10 @@ private fun BehindBanner(state: AppState, rv: RepoView) {
         Txt("↓ $commits behind $upstream", 14.sp, Tokens.cleanText, FontWeight.Bold)
         Txt(how.replaceFirstChar { it.uppercase() } + ".", 12.5.sp, Tokens.secondary, maxLines = 2)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (canSync) {
+                val syncing = state.pushingBranch == repo.branch
+                BannerActionPill(if (syncing) "⇅ Syncing…" else "⇅ Sync") { if (!syncing) state.syncCurrent(repo.id) }
+            }
             BannerActionPill("⑃ Diff") {
                 state.openRangeDiff(repo.id, "HEAD", upstream, "Incoming — $upstream ($commits)", "HEAD → $upstream")
             }
@@ -1105,7 +1121,7 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
             Txt("Loading…", 12.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
         }
         shown.forEach { b ->
-            BranchRow(state, rv.id, b, clean, rv.repo.hasRemote, hidden = b in hidden)
+            BranchRow(state, rv.id, b, clean, rv.repo.hasRemote, rv.repo.publishRemote, hidden = b in hidden)
         }
         RemoteBranchesSection(state, rv.id, clean, hide)
     }
@@ -1134,6 +1150,7 @@ private fun BranchRow(
     b: Branch,
     clean: Boolean,
     hasRemote: Boolean,
+    publishRemote: String,
     hidden: Boolean = false,
 ) {
     // git holds a branch in exactly one working tree at a time: switching to one that's checked
@@ -1149,18 +1166,34 @@ private fun BranchRow(
     // The states left out are the ones a plain push can't fix: diverged needs a force, and a
     // hover lane a stray click can find is the last place to offer one. "upstream gone" means
     // someone deleted the remote branch, and re-creating it silently would undo that.
+    //
+    // A fork's branch (see Branch.pushRef) is judged on its push side instead — that's where a push
+    // goes — and gets Sync for the case Push alone can't finish: behind the upstream it pulls from.
+    // Sync fast-forwards and then pushes, so where it's offered Push would only be half of it.
+    val canSync = hasRemote && b.isTriangular && !b.upstreamGone && !b.inOtherWorktree &&
+        b.upstreamBehind > 0 && b.upstreamAhead == 0
     val pushLabel = when {
-        !hasRemote || b.upstreamGone -> null
+        !hasRemote || canSync -> null
+        b.isTriangular -> when {
+            b.pushMissing -> "Publish"
+            b.pushAhead > 0 && b.pushBehind == 0 -> "Push"
+            else -> null
+        }
+        b.upstreamGone -> null
         b.upstream == null -> "Publish"
         b.upstreamAhead > 0 && b.upstreamBehind == 0 -> "Push"
         else -> null
     }
     val pushing = state.pushingBranch == b.name
-    // The upstream to take down with the branch, when that loses nothing: the branch is merged, and
-    // its upstream has no commits the branch lacks — so the upstream is merged too. Off for the
-    // shared branches the remote list won't delete either, and for an upstream already gone.
-    val deletableUpstream = b.upstream?.takeIf {
-        canDelete && hasRemote && b.merged && !b.upstreamGone && b.upstreamBehind == 0 &&
+    // The remote branch to take down with the branch, when that loses nothing: the branch is merged,
+    // and its remote copy has no commits the branch lacks — so that's merged too. Off for the
+    // shared branches the remote list won't delete either, and for a remote copy already gone. The
+    // copy is where the branch is pushed: on a fork that's the fork's, never the upstream's.
+    val remoteCopy = b.pushRef ?: b.upstream
+    val remoteCopyGone = if (b.isTriangular) b.pushMissing else b.upstreamGone
+    val remoteCopyBehind = if (b.isTriangular) b.pushBehind else b.upstreamBehind
+    val deletableUpstream = remoteCopy?.takeIf {
+        canDelete && hasRemote && b.merged && !remoteCopyGone && remoteCopyBehind == 0 &&
             !Meta.isIntegrationBranch(it.substringAfter('/'))
     }
     val deletingUpstream = deletableUpstream != null && state.deletingRemoteBranch == deletableUpstream
@@ -1183,7 +1216,7 @@ private fun BranchRow(
                 // learns to skip, taking the ones that do mean something with it.
                 b.isMainline -> QuietBadge("mainline")
                 // Merged wins over stale: a branch already folded into mainline is "done", not neglected.
-                b.merged -> BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+                b.merged -> MergedBadge(b.squashed)
                 // Contained in mainline like a merged branch, but only because nothing was ever
                 // committed to it — "merged" would credit it with work it never had.
                 b.empty -> QuietBadge("no commits")
@@ -1226,6 +1259,29 @@ private fun BranchRow(
             ) {
                 if (b.upstream == null) {
                     Txt("⚠ no upstream", 11.sp, Tokens.muted2)
+                } else if (b.isTriangular) {
+                    // Two ends, each with its own verdict: what's waiting on the remote it pulls
+                    // from, and what hasn't reached the one it pushes to.
+                    Txt("↓ ${b.upstream}", 11.sp, Tokens.muted, font = MonoFont,
+                        modifier = Modifier.weight(1f, fill = false))
+                    when {
+                        b.upstreamGone -> Txt("· gone", 11.sp, Tokens.redText, FontWeight.SemiBold)
+                        b.upstreamAhead > 0 && b.upstreamBehind > 0 ->
+                            Txt("· ↑${b.upstreamAhead} ↓${b.upstreamBehind} diverged", 11.sp, Tokens.amber, FontWeight.SemiBold, font = MonoFont)
+                        b.upstreamBehind > 0 -> Txt("· ${b.upstreamBehind} behind", 11.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
+                        b.upstreamAhead > 0 -> Txt("· ↑${b.upstreamAhead} ahead", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
+                        else -> Txt("· ✓", 11.sp, Tokens.cleanText, FontWeight.SemiBold)
+                    }
+                    Txt("↑ ${b.pushRef}", 11.sp, Tokens.muted, font = MonoFont,
+                        modifier = Modifier.weight(1f, fill = false))
+                    when {
+                        b.pushMissing -> Txt("· not pushed", 11.sp, Tokens.muted2, FontWeight.SemiBold)
+                        b.pushAhead > 0 && b.pushBehind > 0 ->
+                            Txt("· ↑${b.pushAhead} ↓${b.pushBehind} diverged", 11.sp, Tokens.amber, FontWeight.SemiBold, font = MonoFont)
+                        b.pushAhead > 0 -> Txt("· ${b.pushAhead} to push", 11.sp, state.accent, FontWeight.SemiBold, font = MonoFont)
+                        b.pushBehind > 0 -> Txt("· ↓${b.pushBehind} behind", 11.sp, Tokens.behind, FontWeight.SemiBold, font = MonoFont)
+                        else -> Txt("· ✓", 11.sp, Tokens.cleanText, FontWeight.SemiBold)
+                    }
                 } else {
                     Txt("⇄ ${b.upstream}", 11.sp, Tokens.muted, font = MonoFont,
                         modifier = Modifier.weight(1f, fill = false))
@@ -1247,10 +1303,29 @@ private fun BranchRow(
                 }
                 // Between the read-only actions and the ones that move you: this changes the
                 // remote, not where you're standing or what's on disk.
+                if (canSync) {
+                    val n = b.upstreamBehind
+                    HoverTip(
+                        "Fast-forwards “${b.name}” to ${b.upstream} ($n commit${if (n == 1) "" else "s"}), then " +
+                            "pushes it to ${b.pushRef}. Nothing is forced: git refuses either step " +
+                            "rather than overwrite. " +
+                            if (b.isCurrent) "It's checked out here, so your working tree moves with it."
+                            else "It isn't checked out, so your working tree isn't touched.",
+                    ) {
+                        RowAction(if (pushing) "Syncing…" else "Sync") {
+                            if (!pushing) state.syncBranch(id, b)
+                        }
+                    }
+                }
                 if (pushLabel != null) {
                     HoverTip(
-                        if (b.upstream == null) {
-                            "Pushes “${b.name}” to origin and sets it as the upstream. The branch " +
+                        if (b.isTriangular) {
+                            if (b.pushMissing) "Pushes “${b.name}” to ${b.pushRef}. It keeps pulling from " +
+                                "${b.upstream} — your working tree isn't touched."
+                            else "Sends ${b.pushAhead} commit${if (b.pushAhead == 1) "" else "s"} " +
+                                "to ${b.pushRef}. Your working tree isn't touched."
+                        } else if (b.upstream == null) {
+                            "Pushes “${b.name}” to $publishRemote and sets it as the upstream. The branch " +
                                 "doesn't have to be checked out — your working tree isn't touched."
                         } else {
                             "Sends ${b.upstreamAhead} commit${if (b.upstreamAhead == 1) "" else "s"} " +
@@ -1259,6 +1334,26 @@ private fun BranchRow(
                     ) {
                         RowAction(if (pushing) "Pushing…" else pushLabel) {
                             if (!pushing) state.pushBranch(id, b)
+                        }
+                    }
+                }
+                // Which remote the mainline pulls from: a fork's own copy, or the project it was
+                // forked from. Offered for every other remote that has the branch — nothing about a
+                // remote's name decides which is which — and it's how to change back, too.
+                if (b.isMainline && hasRemote) {
+                    b.pullCandidates.forEach { c ->
+                        val remote = c.substringBefore('/')
+                        val pushesTo = (b.pushRef ?: b.upstream)?.substringBefore('/')
+                        // "Track", not "Pull": it only sets the upstream; nothing is fetched or merged.
+                        RowAction("Track remote $remote") {
+                            state.popup = Popup.Confirm(
+                                "Track “${b.name}” on $remote?",
+                                // Short enough for the dialog's three lines; the config it writes is
+                                // BranchOps.trackUpstream's to explain.
+                                "“${b.name}” will track $c. Nothing is fetched or merged now. " +
+                                    (if (pushesTo != null) "Pushes keep going to $pushesTo." else ""),
+                                "Track $remote", danger = false,
+                            ) { state.trackUpstream(id, b.name, c) }
                         }
                     }
                 }
@@ -1314,6 +1409,19 @@ private fun BranchRow(
     }
 }
 
+/**
+ * The same badge either way, since the work is in mainline either way. A squash- or rebase-merged
+ * branch says how it knows, because git itself will still call it unmerged.
+ */
+@Composable
+internal fun MergedBadge(squashed: Boolean) {
+    if (!squashed) return BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+    HoverTip(
+        "Squash- or rebase-merged: the changes are all in mainline, though the commits aren't — " +
+            "so git still calls them unmerged.",
+    ) { BranchBadge("merged", Tokens.purple, Tokens.tintPurple) }
+}
+
 @Composable
 private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, hide: List<Regex>) {
     val hidden = state.remoteBranches.filter { Meta.isBranchHidden(it.name, hide) }
@@ -1343,7 +1451,24 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, h
             if (state.remoteBranches.isEmpty()) {
                 Txt("No remote branches", 11.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
             }
-            shown.forEach { rb -> RemoteBranchRow(state, id, rb, clean, hidden = rb in hidden) }
+            // Where the mainline pushes leads, then where it pulls from: in a fork, your copy first.
+            val main = state.branches.firstOrNull { it.isMainline }
+            val lead = listOfNotNull(main?.pushRef, main?.upstream).map { it.substringBefore('/') }
+            val groups = groupByRemote(shown, lead)
+            groups.forEach { (remote, list) ->
+                // A lone remote needs no heading: every row already starts with its name.
+                if (groups.size > 1) {
+                    Row(
+                        Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Txt(remote, 11.sp, Tokens.secondary, FontWeight.SemiBold, font = MonoFont)
+                        Txt("— ${list.size}", 11.sp, Tokens.muted2)
+                    }
+                }
+                list.forEach { rb -> RemoteBranchRow(state, id, rb, clean, hidden = rb in hidden) }
+            }
         }
     }
 }
@@ -1367,7 +1492,7 @@ private fun RemoteBranchRow(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Txt(rb.name, 12.sp, Tokens.text2, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
             if (hidden) QuietBadge("hidden")
-            if (rb.merged) BranchBadge("merged", Tokens.purple, Tokens.tintPurple)
+            if (rb.merged) MergedBadge(rb.squashed)
             // Having a local counterpart is the ordinary case in a repo you work in, so it's said
             // quietly; the notable half of the pair is the branch you *haven't* got, and that one
             // announces itself through the "Checkout" action rather than a badge.
