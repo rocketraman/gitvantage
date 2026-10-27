@@ -1,15 +1,15 @@
 [versions]
-compose = "1.12.1"
+compose = "1.12.2"
 detekt = "2.0.0-alpha.6"
 dbusJava = "5.2.2"
 fileKit = "0.16.0"
 humanReadable = "2.0.0"
 konture = "1.0.2"
 kotlin = "2.4.21"
-kotlinxSerialization = "1.11.0"
+kotlinxSerialization = "1.12.0"
 nucleus = "2.5.18"
 slf4j = "2.0.20"
-testBalloon = "1.1.0"
+testBalloon = "1.2.0"
 
 [plugins]
 compose = { id = "org.jetbrains.compose", version.ref = "compose" }
