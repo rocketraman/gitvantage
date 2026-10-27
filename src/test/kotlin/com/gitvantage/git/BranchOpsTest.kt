@@ -276,5 +276,23 @@ val BranchOperations by testSuite {
             assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "feature") == 0)
             assert("feature" in branches(work))
         }
+
+        test("deleteWithUpstream counts a remote branch already deleted there as deleted") {
+            val work = repo()
+            git(work, "switch", "-q", "-c", "feature")
+            commit(work, "f.txt", "mine\n", "feature work")
+            git(work, "push", "-q", "-u", "origin", "feature")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            git(work, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+            // What GitHub does on merging the PR; this clone hasn't pruned, so it still has origin/feature.
+            git(originOf(work), "branch", "-D", "feature")
+
+            val result = BranchOps.deleteWithUpstream(work.path, "feature", "origin/feature")
+
+            assert(result.ok) { result.message }
+            assert("feature" !in branches(work))
+            // The stale copy goes too, or the remote list would keep offering to delete it.
+            assert(gitAllowingFailure(work, "rev-parse", "--verify", "-q", "refs/remotes/origin/feature") != 0)
+        }
     }
 }

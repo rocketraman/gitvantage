@@ -4,9 +4,10 @@
 package com.gitvantage.git
 
 import de.infix.testBalloon.framework.core.testSuite
+import java.io.File
 
 /** A `feature` branch with two commits of its own, cut from main, with main moved on since. */
-private fun Sandbox.featureRepo(): java.io.File {
+private fun Sandbox.featureRepo(): File {
     val work = repo()
     git(work, "switch", "-q", "-c", "feature")
     commit(work, "a.txt", "two\n", "feature: change a")
@@ -17,7 +18,7 @@ private fun Sandbox.featureRepo(): java.io.File {
 }
 
 /** Land `feature` on main as one new commit, the way a squash-merged PR does. */
-private fun Sandbox.squash(work: java.io.File) {
+private fun Sandbox.squash(work: File) {
     git(work, "merge", "-q", "--squash", "feature")
     git(work, "commit", "-q", "-m", "Feature (#1)")
 }
@@ -50,10 +51,28 @@ val SquashMerge by testSuite {
             val work = featureRepo()
             squash(work)
             commit(work, "a.txt", "three\n", "main edits the squashed line again")
-            // The premise: merging the branch now conflicts, so the merge-tree check alone misses it.
-            assert(gitAllowingFailure(work, "merge-tree", "--write-tree", Sandbox.MAIN, "feature") != 0)
+            // The premise: main no longer holds the branch's version of a.txt, so only the patch finds it.
+            assert(gitAllowingFailure(work, "diff", "--quiet", Sandbox.MAIN, "feature", "--", "a.txt") != 0)
 
             assert(BranchOps.landedByContent(work, "feature", Sandbox.MAIN))
+        }
+
+        test("the check never writes to the object store — the repo's watch would see it and rescan") {
+            val work = featureRepo()
+            squash(work)
+            git(work, "switch", "-q", "-c", "edited")
+            commit(work, "a.txt", "three\n", "main edits the squashed line again")
+            git(work, "switch", "-q", Sandbox.MAIN)
+            val objects = File(work, ".git/objects")
+            fun snapshot() = objects.walk().filter { it.isFile }.associate { it.path to it.lastModified() }
+            val before = snapshot()
+            Thread.sleep(20) // past mtime granularity, so a touch would show
+
+            // Both paths: the direct comparison, and the patch fallback after main moved on.
+            assert(BranchOps.landedByContent(work, "feature", Sandbox.MAIN))
+            assert(BranchOps.landedByContent(work, "feature", "edited"))
+
+            assert(snapshot() == before) { "the object store changed: ${snapshot() - before.keys}" }
         }
 
         test("a branch with work after its squash isn't merged") {

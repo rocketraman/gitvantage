@@ -77,6 +77,11 @@ data class RegistryEntry(
     val reminderDueEpoch: Long? = null,
     val dirtySinceEpoch: Long? = null, // when the working tree first went dirty (for the "Aging" signal)
     val notifyUpstream: Boolean = false, // desktop-notify when this repo's upstream advances (opt-in)
+    // Fetch with --prune, dropping the remote-tracking copies of branches the remote has deleted —
+    // GitHub's merged PR branches, mostly. On by default: without it every merged branch lingers in
+    // the remote list and its local branch never reads "upstream gone". Off leaves the choice to
+    // git's own fetch.prune / remote.<name>.prune config.
+    val pruneOnFetch: Boolean = true,
     // Auto-fetch bookkeeping, both epoch millis. Persisted rather than in-memory because
     // [FetchPolicy] schedules in hours and days: rebuilt at every launch, a 24-hour interval would
     // really mean "on every start", which for an app opened several times a day is more traffic

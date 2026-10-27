@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -108,8 +109,11 @@ fun GitConsolePanel(state: AppState) {
                 Txt("No git commands run yet. Push / fetch / switch / commit … will appear here.",
                     12.sp, ConMuted, font = MonoFont, modifier = Modifier.padding(14.dp))
             } else {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
-                    items(entries, key = { it.seq }) { e -> ConsoleEntry(e) }
+                // Selectable, so a command or an error can be copied out — the point of a log you read.
+                SelectionContainer {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
+                        items(entries, key = { it.seq }) { e -> ConsoleEntry(e) }
+                    }
                 }
                 VerticalScrollbar(rememberScrollbarAdapter(listState), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
@@ -142,7 +146,9 @@ private fun ConsoleEntry(e: GitCommand) {
     }
 }
 
-private const val ESC = "\\u001B"
+// The escape character itself. Spelled "\\u001B" this was the six characters of that text, which no
+// line ever contains — so git's colours were never parsed and printed as raw `[1;32m` codes.
+private const val ESC = "\u001B"
 
 /** Colorize git output line-by-line: honor real ANSI colors when git emitted them
  *  (log/diff/status), else apply a semantic tint so push/fetch/switch output still

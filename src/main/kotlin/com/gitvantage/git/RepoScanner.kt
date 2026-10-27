@@ -63,7 +63,11 @@ object RepoScanner {
         // Best-effort: ignore offline/errors. Logged only when the user asked for it (see [scan]).
         // Every remote, not just the current branch's: a fork's other remote is what its mainline
         // pulls from, and a plain `git fetch` only ever refreshes the one the current branch tracks.
-        if (fetch) Git.run(dir, listOf("fetch", "--all"), Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
+        // Pruned unless this repo opted out — see RegistryEntry.pruneOnFetch.
+        if (fetch) {
+            val args = listOf("fetch", "--all") + if (entry.pruneOnFetch) listOf("--prune") else emptyList()
+            Git.run(dir, args, Git.NETWORK_TIMEOUT, log = userInitiated, repoName = name)
+        }
 
         // Whether the repo has ANY remote configured, and origin's URL for the web links. Gates
         // Push/Fetch/Fast-forward: a branch can be pushable (via `push -u origin`) even without a

@@ -538,6 +538,36 @@ private fun UpstreamAlertRow(state: AppState, rv: RepoView) {
 }
 
 /**
+ * Whether this repo's fetches prune. On by default, since a merged PR's branch is deleted on GitHub
+ * and would otherwise linger here forever; off for a repo whose remote branches you want kept even
+ * after the server drops them, or where git's own prune config should decide.
+ */
+@Composable
+private fun PruneRow(state: AppState, rv: RepoView) {
+    val repo = rv.repo
+    if (!repo.hasRemote) return
+    val on = state.pruneOnFetch(repo.id)
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
+        Row(
+            Modifier.padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Txt("Prune on fetch", 12.5.sp, Tokens.text, FontWeight.Bold)
+            InfoTip(
+                "Fetches with --prune, removing the local copies of remote branches the remote has " +
+                    "deleted — such as a PR branch GitHub deleted on merge. Off leaves them, unless " +
+                    "your git config prunes anyway (fetch.prune).",
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PresetPill("On", on, state.accent) { state.setPruneOnFetch(repo.id, true) }
+            PresetPill("Off", !on, state.accent) { state.setPruneOnFetch(repo.id, false) }
+        }
+    }
+}
+
+/**
  * Zone 8: the note and the reminder, one line each.
  *
  * The note used to own a permanently-mounted 60px text area near the bottom of the pane — the
@@ -617,7 +647,7 @@ private fun SettingsZone(state: AppState, rv: RepoView) {
             Txt(if (open) "▾" else "▸", 11.sp, Tokens.muted2)
             Txt("Settings", 12.5.sp, Tokens.secondary, FontWeight.Bold)
             Txt(
-                "staleness · issues · alerts · hidden branches · remove repo", 11.sp, Tokens.muted2,
+                "staleness · issues · alerts · fetch · hidden branches · remove repo", 11.sp, Tokens.muted2,
                 modifier = Modifier.weight(1f, fill = false),
             )
             Spacer(Modifier.weight(1f))
@@ -641,6 +671,9 @@ private fun SettingsZone(state: AppState, rv: RepoView) {
 
         // Whether new upstream commits raise a desktop notification
         UpstreamAlertRow(state, rv)
+
+        // Whether fetches drop the remote branches the remote has deleted
+        PruneRow(state, rv)
 
         // Per-repo patterns for the branches the lists keep out of the way
         if (repo.isGitRepo) HiddenBranchesRow(state, rv)

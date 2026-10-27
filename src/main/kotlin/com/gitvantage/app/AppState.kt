@@ -793,6 +793,15 @@ class AppState(private val scope: CoroutineScope) {
 
     fun notifyUpstreamEnabled(id: String): Boolean = entries[id]?.notifyUpstream == true
 
+    /** Whether this repo's fetches prune — see [RegistryEntry.pruneOnFetch]. */
+    fun pruneOnFetch(id: String): Boolean = entries[id]?.pruneOnFetch ?: true
+
+    fun setPruneOnFetch(id: String, on: Boolean) {
+        val e = entries[id] ?: return
+        entries[id] = e.copy(pruneOnFetch = on)
+        persist()
+    }
+
     /** Toggle per-repo "alert when upstream advances". Enabling re-baselines the behind count so
      *  the very next *new* upstream commit alerts (not the backlog that already exists). */
     fun setNotifyUpstream(id: String, on: Boolean) {
@@ -1068,6 +1077,7 @@ class AppState(private val scope: CoroutineScope) {
             e.ignoreLabels.isNotEmpty(),
             e.hideBranchPatterns != null,
             e.notifyUpstream,
+            !e.pruneOnFetch,
             e.worktreeAlerts.isNotEmpty(),
         ).count { it }
     }

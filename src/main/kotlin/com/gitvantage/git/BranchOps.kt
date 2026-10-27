@@ -165,31 +165,35 @@ object BranchOps {
      * squash or rebase merge leaves behind. git's own "merged" is ancestry, and a squash writes a new
      * commit, so the branch's commits never reach mainline and git calls it unmerged forever.
      *
-     * First: would merging it change anything? `merge-tree` does the merge without touching a branch
-     * or the working tree, and a result identical to mainline's tree means every change is there.
-     * That covers squash, rebase and cherry-pick alike. It fails once mainline has since edited the
-     * same lines (a conflict), so then: is there a commit on mainline whose diff is the branch's whole
-     * diff — the squash commit itself — compared the way `git patch-id` does, ignoring line numbers
-     * and whitespace. A squash the maintainer edited on the way in matches neither.
+     * First: does mainline hold every file the branch changed exactly as the branch has it? That
+     * covers squash, rebase and cherry-pick alike, as long as mainline hasn't touched those files
+     * since. Once it has, the question becomes: is there a commit on mainline whose diff is the
+     * branch's whole diff — the squash commit itself — compared the way `git patch-id` does,
+     * ignoring line numbers and whitespace. A squash the maintainer edited on the way in matches
+     * neither, and nor does a rebase merge whose files mainline has edited since.
+     *
+     * Strictly read-only, because this runs on every scan and git reads never touch `.git`. It used
+     * `merge-tree --write-tree`, which writes the merge result into the object store and, for objects
+     * already there, touches their mtime — and the repo's watch covers `.git`, so every scan set off
+     * the next one, about once a second for as long as the app was open.
      *
      * Callers only ask for a branch that isn't an ancestor of mainline; that case is [hasOwnWork]'s.
      */
     internal fun landedByContent(dir: File, branch: String, mainline: String): Boolean {
-        // Clean merge prints the tree; a conflict exits 1, and git before 2.38 rejects --write-tree.
-        val merged = Git.run(dir, listOf("merge-tree", "--write-tree", mainline, branch))
-        val mainTree = Git.read(dir, "rev-parse", "--verify", "-q", "$mainline^{tree}").trim()
-        if (merged.ok && mainTree.isNotEmpty() && merged.out.lineSequence().firstOrNull()?.trim() == mainTree) {
-            return true
-        }
         val base = Git.read(dir, "merge-base", mainline, branch).trim()
         if (base.isEmpty()) return false
         val files = Git.read(dir, "diff", "--no-renames", "--name-only", base, branch)
             .lines().filter { it.isNotBlank() }
         if (files.isEmpty()) return false
+        val paths = files.toTypedArray()
+        // `diff --quiet` exits 0 when the two agree on every one of those paths, 1 when they don't.
+        if (Git.exitCode(dir, "diff", "--quiet", "--no-renames", "--no-ext-diff", mainline, branch, "--", *paths) == 0) {
+            return true
+        }
         val want = patchKey(Git.read(dir, "diff", *DIFF_OPTS, base, branch))
         // Only mainline commits that touched those files, and only their diff of those files: a
         // squash commit carrying the branch plus a fix elsewhere still matches.
-        return Git.read(dir, "log", "-p", *DIFF_OPTS, "--no-merges", "--format=%x00", "$base..$mainline", "--", *files.toTypedArray())
+        return Git.read(dir, "log", "-p", *DIFF_OPTS, "--no-merges", "--format=%x00", "$base..$mainline", "--", *paths)
             .split('\u0000').any { it.isNotBlank() && patchKey(it) == want }
     }
 
@@ -412,12 +416,25 @@ object BranchOps {
      * `git push <remote> --delete refs/heads/<branch>` for [upstream] (e.g. "origin/foo"), leased on
      * the tip last fetched into `refs/remotes/<upstream>`: a branch someone pushed to since is
      * refused rather than deleted. Shared by [deleteWithUpstream] and the worktree "Remove + branch".
+     *
+     * A branch the remote has already deleted — GitHub does, on merging a PR — fails the lease too
+     * ("stale info"): fetches don't prune, so the local copy still names a tip the remote no longer
+     * has. That is the outcome asked for, not a conflict, so when `ls-remote` confirms the branch is
+     * gone the stale `refs/remotes/` copy is dropped (only if it's still the tip leased on) and it
+     * counts as deleted. A branch that is there at another tip stays refused.
      */
     internal fun deleteUpstreamLeased(dir: File, upstream: String): Git.Result {
+        val remote = upstream.substringBefore('/')
         val ref = "refs/heads/${upstream.substringAfter('/')}"
         val seen = Git.read(dir, "rev-parse", "--verify", "-q", "refs/remotes/$upstream").trim()
         val lease = if (seen.isNotEmpty()) "--force-with-lease=$ref:$seen" else "--force-with-lease"
-        return Git.run(dir, listOf("push", lease, upstream.substringBefore('/'), "--delete", ref), Git.NETWORK_TIMEOUT)
+        val pushed = Git.run(dir, listOf("push", lease, remote, "--delete", ref), Git.NETWORK_TIMEOUT)
+        if (pushed.ok) return pushed
+        // --exit-code: 2 means the remote answered and has no such ref; anything else proves nothing.
+        val gone = Git.exitCode(dir, "ls-remote", "--exit-code", remote, ref, timeoutSeconds = Git.NETWORK_TIMEOUT) == 2
+        if (!gone) return pushed
+        if (seen.isNotEmpty()) Git.run(dir, listOf("update-ref", "-d", "refs/remotes/$upstream", seen))
+        return Git.Result(0, "$upstream was already deleted on $remote", "")
     }
 
     /**
