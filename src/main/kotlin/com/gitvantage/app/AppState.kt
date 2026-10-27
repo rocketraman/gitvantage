@@ -23,8 +23,10 @@ import com.gitvantage.git.WorktreeOps
 import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.Commit
 import com.gitvantage.git.model.Diff
+import com.gitvantage.git.model.OpResult
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.Submodule
+import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Perf
@@ -99,6 +101,15 @@ sealed interface Popup {
 
     /** Snooze one worktree's alerts, from its Alerts popover. Same duration menu as [Snooze]. */
     data class SnoozeWorktree(val repoId: String, val path: String, val label: String) : Popup {
+        override val ids: Set<String> = setOf(repoId)
+    }
+
+    /**
+     * Make a new worktree of [repoId] (see [AppState.addWorktree]). [source] is the ref the row it
+     * was opened from already names — a branch, remote branch, PR or commit — and null when it came
+     * from the Worktrees section's own "+ New worktree", where the dialog asks for one.
+     */
+    data class NewWorktree(val repoId: String, val source: WorktreeSource?) : Popup {
         override val ids: Set<String> = setOf(repoId)
     }
 
@@ -309,6 +320,10 @@ class AppState(private val scope: CoroutineScope) {
     var worktrees by mutableStateOf<List<Worktree>>(emptyList())
         private set
     var worktreesBusy by mutableStateOf(false)
+        private set
+
+    /** Why the open New worktree dialog's last Create was refused — shown in the dialog, not a toast. */
+    var newWorktreeError by mutableStateOf<String?>(null)
         private set
 
     // Diff viewer (GitHub-style overlay).
@@ -2117,6 +2132,71 @@ class AppState(private val scope: CoroutineScope) {
             }
             // The parent's worktree count and unlanded roll-up both just changed.
             reloadWorktrees(id)
+            rescanRepos(listOf(id), fetch = false)
+            worktreesBusy = false
+        }
+    }
+
+    /** Open the New worktree dialog for [id], from [source] when the row that opened it names one. */
+    fun openNewWorktree(id: String, source: WorktreeSource?) {
+        newWorktreeError = null
+        popup = Popup.NewWorktree(id, source)
+    }
+
+    /** Every branch, remote branch and tag of [id], for the dialog's suggestions. */
+    suspend fun worktreeRefNames(id: String): List<String> = withContext(Dispatchers.IO) { WorktreeOps.refNames(id) }
+
+    /** What a ref typed into the dialog names, or null (see [WorktreeOps.resolve]). */
+    suspend fun resolveWorktreeRef(id: String, ref: String): WorktreeSource? =
+        withContext(Dispatchers.IO) { WorktreeOps.resolve(id, ref) }
+
+    /**
+     * `git worktree add` — the New worktree dialog's Create (see [WorktreeOps.add]).
+     *
+     * The dialog stays up until this lands. A refusal goes into [newWorktreeError] and is shown in
+     * the dialog, next to the folder and branch name that caused it, rather than in a toast after
+     * those fields are gone. On success the dialog closes, the new tree's card opens in the pane
+     * when [id] is the repo on screen, and [openTerminal] has a terminal waiting in the folder.
+     *
+     * A pull request is two steps: a detached tree, then `gh pr checkout` inside it, which works out
+     * the branch (a fork's too) the same way the PR row's Checkout does. If the second step fails
+     * the first is undone, so a refused PR doesn't leave behind a folder at the wrong commit.
+     */
+    fun addWorktree(id: String, path: String, source: WorktreeSource, newBranch: String?, openTerminal: Boolean) {
+        if (worktreesBusy) return
+        worktreesBusy = true
+        newWorktreeError = null
+        scope.launch {
+            val target = WorktreeOps.expandHome(path.trim())
+            var r = WorktreeOps.add(id, target, source, newBranch)
+            if (r.ok && source is WorktreeSource.PullRequest) {
+                val pr = GitHub.checkoutPr(target, source.number)
+                r = if (pr.ok) {
+                    OpResult(id, true, "Created worktree ${File(target).name} for PR #${source.number}")
+                } else {
+                    WorktreeOps.remove(id, target, force = true, locked = false)
+                    OpResult(id, false, pr.message)
+                }
+            }
+            if (!r.ok) {
+                newWorktreeError = r.message
+                worktreesBusy = false
+                return@launch
+            }
+            popup = null
+            toast(r.message)
+            if (openTerminal) openTerminal(target)
+            val list = withContext(Dispatchers.IO) { WorktreeOps.load(id) }
+            if (selectedId == id) {
+                worktreesRepo = id
+                worktrees = list
+                val made = runCatching { File(target).canonicalPath }.getOrDefault(target)
+                list.firstOrNull { runCatching { File(it.path).canonicalPath }.getOrDefault(it.path) == made }
+                    ?.let { if (wtExpanded != it.path) toggleWorktreeCard(it.path) }
+            } else if (worktreesRepo == id) {
+                worktrees = list
+            }
+            // The parent's sub-rows and worktree count come from the scan.
             rescanRepos(listOf(id), fetch = false)
             worktreesBusy = false
         }
