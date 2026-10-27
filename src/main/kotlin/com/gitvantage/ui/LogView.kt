@@ -56,6 +56,7 @@ import com.gitvantage.app.Tokens
 import com.gitvantage.git.model.Commit
 import com.gitvantage.git.model.CommitRef
 import com.gitvantage.git.model.RefKind
+import com.gitvantage.git.model.WorktreeSource
 
 /**
  * Commit-list overlay for an arbitrary revision range (see [AppState.openRangeLog]). Each row
@@ -132,6 +133,7 @@ private fun CommitRow(state: AppState, c: Commit) {
     // Only worth offering for commits the remote actually has: a link to a hash that was never
     // pushed lands on GitHub's 404, so the button would be a promise the row can't keep.
     val webBase = state.logWebBase?.takeIf { c.pushed }
+    val worktreeable = state.repos.any { it.id == state.logRepoId }
     // Held behind hover for the reason the branch and worktree lists are — see [HoverRow]. A log is
     // the longest of these lists, so a permanent pair of pills on every row is the worst offender.
     val source = remember { MutableInteractionSource() }
@@ -187,6 +189,13 @@ private fun CommitRow(state: AppState, c: Commit) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
+                // Only for a log of a tracked repo: a submodule's or a worktree's log has no parent
+                // entry here for the new tree to appear under. Named after the tag when the commit
+                // carries one, since "v1.4.0" is what you'd call that folder.
+                if (worktreeable) LogPill("Worktree", accent) {
+                    val tag = c.refs.firstOrNull { it.kind == RefKind.TAG }?.label
+                    state.openNewWorktree(state.logRepoId, WorktreeSource.Commit(c.fullHash, tag ?: c.shortHash))
+                }
                 if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
             }
         }

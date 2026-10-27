@@ -73,6 +73,7 @@ import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.groupByRemote
 import com.gitvantage.git.model.Submodule
+import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.Meta
 import com.gitvantage.model.Repo
@@ -1398,6 +1399,12 @@ private fun BranchRow(
                         "Switch anyway", danger = false,
                     ) { state.switchBranch(id, b.name) }
                 }
+                // Beside Switch because it's the other way to get onto the branch — one that leaves
+                // this checkout, and anything uncommitted in it, exactly where it is. Off for the same
+                // branches Switch is: git holds a branch in one tree at a time.
+                if (!b.isCurrent && !b.inOtherWorktree) RowAction("Worktree") {
+                    state.openNewWorktree(id, WorktreeSource.LocalBranch(b.name))
+                }
                 // Where "Switch" would have been: the branch is already checked out somewhere, so the
                 // useful move is to go there. Only when that worktree is tracked — offering to open an
                 // untracked one is the "+ Add Repo" flow, and it belongs on the worktree list, not here.
@@ -1560,6 +1567,16 @@ private fun RemoteBranchRow(
                         "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
                         if (rb.hasLocal) "Switch anyway" else "Checkout anyway", danger = false,
                     ) { state.checkoutRemoteBranch(id, rb) }
+                }
+                // The local branch when there is one, as Switch does — a second local branch made to
+                // track the same remote would be a surprise. Off when that local branch is already
+                // checked out somewhere, which git would refuse.
+                val local = if (rb.hasLocal) state.branches.find { it.name == rb.shortName } else null
+                if (local == null || (!local.isCurrent && !local.inOtherWorktree)) RowAction("Worktree") {
+                    state.openNewWorktree(
+                        id,
+                        if (rb.hasLocal) WorktreeSource.LocalBranch(rb.shortName) else WorktreeSource.RemoteBranch(rb.name),
+                    )
                 }
                 // Absent on the branches a workflow shares — main, develop, next, pu and the rest of
                 // [Meta.INTEGRATION_BRANCHES]. Deleting one of those on the remote isn't a mistake
@@ -1888,6 +1905,11 @@ private fun IssueRow(state: AppState, id: String, item: GitHub.Item, clean: Bool
                                 "You have uncommitted changes — git will carry them over, or refuse if they'd conflict.",
                                 "Checkout anyway", danger = false,
                             ) { state.checkoutPr(id, item.number) }
+                        }
+                    }
+                    HoverTip("Checks this PR out into a new folder of its own, leaving this checkout as it is.") {
+                        RowAction("Worktree") {
+                            state.openNewWorktree(id, WorktreeSource.PullRequest(item.number, item.title))
                         }
                     }
                 }

@@ -65,6 +65,7 @@ import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
+import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.Meta
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalClipboard
@@ -87,6 +88,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Note -> NotePopup(state, popup.id)
         is Popup.Commit -> CommitPopup(state, popup.id)
         is Popup.CommitWorktree -> CommitWorktreePopup(state, popup)
+        is Popup.NewWorktree -> NewWorktreePopup(state, popup)
         is Popup.Confirm -> ConfirmPopup(state, popup)
         is Popup.ConfirmWithOption -> ConfirmWithOptionPopup(state, popup)
         is Popup.Settings -> SettingsPopup(state, popup.section)
@@ -669,6 +671,169 @@ private fun CommitForm(
             ModalButtons({ state.popup = null }, "Commit", title.isNotBlank(), false, ::commit)
         }
     }
+}
+
+/**
+ * A new worktree, from a ref — the dialog every "Worktree" row action and the Worktrees section's
+ * "+ New worktree" open.
+ *
+ * Prefilled so that Enter is usually the whole job: the branch is the ref's own (or the remote
+ * branch's short name), and the folder sits beside the repo named after it — see
+ * [com.gitvantage.git.WorktreeOps.defaultPath] for why beside and not inside. The folder follows the branch name as it
+ * is edited, until the folder itself is touched; after that it's the user's.
+ *
+ * Opened without a ref, it asks for one first, suggesting from the repo's branches and tags and
+ * saying under the field what the text resolves to — the same order git would take it in, so what
+ * the hint says is what Create will do.
+ *
+ * Create keeps the dialog up until git answers. A refusal (branch checked out elsewhere, a branch of
+ * that name already exists) is shown here, where the fields that caused it can be changed.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun NewWorktreePopup(state: AppState, p: Popup.NewWorktree) {
+    val repoName = remember(p.repoId) { java.io.File(p.repoId).name }
+    var ref by remember(p) { mutableStateOf("") }
+    var resolved by remember(p) { mutableStateOf<WorktreeSource?>(null) }
+    var resolving by remember(p) { mutableStateOf(false) }
+    var refNames by remember(p) { mutableStateOf<List<String>>(emptyList()) }
+    if (p.source == null) {
+        LaunchedEffect(p) { refNames = state.worktreeRefNames(p.repoId) }
+        LaunchedEffect(p, ref) {
+            resolving = true
+            delay(200.milliseconds) // typing pace: resolve what was settled on, not every keystroke
+            resolved = if (ref.isBlank()) null else state.resolveWorktreeRef(p.repoId, ref)
+            resolving = false
+        }
+    }
+    val source = p.source ?: resolved
+
+    // The branch field, reset whenever the source changes kind or name.
+    val defaultBranch = when (source) {
+        is WorktreeSource.RemoteBranch -> source.shortName
+        else -> ""
+    }
+    var branch by remember(p, source) { mutableStateOf(defaultBranch) }
+    val nameForFolder = when (source) {
+        is WorktreeSource.LocalBranch -> source.name
+        is WorktreeSource.RemoteBranch -> branch.ifBlank { source.shortName }
+        is WorktreeSource.Commit -> branch.ifBlank { source.label }
+        is WorktreeSource.PullRequest -> "pr-${source.number}"
+        null -> ref
+    }
+    var folder by remember(p) { mutableStateOf("") }
+    var folderEdited by remember(p) { mutableStateOf(false) }
+    if (!folderEdited) {
+        val suggested = shortPath(state.defaultWorktreePath(p.repoId, nameForFolder))
+        if (folder != suggested) folder = suggested
+    }
+    var openTerminal by remember(p) { mutableStateOf(true) }
+
+    val folderProblem = state.worktreePathProblem(folder)
+    val busy = state.worktreesBusy
+    val canCreate = source != null && folderProblem == null && !busy &&
+        !(source is WorktreeSource.RemoteBranch && branch.isBlank())
+    fun create() {
+        if (!canCreate) return
+        state.addWorktree(p.repoId, folder, source!!, branch.takeIf { source.takesBranch }, openTerminal)
+    }
+    val dismiss = { state.popup = null }
+
+    Modal(dismiss, width = 520) {
+        ModalHeader(
+            "New worktree",
+            when (p.source) {
+                null -> "A branch, tag or commit of $repoName, checked out in a folder of its own."
+                is WorktreeSource.PullRequest -> "From PR #${p.source.number} · ${p.source.title}"
+                else -> "From ${p.source.label} — in a folder of its own, leaving this checkout as it is."
+            },
+        )
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (p.source == null) {
+                Field("Ref") {
+                    TextInput(ref, { ref = it }, "Branch, remote branch, tag or commit", state.accent, ::create, dismiss, font = MonoFont)
+                    val matches = remember(refNames, ref) {
+                        val q = ref.trim()
+                        if (q.isEmpty()) refNames.take(6)
+                        else refNames.filter { it.contains(q, ignoreCase = true) && it != q }.take(6)
+                    }
+                    if (matches.isNotEmpty()) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            matches.forEach { name -> PresetChip(name, false, state.accent) { ref = name } }
+                        }
+                    }
+                    Hint(
+                        when {
+                            ref.isBlank() -> "Type a name, or pick one above."
+                            resolving -> "Looking it up…"
+                            resolved == null -> "Nothing by that name in $repoName."
+                            else -> describe(resolved!!)
+                        },
+                        warn = ref.isNotBlank() && !resolving && resolved == null,
+                    )
+                }
+            }
+            when (source) {
+                is WorktreeSource.LocalBranch -> Field("Branch") {
+                    Txt("⎇ ${source.name}", 12.5.sp, Tokens.text2, font = MonoFont, maxLines = 1)
+                    Hint("Checked out as itself. git refuses if another worktree already holds it.")
+                }
+                is WorktreeSource.RemoteBranch -> Field("Branch") {
+                    TextInput(branch, { branch = it }, source.shortName, state.accent, ::create, dismiss, font = MonoFont)
+                    Hint("A new local branch tracking ${source.name}.", warn = branch.isBlank())
+                }
+                is WorktreeSource.Commit -> Field("Branch") {
+                    TextInput(branch, { branch = it }, "Leave empty for a detached HEAD", state.accent, ::create, dismiss, font = MonoFont)
+                    Hint(
+                        if (branch.isBlank()) "Detached at ${source.label} — name a branch to commit on one."
+                        else "A new branch starting at ${source.label}.",
+                    )
+                }
+                is WorktreeSource.PullRequest -> Field("Branch") {
+                    Hint("gh names it after the PR's own branch, and sets it up to pull from a fork too.")
+                }
+                null -> Unit
+            }
+            Field("Folder") {
+                TextInput(folder, { folder = it; folderEdited = true }, "~/source/$repoName-branch", state.accent, ::create, dismiss, font = MonoFont)
+                Hint(folderProblem ?: "Beside the repo, so it stays out of its status and its file watcher.", warn = folderProblem != null)
+            }
+            Row(
+                Modifier.onTap { openTerminal = !openTerminal },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectBox(checked = openTerminal)
+                Txt("Open a terminal there after creating", 12.sp, Tokens.text2)
+            }
+            state.newWorktreeError?.let { Txt(it, 12.sp, Tokens.redText, maxLines = 4) }
+            ModalButtons(dismiss, if (busy) "Creating…" else "Create worktree", canCreate, false, ::create)
+        }
+    }
+}
+
+/** Whether the dialog's branch field means anything for [this] — sent only when it does. */
+private val WorktreeSource.takesBranch get() = this is WorktreeSource.RemoteBranch || this is WorktreeSource.Commit
+
+/** The hint under the Ref field: what the typed text resolved to, in the words the branch field then uses. */
+private fun describe(s: WorktreeSource): String = when (s) {
+    is WorktreeSource.LocalBranch -> "Local branch ${s.name}"
+    is WorktreeSource.RemoteBranch -> "Remote branch ${s.name}"
+    is WorktreeSource.Commit -> "Commit ${s.rev.take(7)}"
+    is WorktreeSource.PullRequest -> s.label
+}
+
+@Composable
+private fun Field(label: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Txt(label, 11.5.sp, Tokens.muted, FontWeight.SemiBold)
+        content()
+    }
+}
+
+@Composable
+private fun Hint(text: String, warn: Boolean = false) {
+    Txt(text, 11.sp, if (warn) Tokens.redText else Tokens.muted2, maxLines = 2)
 }
 
 @Composable

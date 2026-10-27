@@ -216,20 +216,26 @@ private fun verdictColor(wt: Worktree): Color = when {
  */
 @Composable
 fun WorktreesPaneSection(state: AppState, rv: RepoView) {
-    // Nothing to load or draw for a repo with no linked worktrees, which is nearly all of them. The
-    // scan already answered that, so this costs no git: without the guard, selecting any repo would
-    // run a `worktree list` to rediscover what the row it was clicked on already knew.
-    if (rv.worktrees.isEmpty()) return
-    LaunchedEffect(rv.id) { state.loadWorktrees(rv.id) }
+    if (!rv.repo.isGitRepo) return
+    // Nothing to load for a repo with no linked worktrees, which is nearly all of them. The scan
+    // already answered that, so this costs no git: without the guard, selecting any repo would run a
+    // `worktree list` to rediscover what the row it was clicked on already knew. What's drawn then
+    // is the heading alone, because it carries "+ New worktree" — the one way to make the first.
+    //
+    // Except straight after that first one is made: [AppState.addWorktree] hands the pane the new
+    // list before the rescan catches up, and the card should be there when the dialog closes.
+    val justMade = state.worktreesRepo == rv.id && state.worktrees.any { !it.isCurrent }
+    if (rv.worktrees.isNotEmpty()) LaunchedEffect(rv.id) { state.loadWorktrees(rv.id) }
     // The scan's list until the richer one lands, so the section doesn't blink in a frame late — it
     // has every field these cards show except "has its branch landed", which only adds a badge.
-    val loaded = if (state.worktreesRepo == rv.id && state.worktrees.isNotEmpty()) {
+    val loaded = if ((rv.worktrees.isNotEmpty() || justMade) && state.worktreesRepo == rv.id && state.worktrees.isNotEmpty()) {
         state.worktreeViews(rv.id, rv.repo.snoozed, state.worktrees)
     } else {
         rv.worktrees
     }
-    if (loaded.isEmpty()) return
-    val stale = state.worktrees.count { it.prunable || it.missing }
+    // [AppState.worktrees] is whichever repo last loaded them, which with the heading now drawn for
+    // every repo can be a different one.
+    val stale = if (state.worktreesRepo == rv.id) state.worktrees.count { it.prunable || it.missing } else 0
     Column(Modifier.fillMaxWidth().padding(top = 20.dp).drawTopBorder(Tokens.sectionBorder).padding(top = 14.dp)) {
         Row(
             Modifier.padding(bottom = 8.dp),
@@ -237,7 +243,7 @@ fun WorktreesPaneSection(state: AppState, rv: RepoView) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Txt("Worktrees", 12.5.sp, Tokens.text, FontWeight.Bold)
-            Txt("— ${loaded.size}", 11.sp, Tokens.muted2)
+            Txt(if (loaded.isEmpty()) "— none" else "— ${loaded.size}", 11.sp, Tokens.muted2)
             InfoTip(
                 "Branches this repository has checked out in other folders. They share one set of " +
                     "commits, branches, remotes and stashes with this checkout — so what's per-worktree " +
@@ -257,7 +263,12 @@ fun WorktreesPaneSection(state: AppState, rv: RepoView) {
                     ) { state.pruneWorktrees(rv.id) }
                 }
             }
+            // For a ref with no row of its own to start from — a tag, a sha, `HEAD~3`. Branches,
+            // remote branches, PRs and log commits each have a "Worktree" action that opens the
+            // same dialog already filled in.
+            FlatAction("+ New worktree", size = 12.sp) { state.openNewWorktree(rv.id, null) }
         }
+        if (loaded.isEmpty()) return@Column
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             loaded.forEach { wtv -> WorktreeCard(state, rv, wtv) }
         }

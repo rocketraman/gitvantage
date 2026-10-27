@@ -4,6 +4,7 @@
 package com.gitvantage.git
 
 import com.gitvantage.git.model.OpResult
+import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.Worktree
 import com.gitvantage.model.WorktreeChange
 import java.io.File
@@ -253,6 +254,143 @@ object WorktreeOps {
     }
 
     private fun Int?.orZero() = this ?: 0
+
+    // ---- creating one ----
+
+    /**
+     * Where a new worktree goes unless the user says otherwise: beside the repo, as
+     * `<repo>-<slug of name>`, numbered on from `-2` when that's taken.
+     *
+     * Beside rather than inside, on purpose. A tree inside the checkout shows up in its status as
+     * untracked files, and lands under the file watcher the repo already has — the churn
+     * [com.gitvantage.model.WatchPolicy] has to special-case `.claude/worktrees/` for. A sibling
+     * has neither problem.
+     */
+    fun defaultPath(repoPath: String, name: String, taken: (File) -> Boolean = File::exists): String {
+        val repo = File(canonical(repoPath))
+        val parent = repo.parentFile ?: repo
+        val base = "${repo.name}-${slug(name).ifEmpty { "worktree" }}"
+        return generateSequence(1) { it + 1 }
+            .map { n -> File(parent, if (n == 1) base else "$base-$n") }
+            .first { !taken(it) }.path
+    }
+
+    /** A ref name as a folder name: `/`, spaces and anything else a shell would trip on become `-`. */
+    internal fun slug(name: String): String = name.replace(UNSAFE, "-").trim('-', '.')
+
+    private val UNSAFE = Regex("[^A-Za-z0-9._-]+")
+
+    /** A leading `~/` as the home directory — the dialog shows paths folded that way, so it accepts them back. */
+    fun expandHome(path: String): String {
+        val home = System.getProperty("user.home").orEmpty()
+        return when {
+            home.isEmpty() -> path
+            path == "~" -> home
+            path.startsWith("~/") -> home + path.removePrefix("~")
+            else -> path
+        }
+    }
+
+    /**
+     * Why [path] can't take a new worktree, or null when it can. git accepts a folder that exists
+     * but is empty, so this does too; it makes missing parents itself.
+     */
+    fun pathProblem(path: String): String? {
+        if (path.isBlank()) return "Choose a folder"
+        val f = File(expandHome(path.trim()))
+        return when {
+            !f.isAbsolute -> "Use a full path"
+            f.isFile -> "A file is already there"
+            f.isDirectory && f.list()?.isNotEmpty() == true -> "That folder already exists and isn't empty"
+            else -> null
+        }
+    }
+
+    /**
+     * What a ref typed into the dialog names, checked in the order `git worktree add` itself would
+     * take it: a local branch; a remote-tracking one, either spelled out ("origin/x") or by its
+     * short name when exactly one remote has it (git's own guess); then anything that peels to a
+     * commit — a tag, a sha, `HEAD~3`. Null when it names nothing.
+     */
+    fun resolve(repoPath: String, ref: String): WorktreeSource? {
+        val r = ref.trim()
+        if (r.isEmpty() || r.startsWith("-")) return null
+        val dir = File(repoPath)
+        fun exists(full: String) = Git.exitCode(dir, "show-ref", "--verify", "--quiet", full) == 0
+        if (exists("refs/heads/$r")) return WorktreeSource.LocalBranch(r)
+        if (!r.endsWith("/HEAD") && exists("refs/remotes/$r")) return WorktreeSource.RemoteBranch(r)
+        val onRemotes = Git.read(dir, "for-each-ref", "--format=%(refname:short)", "refs/remotes")
+            .lines().filter { it.substringAfter('/', "") == r }
+        if (onRemotes.size == 1) return WorktreeSource.RemoteBranch(onRemotes[0])
+        val sha = Git.readOrNull(dir, "rev-parse", "--verify", "--quiet", "$r^{commit}")?.trim()
+        return sha?.takeIf { it.isNotEmpty() }?.let { WorktreeSource.Commit(it, r) }
+    }
+
+    /**
+     * Every local branch, remote branch and tag, newest first — what the dialog suggests as you
+     * type a ref. One `for-each-ref`, read once when the dialog opens. A remote's `HEAD` alias is
+     * left out: it is another name for a branch already in the list.
+     */
+    fun refNames(repoPath: String): List<String> =
+        Git.read(
+            File(repoPath), "for-each-ref", "--sort=-committerdate",
+            "--format=%(refname) %(refname:short)", "refs/heads", "refs/remotes", "refs/tags",
+        ).lines().mapNotNull { line ->
+            val full = line.substringBefore(' ')
+            line.substringAfter(' ', "").takeIf { it.isNotEmpty() && !full.endsWith("/HEAD") }
+        }
+
+    /**
+     * `git worktree add` — a new working tree at [path] holding [source].
+     *
+     * [newBranch] names a branch to create there. A remote branch always gets one — the short name
+     * when [newBranch] is null — tracking the remote, because a tree detached at `origin/x` isn't
+     * what "check this out" means and commits made there would belong to no branch. For a tag or
+     * commit it's optional, and null is git's own default for those: a detached HEAD. A local
+     * branch is checked out as itself and ignores it.
+     *
+     * Never `--force`. git's refusals here — the branch is checked out in another tree, a branch of
+     * that name already exists, the folder isn't empty — are each the right answer, and the dialog
+     * shows the message rather than overriding it.
+     *
+     * A [WorktreeSource.PullRequest] gets only the git half: a tree detached at `HEAD`, which the
+     * caller then has `gh pr checkout` replace with the PR's branch. That step lives with the rest
+     * of the GitHub CLI calls.
+     */
+    suspend fun add(repoPath: String, path: String, source: WorktreeSource, newBranch: String?): OpResult =
+        withContext(Dispatchers.IO) {
+            val target = expandHome(path.trim())
+            val named = newBranch?.trim()?.takeIf { it.isNotEmpty() }
+            val branch = when (source) {
+                is WorktreeSource.LocalBranch -> source.name
+                is WorktreeSource.RemoteBranch -> named ?: source.shortName
+                is WorktreeSource.Commit -> named
+                is WorktreeSource.PullRequest -> null
+            }
+            val args = buildList {
+                // Quiet, so a refusal's first line is the refusal: without it git leads stderr with
+                // "Preparing worktree (new branch …)", and that is what the dialog would show.
+                add("worktree"); add("add"); add("--quiet")
+                when (source) {
+                    is WorktreeSource.LocalBranch -> { add(target); add(source.name) }
+                    is WorktreeSource.RemoteBranch -> {
+                        add("--track"); add("-b"); add(branch!!); add(target); add(source.name)
+                    }
+                    is WorktreeSource.Commit -> {
+                        if (branch == null) add("--detach") else { add("--no-track"); add("-b"); add(branch) }
+                        add(target); add(source.rev)
+                    }
+                    is WorktreeSource.PullRequest -> { add("--detach"); add(target); add("HEAD") }
+                }
+            }
+            val res = Git.run(File(repoPath), args)
+            if (!res.ok) return@withContext OpResult(repoPath, false, res.firstError("worktree add failed"))
+            val name = File(target).name
+            OpResult(
+                repoPath, true,
+                if (branch != null) "Created worktree $name on $branch" else "Created worktree $name at ${source.label}",
+            )
+        }
 
     /**
      * `git worktree remove` — deletes the worktree's folder and its files. The branch it held is
