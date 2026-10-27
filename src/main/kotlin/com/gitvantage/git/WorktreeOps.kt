@@ -177,7 +177,7 @@ object WorktreeOps {
                 branchMerged = merged,
                 branchEmpty = contained && !merged,
                 tipBranch = tipBranch,
-                deletableUpstream = if (merged && own != null) BranchOps.deletableUpstream(dir, own) else null,
+                deletableUpstream = if (merged) BranchOps.deletableUpstream(dir, own) else null,
             )
         }
     }

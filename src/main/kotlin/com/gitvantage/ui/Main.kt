@@ -34,7 +34,9 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -56,6 +58,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlin.time.Duration.Companion.milliseconds
+import org.jetbrains.skia.Image as SkiaImage
 
 /**
  * `--smoke-test` runs the subsystem checks in [runSmokeChecks] and exits, without opening a window.
@@ -97,6 +100,20 @@ private fun adoptContextClassLoader() {
     }
 }
 
+/**
+ * The app icon, for both the window and the title bar.
+ *
+ * Decoded straight from the classpath rather than through Compose's `painterResource`, which is
+ * deprecated in favour of the Compose resources library — a generated `Res` class and a
+ * `composeResources` folder, for one PNG. Read through our own class, so it doesn't depend on the
+ * thread's context class loader either (see [adoptContextClassLoader]).
+ */
+private val appIcon: Painter by lazy {
+    val bytes = checkNotNull(AppState::class.java.getResourceAsStream("/app-icon.png")) { "app-icon.png missing" }
+        .use { it.readAllBytes() }
+    BitmapPainter(SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap())
+}
+
 @OptIn(FlowPreview::class)
 private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     adoptContextClassLoader()
@@ -131,7 +148,7 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
             state = windowState,
             visible = windowVisible,
             title = "GitVantage",
-            icon = painterResource("app-icon.png"), // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
+            icon = appIcon, // taskbar / window icon (X11/Win/macOS; Wayland uses app_id)
             onPreviewKeyEvent = ::zoomShortcut,
         ) {
             // Everything the window draws — the Nucleus-drawn title bar included — sizes itself
@@ -153,7 +170,7 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Image(
-                            painter = painterResource("app-icon.png"),
+                            painter = appIcon,
                             contentDescription = "GitVantage",
                             modifier = Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)),
                         )

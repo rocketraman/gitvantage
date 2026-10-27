@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,8 +51,10 @@ import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -65,12 +68,14 @@ import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import kotlin.math.cos
 import kotlin.math.sin
+import java.awt.datatransfer.StringSelection
 
 /** A 1px bottom hairline, like CSS `border-bottom`. */
 fun Modifier.drawBottomBorder(color: Color): Modifier = this.drawBehind {
@@ -394,6 +399,15 @@ fun InfoTip(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * Put [text] on the system clipboard as plain text.
+ *
+ * [Clipboard] only takes a [ClipEntry], and on desktop the one way to build that is around an AWT
+ * `Transferable` — a constructor Compose still marks experimental, hence the opt-in.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+suspend fun Clipboard.setText(text: String) = setClipEntry(ClipEntry(StringSelection(text)))
+
+/**
  * A pill that puts [value] on the clipboard and confirms it in place — the label swaps to
  * "✓ Copied" for a moment. The confirmation is local rather than a toast because the toast
  * reports git operations, and copying isn't one; it also keeps the answer next to the thing
@@ -405,7 +419,8 @@ fun InfoTip(text: String, modifier: Modifier = Modifier) {
  */
 @Composable
 fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifier) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var copied by remember(value) { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     val shape = RoundedCornerShape(6.dp)
@@ -414,7 +429,7 @@ fun CopyPill(value: String, label: String = "Copy", modifier: Modifier = Modifie
             .background(if (copied) Tokens.tintGreen else Tokens.tintBlue, shape)
             .border(1.dp, if (copied) Tokens.okBorder else Tokens.accentBorder, shape)
             .pointerHoverIcon(PointerIcon.Hand)
-            .onTap { clipboard.setText(AnnotatedString(value)); copied = true }
+            .onTap { scope.launch { clipboard.setText(value); copied = true } }
             .padding(horizontal = 9.dp, vertical = 2.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -492,14 +507,15 @@ fun RowAction(label: String, danger: Boolean = false, onClick: () -> Unit) {
  */
 @Composable
 fun CopyAction(value: String, label: String = "Copy") {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var copied by remember(value) { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     Txt(
         if (copied) "✓ Copied" else label, 11.5.sp,
         if (copied) Tokens.addFg else Tokens.accent, FontWeight.Medium,
         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
-            .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
+            .onTap { scope.launch { clipboard.setText(value); copied = true } },
     )
 }
 
@@ -524,13 +540,14 @@ fun CopyTarget(
     modifier: Modifier = Modifier,
     content: @Composable (copied: Boolean) -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var copied by remember(value) { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
     HoverTip(
         tip,
         modifier.pointerHoverIcon(PointerIcon.Hand)
-            .onTap { clipboard.setText(AnnotatedString(value)); copied = true },
+            .onTap { scope.launch { clipboard.setText(value); copied = true } },
     ) { content(copied) }
 }
 
