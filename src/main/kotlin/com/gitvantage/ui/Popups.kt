@@ -65,7 +65,6 @@ import com.gitvantage.app.ThemeMode
 import com.gitvantage.app.Tokens
 import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
-import com.gitvantage.git.WorktreeOps
 import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.Meta
 import androidx.compose.runtime.rememberCoroutineScope
@@ -681,7 +680,7 @@ private fun CommitForm(
  *
  * Prefilled so that Enter is usually the whole job: the branch is the ref's own (or the remote
  * branch's short name), and the folder sits beside the repo named after it — see
- * [WorktreeOps.defaultPath] for why beside and not inside. The folder follows the branch name as it
+ * [com.gitvantage.git.WorktreeOps.defaultPath] for why beside and not inside. The folder follows the branch name as it
  * is edited, until the folder itself is touched; after that it's the user's.
  *
  * Opened without a ref, it asks for one first, suggesting from the repo's branches and tags and
@@ -726,12 +725,12 @@ private fun NewWorktreePopup(state: AppState, p: Popup.NewWorktree) {
     var folder by remember(p) { mutableStateOf("") }
     var folderEdited by remember(p) { mutableStateOf(false) }
     if (!folderEdited) {
-        val suggested = shortPath(WorktreeOps.defaultPath(p.repoId, nameForFolder))
+        val suggested = shortPath(state.defaultWorktreePath(p.repoId, nameForFolder))
         if (folder != suggested) folder = suggested
     }
     var openTerminal by remember(p) { mutableStateOf(true) }
 
-    val folderProblem = WorktreeOps.pathProblem(folder)
+    val folderProblem = state.worktreePathProblem(folder)
     val busy = state.worktreesBusy
     val canCreate = source != null && folderProblem == null && !busy &&
         !(source is WorktreeSource.RemoteBranch && branch.isBlank())

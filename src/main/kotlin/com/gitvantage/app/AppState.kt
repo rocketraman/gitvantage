@@ -2146,6 +2146,12 @@ class AppState(private val scope: CoroutineScope) {
     /** Every branch, remote branch and tag of [id], for the dialog's suggestions. */
     suspend fun worktreeRefNames(id: String): List<String> = withContext(Dispatchers.IO) { WorktreeOps.refNames(id) }
 
+    /** The folder the dialog suggests for a worktree of [id] named [name] (see [WorktreeOps.defaultPath]). */
+    fun defaultWorktreePath(id: String, name: String): String = WorktreeOps.defaultPath(id, name)
+
+    /** Why the dialog's folder can't take a new worktree, or null (see [WorktreeOps.pathProblem]). */
+    fun worktreePathProblem(path: String): String? = WorktreeOps.pathProblem(path)
+
     /** What a ref typed into the dialog names, or null (see [WorktreeOps.resolve]). */
     suspend fun resolveWorktreeRef(id: String, ref: String): WorktreeSource? =
         withContext(Dispatchers.IO) { WorktreeOps.resolve(id, ref) }
