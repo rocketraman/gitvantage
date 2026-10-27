@@ -67,8 +67,7 @@ import com.gitvantage.app.UiFont
 import com.gitvantage.app.UiScale
 import com.gitvantage.model.Meta
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import com.gitvantage.app.DiagLog
@@ -513,7 +512,7 @@ private fun DiagnosticsSection(state: AppState) {
  */
 @Composable
 private fun CopyReportPill(state: AppState) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
@@ -525,7 +524,7 @@ private fun CopyReportPill(state: AppState) {
             .pointerHoverIcon(PointerIcon.Hand)
             .onTap {
                 scope.launch {
-                    clipboard.setText(AnnotatedString(state.diagnosticsReport()))
+                    clipboard.setText(state.diagnosticsReport())
                     copied = true
                 }
             }

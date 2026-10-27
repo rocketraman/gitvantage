@@ -669,7 +669,7 @@ object GitHub {
         val reviewIsNewest = lastReview != null &&
             lastReview.submittedAt.toMillis() >= lastComment?.createdAt.toMillis()
         val reviewedMine = viewerDidAuthor && reviewIsNewest && !lastReviewBy.isLogin(viewer) &&
-            lastReviewBy.isNotEmpty() && lastReview?.reactionGroups.orEmpty().none { it.viewerHasReacted }
+            lastReviewBy.isNotEmpty() && lastReview.reactionGroups.orEmpty().none { it.viewerHasReacted }
 
         val mentioned = lastComment != null && !acknowledged && mentionsMe(lastComment.bodyText, viewer)
         // "Someone replied on my own thread and I haven't answered." Only counts when the last
