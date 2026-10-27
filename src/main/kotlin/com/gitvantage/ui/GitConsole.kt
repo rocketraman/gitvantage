@@ -124,12 +124,16 @@ fun GitConsolePanel(state: AppState) {
 @Composable
 private fun ConsoleEntry(e: GitCommand) {
     Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+        // The repo leads the line, shell-prompt style: as a muted label at the far right it sat a
+        // window's width away from the command it qualified, and read as one more stat beside the
+        // exit code rather than as where the command ran.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Txt(e.repo, 12.5.sp, ConPrompt, FontWeight.Bold, font = MonoFont)
             Txt("❯", 12.5.sp, ConPrompt, FontWeight.Bold, font = MonoFont)
-            Txt(e.command, 12.5.sp, Tokens.text, FontWeight.SemiBold, font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
-            Txt(e.repo, 11.sp, ConMuted, font = MonoFont)
-            Txt(if (e.exitCode == 0) "✓ 0" else "✗ ${e.exitCode}", 11.sp,
-                if (e.exitCode == 0) ConOk else ConErr, FontWeight.Bold, font = MonoFont)
+            // A failure is told by the command turning red rather than by an exit-code column: the
+            // number meant nothing at a glance, and the output below says what actually went wrong.
+            Txt(e.command, 12.5.sp, if (e.exitCode == 0) Tokens.text else ConErr, FontWeight.SemiBold,
+                font = MonoFont, maxLines = 1, modifier = Modifier.weight(1f))
             Txt("${e.durationMs}ms", 11.sp, ConMuted, font = MonoFont)
         }
         if (e.output.isNotBlank()) {
