@@ -9,6 +9,9 @@ import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.model.Meta
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 
 /**
@@ -181,8 +184,29 @@ object BranchOps {
      * the next one, about once a second for as long as the app was open.
      *
      * Callers only ask for a branch that isn't an ancestor of mainline; that case is [hasOwnWork]'s.
+     *
+     * The answer depends only on the two commits, so it's remembered by their ids: a repo with
+     * hundreds of old branches pays for the check once, not on every open of its remote list.
+     * [tips] is those ids — the branch's and mainline's — when the caller already has them.
      */
-    internal fun landedByContent(dir: File, branch: String, mainline: String): Boolean {
+    internal fun landedByContent(dir: File, branch: String, mainline: String, tips: Pair<String, String>? = null): Boolean {
+        val shas = tips?.toList()
+            ?: Git.read(dir, "rev-parse", "--verify", "-q", "$branch^{commit}", "$mainline^{commit}").lines()
+        val key = shas.takeIf { it.size >= 2 && it[0].isNotBlank() && it[1].isNotBlank() }
+            ?.let { "${dir.path}\u0000${it[0]}\u0000${it[1]}" }
+        key?.let { k -> synchronized(landedCache) { landedCache[k] } }?.let { return it }
+        val landed = computeLandedByContent(dir, branch, mainline)
+        if (key != null) synchronized(landedCache) { landedCache[key] = landed }
+        return landed
+    }
+
+    /** [landedByContent]'s answers by (repo, branch tip, mainline tip); least recently used goes first. */
+    private val landedCache = object : LinkedHashMap<String, Boolean>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>) = size > LANDED_CACHE_SIZE
+    }
+    private const val LANDED_CACHE_SIZE = 8192
+
+    private fun computeLandedByContent(dir: File, branch: String, mainline: String): Boolean {
         val base = Git.read(dir, "merge-base", mainline, branch).trim()
         if (base.isEmpty()) return false
         val files = Git.read(dir, "diff", "--no-renames", "--name-only", base, branch)
@@ -194,10 +218,20 @@ object BranchOps {
             return true
         }
         val want = patchKey(Git.read(dir, "diff", *DIFF_OPTS, base, branch))
-        // Only mainline commits that touched those files, and only their diff of those files: a
-        // squash commit carrying the branch plus a fix elsewhere still matches.
-        return Git.read(dir, "log", "-p", *DIFF_OPTS, "--no-merges", "--format=%x00", "$base..$mainline", "--", *paths)
-            .split('\u0000').any { it.isNotBlank() && patchKey(it) == want }
+        // Only mainline commits that touched every one of those files can carry the branch's whole
+        // diff, and only their diff of those files is compared: a squash commit carrying the branch
+        // plus a fix elsewhere still matches. The candidates are found from file names alone, and
+        // without a pathspec — git matches each pathspec against every commit it walks, which on a
+        // branch of a few thousand files over a few thousand commits is seconds against milliseconds.
+        val wanted = files.toSet()
+        val candidates = Git.read(dir, "log", "--no-renames", "--no-merges", "--format=%x00%H", "--name-only", "$base..$mainline")
+            .split('\u0000').mapNotNull { chunk ->
+                val lines = chunk.lines().filter { it.isNotBlank() }
+                lines.firstOrNull()?.takeIf { lines.size > wanted.size && lines.drop(1).toHashSet().containsAll(wanted) }
+            }
+        return candidates.any { sha ->
+            patchKey(Git.read(dir, "show", *DIFF_OPTS, "--format=", sha, "--", *paths)) == want
+        }
     }
 
     private val DIFF_OPTS = arrayOf("--no-renames", "--no-color", "--no-ext-diff")
@@ -218,30 +252,48 @@ object BranchOps {
             val mainline = listOf("main", "master", "origin/main", "origin/master")
                 .firstOrNull { Git.read(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
             val raw = Git.read(dir, "for-each-ref", "--sort=-committerdate",
-                "--format=%(refname:short)$SEP%(committerdate:relative)$SEP%(authorname)", "refs/remotes")
-            raw.lineSequence().filter { it.isNotBlank() }.mapNotNull { line ->
-                val p = line.split(SEP)
+                "--format=%(refname:short)$SEP%(committerdate:relative)$SEP%(authorname)$SEP%(objectname)", "refs/remotes")
+            // Every branch already in mainline's history, in one call rather than an
+            // `is-ancestor` per branch — a process each, which on hundreds of branches adds up.
+            val contained = mainline?.let {
+                Git.read(dir, "for-each-ref", "--merged=$it", "--format=%(refname:short)", "refs/remotes").lines().toSet()
+            }.orEmpty()
+            val mainlineSha = mainline?.let { Git.read(dir, "rev-parse", "--verify", "-q", "$it^{commit}").trim() }
+            val rows = raw.lineSequence().filter { it.isNotBlank() }.map { it.split(SEP) }.filter { p ->
                 val name = p.getOrElse(0) { "" }
                 // Skip the remote HEAD symref. Git shortens `refs/remotes/origin/HEAD` to just the
                 // remote name ("origin"), so a no-slash entry is the symref, not a real branch;
                 // some git versions instead keep it as "origin/HEAD".
-                if (name.isEmpty() || name.endsWith("/HEAD") || !name.contains('/')) return@mapNotNull null
-                val short = name.substringAfter('/') // drop the remote name prefix
-                // The mainline itself, on whichever remote, is never "merged" into itself.
-                val against = mainline?.takeIf { it.substringAfter('/') != short }
-                val contained = against != null && Git.exitCode(dir, "merge-base", "--is-ancestor", name, against) == 0
-                val squashed = against != null && !contained && landedByContent(dir, name, against)
-                RemoteBranch(
-                    name = name,
-                    shortName = short,
-                    author = p.getOrElse(2) { "" }.ifBlank { "—" },
-                    lastRelative = p.getOrElse(1) { "" },
-                    hasLocal = short in localNames,
-                    merged = contained || squashed,
-                    squashed = squashed,
-                )
+                name.isNotEmpty() && !name.endsWith("/HEAD") && name.contains('/')
             }.toList()
+            // A few git processes at a time: each branch's merged test is a handful of them, and a
+            // repo with hundreds of old branches is otherwise a long wait spent one process at a time.
+            coroutineScope {
+                rows.map { p ->
+                    async(remoteLimiter) {
+                        val name = p[0]
+                        val short = name.substringAfter('/') // drop the remote name prefix
+                        // The mainline itself, on whichever remote, is never "merged" into itself.
+                        val against = mainline?.takeIf { it.substringAfter('/') != short }
+                        val inHistory = against != null && name in contained
+                        val tips = p.getOrNull(3)?.takeIf { it.isNotBlank() }?.let { tip -> mainlineSha?.let { tip to it } }
+                        val squashed = against != null && !inHistory && landedByContent(dir, name, against, tips)
+                        RemoteBranch(
+                            name = name,
+                            shortName = short,
+                            author = p.getOrElse(2) { "" }.ifBlank { "—" },
+                            lastRelative = p.getOrElse(1) { "" },
+                            hasLocal = short in localNames,
+                            merged = inHistory || squashed,
+                            squashed = squashed,
+                        )
+                    }
+                }.awaitAll()
+            }
         }
+
+    /** At most this many remote branches are tested for "merged" at once — see [loadRemotes]. */
+    private val remoteLimiter = Dispatchers.IO.limitedParallelism(6)
 
     /** Check out an existing local branch. Fails (not throws) if the working tree would be clobbered. */
     suspend fun switch(repoPath: String, name: String): OpResult = withContext(Dispatchers.IO) {

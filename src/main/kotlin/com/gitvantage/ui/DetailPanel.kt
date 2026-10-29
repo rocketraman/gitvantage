@@ -1498,7 +1498,10 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, h
         }
         if (state.showRemoteBranches) {
             if (state.remoteBranches.isEmpty()) {
-                Txt("No remote branches", 11.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
+                Txt(
+                    if (state.remoteBranchesLoading) "Loading…" else "No remote branches",
+                    11.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp),
+                )
             }
             groups.forEach { (remote, list) ->
                 // A lone remote needs no heading: every row already starts with its name.
