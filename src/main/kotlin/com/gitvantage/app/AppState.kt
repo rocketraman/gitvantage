@@ -149,6 +149,8 @@ sealed interface Popup {
         val message: String,
         val confirmLabel: String,
         val danger: Boolean,
+        /** What the confirm acts on, one per line, when that's a list — the message is three lines at most. */
+        val details: List<String> = emptyList(),
         val onConfirm: () -> Unit,
     ) : Popup {
         override val ids: Set<String> = emptySet()
@@ -294,6 +296,11 @@ class AppState(private val scope: CoroutineScope) {
         private set
     var showRemoteBranches by mutableStateOf(false)
         private set
+
+    /** The remote list is being read — on a repo with hundreds of branches, long enough to need saying. */
+    var remoteBranchesLoading by mutableStateOf(false)
+        private set
+    private var remoteLoad: Job? = null
     var switchingBranch by mutableStateOf(false)
         private set
 
@@ -304,6 +311,10 @@ class AppState(private val scope: CoroutineScope) {
     /** Full ref of the remote branch currently being deleted (e.g. "origin/foo") — a network round
      *  trip, so the row says "Deleting…" rather than looking like the click missed. */
     var deletingRemoteBranch by mutableStateOf<String?>(null)
+        private set
+
+    /** Full refs being deleted by a "Clean up merged" sweep, so each of their rows says "Deleting…". */
+    var cleaningRemoteBranches by mutableStateOf<Set<String>>(emptySet())
         private set
 
     // Submodules for the currently-open detail panel (loaded lazily on selection).
@@ -1821,6 +1832,8 @@ class AppState(private val scope: CoroutineScope) {
         branches = emptyList()
         remoteBranches = emptyList()
         showRemoteBranches = false
+        remoteLoad?.cancel()
+        remoteBranchesLoading = false
         branchesLoading = true
         scope.launch {
             val list = withContext(Dispatchers.IO) { BranchOps.load(id) }
@@ -1844,11 +1857,13 @@ class AppState(private val scope: CoroutineScope) {
     /** Toggle the collapsible remote-branches list; loads it lazily the first time. */
     fun toggleRemoteBranches(id: String) {
         showRemoteBranches = !showRemoteBranches
-        if (showRemoteBranches && remoteBranches.isEmpty()) {
-            scope.launch {
+        // Not again while a load is still out: collapsing and reopening mid-load would start a second.
+        if (showRemoteBranches && remoteBranches.isEmpty() && !remoteBranchesLoading) {
+            remoteBranchesLoading = true
+            remoteLoad = scope.launch {
                 val locals = branches.map { it.name }.toSet()
                 val list = withContext(Dispatchers.IO) { BranchOps.loadRemotes(id, locals) }
-                if (branchesRepo == id) remoteBranches = list
+                if (branchesRepo == id) { remoteBranches = list; remoteBranchesLoading = false }
             }
         }
     }
@@ -1960,7 +1975,7 @@ class AppState(private val scope: CoroutineScope) {
      * only thing left on screen saying the delete happened.
      */
     fun deleteRemoteBranch(id: String, rb: RemoteBranch) {
-        if (deletingRemoteBranch != null) return
+        if (deletingRemoteBranch != null || cleaningRemoteBranches.isNotEmpty()) return
         deletingRemoteBranch = rb.name
         scope.launch {
             val r = withContext(Dispatchers.IO) { BranchOps.deleteRemote(id, rb) }
@@ -1968,6 +1983,19 @@ class AppState(private val scope: CoroutineScope) {
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
             deletingRemoteBranch = null
+        }
+    }
+
+    /** Delete a set of merged remote branches in one go (see [BranchOps.deleteRemotes]). */
+    fun deleteMergedRemoteBranches(id: String, list: List<RemoteBranch>) {
+        if (list.isEmpty() || deletingRemoteBranch != null || cleaningRemoteBranches.isNotEmpty()) return
+        cleaningRemoteBranches = list.map { it.name }.toSet()
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.deleteRemotes(id, list) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            cleaningRemoteBranches = emptySet()
         }
     }
 
@@ -2447,7 +2475,7 @@ class AppState(private val scope: CoroutineScope) {
      * trip, and both rows for the pair then say "Deleting…".
      */
     fun deleteBranchWithUpstream(id: String, name: String, upstream: String) {
-        if (deletingRemoteBranch != null) return
+        if (deletingRemoteBranch != null || cleaningRemoteBranches.isNotEmpty()) return
         deletingRemoteBranch = upstream
         scope.launch {
             val r = withContext(Dispatchers.IO) { BranchOps.deleteWithUpstream(id, name, upstream) }
