@@ -21,6 +21,9 @@ object BranchOps {
 
     private const val SEP = ""
 
+    /** Refs per push in [deleteRemotes] — each carries a lease too, and Windows caps a command line at 32K. */
+    private const val PUSH_CHUNK = 100
+
     suspend fun load(repoPath: String): List<Branch> = withContext(Dispatchers.IO) {
         val dir = File(repoPath)
         if (!Git.isRepo(dir)) return@withContext emptyList()
@@ -387,6 +390,70 @@ object BranchOps {
             val res = Git.run(dir, args, Git.NETWORK_TIMEOUT)
             if (res.ok) OpResult(repoPath, true, "Deleted ${rb.name}")
             else OpResult(repoPath, false, res.firstError("remote delete failed"))
+        }
+
+    /**
+     * Delete many remote branches at once — the "Clean up merged" sweep of the remote list. One
+     * push per remote (in chunks, to stay under Windows' command-line limit) rather than one per
+     * branch, since each push is a network round trip.
+     *
+     * The caller picked these as merged from the last fetch, which may be old, so every delete is
+     * leased on the tip we saw: a branch someone has pushed to since is refused, not deleted along
+     * with their new commits. A branch the remote already deleted (GitHub does, on merging a PR, and
+     * a repo that doesn't prune keeps the stale copy) counts as deleted and its stale copy goes —
+     * the same rules as [deleteUpstreamLeased], with one `ls-remote` per remote instead of one per
+     * branch to tell the two apart.
+     */
+    suspend fun deleteRemotes(repoPath: String, branches: List<RemoteBranch>): OpResult =
+        withContext(Dispatchers.IO) {
+            val dir = File(repoPath)
+            val failed = mutableListOf<String>() // "origin/foo (reason)"
+            var deleted = 0
+            branches.groupBy { it.remote }.forEach { (remote, list) ->
+                val listed = Git.run(dir, listOf("ls-remote", "--heads", remote), Git.NETWORK_TIMEOUT)
+                if (!listed.ok) {
+                    val why = listed.firstError("couldn't reach $remote")
+                    list.forEach { failed += "${it.name} ($why)" }
+                    return@forEach
+                }
+                val there = listed.out.lineSequence().mapNotNull { line ->
+                    line.split('\t').takeIf { it.size == 2 }?.let { (sha, ref) -> ref to sha }
+                }.toMap()
+                val leased = mutableListOf<Pair<RemoteBranch, String>>()
+                list.forEach { rb ->
+                    val ref = "refs/heads/${rb.shortName}"
+                    val seen = Git.read(dir, "rev-parse", "--verify", "-q", "refs/remotes/${rb.name}").trim()
+                    when (there[ref]) {
+                        null -> {
+                            if (seen.isNotEmpty()) Git.run(dir, listOf("update-ref", "-d", "refs/remotes/${rb.name}", seen))
+                            deleted++
+                        }
+                        seen -> leased += rb to seen
+                        else -> failed += "${rb.name} (pushed to since the last fetch)"
+                    }
+                }
+                leased.chunked(PUSH_CHUNK).forEach { chunk ->
+                    val leases = chunk.map { (rb, seen) -> "--force-with-lease=refs/heads/${rb.shortName}:$seen" }
+                    val refs = chunk.map { (rb, _) -> "refs/heads/${rb.shortName}" }
+                    val res = Git.run(dir, listOf("push", "--porcelain") + leases + listOf(remote, "--delete") + refs,
+                        Git.NETWORK_TIMEOUT)
+                    // Porcelain: "<flag>\t<src>:<dst>\t<summary>", where "-" is a successful delete.
+                    val done = res.out.lineSequence().mapNotNull { line ->
+                        val p = line.split('\t')
+                        if (p.size >= 2 && p[0] == "-") p[1].substringAfter(':') else null
+                    }.toSet()
+                    chunk.forEach { (rb, _) ->
+                        if ("refs/heads/${rb.shortName}" in done) deleted++
+                        else failed += "${rb.name} (${res.firstError("refused")})"
+                    }
+                }
+            }
+            val noun = if (branches.size == 1) "branch" else "branches"
+            when {
+                failed.isEmpty() -> OpResult(repoPath, true, "Deleted $deleted merged $noun")
+                else -> OpResult(repoPath, false,
+                    "Deleted $deleted of ${branches.size} merged $noun — not ${failed.joinToString(", ")}")
+            }
         }
 
     /**

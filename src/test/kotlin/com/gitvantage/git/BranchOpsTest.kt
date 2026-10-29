@@ -239,6 +239,85 @@ val BranchOperations by testSuite {
             assert(gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", Sandbox.MAIN) == 0)
         }
 
+        // --- deleteRemotes ------------------------------------------------------------------
+
+        fun Sandbox.pushed(work: java.io.File, name: String) {
+            git(work, "switch", "-q", "-c", name)
+            commit(work, "$name.txt", "$name\n", "$name work")
+            git(work, "push", "-q", "-u", "origin", name)
+            git(work, "switch", "-q", Sandbox.MAIN)
+        }
+
+        fun remoteBranch(name: String) = RemoteBranch(
+            name = "origin/$name", shortName = name,
+            author = "Test", lastRelative = "now", hasLocal = true, merged = true,
+        )
+
+        fun Sandbox.onOrigin(work: java.io.File, name: String) =
+            gitAllowingFailure(originOf(work), "rev-parse", "--verify", "-q", "refs/heads/$name") == 0
+
+        test("deleteRemotes removes every branch in one go") {
+            val work = repo()
+            pushed(work, "a")
+            pushed(work, "b")
+            pushed(work, "c")
+
+            val result = BranchOps.deleteRemotes(work.path, listOf(remoteBranch("a"), remoteBranch("b")))
+
+            assert(result.ok) { result.message }
+            assert(result.message == "Deleted 2 merged branches")
+            assert(!onOrigin(work, "a") && !onOrigin(work, "b"))
+            assert(onOrigin(work, "c")) // not asked for
+            assert(gitAllowingFailure(work, "rev-parse", "--verify", "-q", "refs/remotes/origin/a") != 0)
+            // Only the remote copies.
+            assert("a" in branches(work) && "b" in branches(work))
+        }
+
+        test("deleteRemotes skips a branch pushed to since the last fetch and deletes the rest") {
+            val work = repo()
+            pushed(work, "a")
+            pushed(work, "b")
+            val other = clone(originOf(work), "other")
+            git(other, "switch", "-q", "b")
+            commit(other, "g.txt", "theirs\n", "their follow-up")
+            git(other, "push", "-q", "origin", "b")
+
+            val result = BranchOps.deleteRemotes(work.path, listOf(remoteBranch("a"), remoteBranch("b")))
+
+            assert(!result.ok)
+            assert(result.message.startsWith("Deleted 1 of 2 merged branches")) { result.message }
+            assert("origin/b" in result.message)
+            assert(!onOrigin(work, "a"))
+            assert(onOrigin(work, "b")) // their commit survives
+        }
+
+        test("deleteRemotes counts a branch already deleted on the remote as deleted") {
+            val work = repo()
+            pushed(work, "a")
+            pushed(work, "b")
+            git(originOf(work), "branch", "-D", "a")
+
+            val result = BranchOps.deleteRemotes(work.path, listOf(remoteBranch("a"), remoteBranch("b")))
+
+            assert(result.ok) { result.message }
+            assert(!onOrigin(work, "b"))
+            // The stale copy goes, or the list would keep offering it.
+            assert(gitAllowingFailure(work, "rev-parse", "--verify", "-q", "refs/remotes/origin/a") != 0)
+        }
+
+        test("deleteRemotes reports a branch the server refuses") {
+            val work = repo()
+            pushed(work, "a")
+
+            val result = BranchOps.deleteRemotes(work.path, listOf(remoteBranch("a"), remoteBranch(Sandbox.MAIN)))
+
+            assert(!result.ok)
+            assert(result.message.startsWith("Deleted 1 of 2")) { result.message }
+            assert("origin/${Sandbox.MAIN}" in result.message)
+            assert(!onOrigin(work, "a"))
+            assert(onOrigin(work, Sandbox.MAIN))
+        }
+
         // --- deleteWithUpstream -------------------------------------------------------------
 
         test("deleteWithUpstream removes both the local branch and its remote branch") {

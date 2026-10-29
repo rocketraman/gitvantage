@@ -1466,6 +1466,10 @@ internal fun MergedBadge(squashed: Boolean) {
 private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, hide: List<Regex>) {
     val hidden = state.remoteBranches.filter { Meta.isBranchHidden(it.name, hide) }
     val shown = if (state.showHiddenBranches) state.remoteBranches else state.remoteBranches - hidden.toSet()
+    // Where the mainline pushes leads, then where it pulls from: in a fork, your copy first.
+    val main = state.branches.firstOrNull { it.isMainline }
+    val lead = listOfNotNull(main?.pushRef, main?.upstream).map { it.substringBefore('/') }
+    val groups = groupByRemote(shown, lead)
     Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Row(
             Modifier.padding(vertical = 4.dp),
@@ -1486,15 +1490,16 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, h
             // Only once the list is open: the count is meaningless next to a collapsed section,
             // and before the first expand the remote list hasn't been loaded to count at all.
             if (state.showRemoteBranches) HiddenBranchToggle(state, hidden.size)
+            // A lone remote has no heading of its own, so its clean-up sits on the section's.
+            if (state.showRemoteBranches && groups.size == 1) {
+                val (remote, list) = groups.single()
+                CleanUpMergedAction(state, id, remote, list)
+            }
         }
         if (state.showRemoteBranches) {
             if (state.remoteBranches.isEmpty()) {
                 Txt("No remote branches", 11.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
             }
-            // Where the mainline pushes leads, then where it pulls from: in a fork, your copy first.
-            val main = state.branches.firstOrNull { it.isMainline }
-            val lead = listOfNotNull(main?.pushRef, main?.upstream).map { it.substringBefore('/') }
-            val groups = groupByRemote(shown, lead)
             groups.forEach { (remote, list) ->
                 // A lone remote needs no heading: every row already starts with its name.
                 if (groups.size > 1) {
@@ -1505,6 +1510,7 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, h
                     ) {
                         Txt(remote, 11.sp, Tokens.secondary, FontWeight.SemiBold, font = MonoFont)
                         Txt("— ${list.size}", 11.sp, Tokens.muted2)
+                        CleanUpMergedAction(state, id, remote, list)
                     }
                 }
                 list.forEach { rb -> RemoteBranchRow(state, id, rb, clean, hidden = rb in hidden) }
@@ -1512,6 +1518,41 @@ private fun RemoteBranchesSection(state: AppState, id: String, clean: Boolean, h
         }
     }
 }
+
+/**
+ * "Clean up N merged" on a remote's heading: deletes every merged branch in [list] from [remote]
+ * in one go. Per remote rather than for the whole list, because in a fork the project's remote
+ * isn't yours to sweep the way your own copy is — and one heading, one remote, says plainly which
+ * server the deletes land on. Only what's on screen: a hidden branch stays unless it's shown.
+ *
+ * Confirmed although a single merged delete isn't. One click on a row deletes the branch named on
+ * it; this one deletes branches the click never named, on a server other people share.
+ */
+@Composable
+private fun CleanUpMergedAction(state: AppState, id: String, remote: String, list: List<RemoteBranch>) {
+    val merged = list.filter { it.merged && !it.integration }
+    if (merged.isEmpty()) return
+    val cleaning = state.cleaningRemoteBranches.isNotEmpty()
+    Txt(
+        if (cleaning) "Cleaning up…" else "· Clean up ${merged.size} merged",
+        11.sp, if (cleaning) Tokens.muted2 else state.accent, FontWeight.SemiBold,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap {
+            if (cleaning) return@onTap
+            val names = merged.take(CLEANUP_LISTED).map { it.shortName } +
+                listOfNotNull((merged.size - CLEANUP_LISTED).takeIf { it > 0 }?.let { "…and $it more" })
+            val noun = if (merged.size == 1) "branch" else "branches"
+            state.popup = Popup.Confirm(
+                "Delete ${merged.size} merged $noun from $remote?",
+                "Their commits are already in mainline, so nothing is lost — but they go for everyone " +
+                    "who uses $remote. Local branches stay. One pushed to since the last fetch is skipped.",
+                "Delete ${merged.size} on $remote", danger = true, details = names,
+            ) { state.deleteMergedRemoteBranches(id, merged) }
+        },
+    )
+}
+
+/** How many branch names the clean-up confirmation spells out before summing up the rest. */
+private const val CLEANUP_LISTED = 12
 
 @Composable
 private fun RemoteBranchRow(
@@ -1526,7 +1567,7 @@ private fun RemoteBranchRow(
     val heldBy = state.branches.firstOrNull { it.name == rb.shortName }?.takeIf { it.inOtherWorktree }
     val canSwitch = !state.switchingBranch && heldBy == null
     val isMainline = rb.shortName == "main" || rb.shortName == "master"
-    val deleting = state.deletingRemoteBranch == rb.name
+    val deleting = state.deletingRemoteBranch == rb.name || rb.name in state.cleaningRemoteBranches
     HoverRow(vertical = 4) { hovered ->
         // Line 1: remote ref · merged · tracked
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

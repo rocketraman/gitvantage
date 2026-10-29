@@ -840,7 +840,12 @@ private fun Hint(text: String, warn: Boolean = false) {
 private fun ConfirmPopup(state: AppState, p: Popup.Confirm) {
     Modal({ state.popup = null }) {
         ModalHeader(p.title, p.message)
-        Box(Modifier.padding(18.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (p.details.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    p.details.forEach { Txt(it, 11.5.sp, Tokens.text2, font = MonoFont, maxLines = 1) }
+                }
+            }
             ModalButtons({ state.popup = null }, p.confirmLabel, true, p.danger) {
                 state.popup = null
                 p.onConfirm()
