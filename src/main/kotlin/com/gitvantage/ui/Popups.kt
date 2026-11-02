@@ -3,6 +3,7 @@
 
 package com.gitvantage.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -55,7 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.gitvantage.BuildInfo
 import com.gitvantage.app.AppState
+import com.gitvantage.app.Diagnostics
 import com.gitvantage.app.ExternalTools
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
@@ -92,6 +96,7 @@ fun PopupHost(state: AppState, popup: Popup) {
         is Popup.Confirm -> ConfirmPopup(state, popup)
         is Popup.ConfirmWithOption -> ConfirmWithOptionPopup(state, popup)
         is Popup.Settings -> SettingsPopup(state, popup.section)
+        Popup.About -> AboutPopup(state)
     }
 }
 
@@ -272,7 +277,9 @@ private fun SettingsPopup(state: AppState, section: SettingsSection) {
     // have no separate commit to cancel.
     Modal(dismiss, width = 470, takeFocus = true) {
         ModalHeader("Settings", "Applies immediately and is remembered.", onClose = dismiss)
-        LazyColumn(state = list, modifier = Modifier.fillMaxWidth()) {
+        // weight(fill = false): the list scrolls in whatever height the footer leaves it, rather than
+        // taking the whole modal and pushing the footer out of the bottom.
+        LazyColumn(state = list, modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
             items(SettingsSection.entries) { s ->
                 SectionHeading(s)
                 when (s) {
@@ -283,8 +290,64 @@ private fun SettingsPopup(state: AppState, section: SettingsSection) {
                 }
             }
         }
+        // The version, always in view at the foot rather than scrolled away under Diagnostics: it is
+        // the first thing anyone asks when something looks wrong, and Settings is where people look.
+        Row(
+            Modifier.fillMaxWidth().background(Tokens.panelFb).drawTopBorder(Tokens.borderEd)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Txt("GitVantage ${BuildInfo.VERSION}", 11.5.sp, Tokens.muted, modifier = Modifier.weight(1f))
+            FlatAction("About GitVantage", size = 11.5.sp) { state.popup = Popup.About }
+        }
     }
 }
+
+/**
+ * Which build this is, for someone asked "what version are you on?" — the version up front, then
+ * the build kind and platform that the next question would be, and a Copy that takes all of it at
+ * once as the one line [Diagnostics.environment] already formats for bug reports.
+ */
+@Composable
+private fun AboutPopup(state: AppState) {
+    val dismiss = { state.popup = null }
+    Modal(dismiss, width = 360, takeFocus = true) {
+        Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 11.dp, top = 10.dp), horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier.clip(RoundedCornerShape(6.dp)).onTap(dismiss).padding(horizontal = 7.dp, vertical = 2.dp),
+            ) {
+                Txt("×", 16.sp, Tokens.muted)
+            }
+        }
+        Column(
+            Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Image(
+                painter = appIcon,
+                contentDescription = "GitVantage",
+                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(14.dp)),
+            )
+            Spacer(Modifier.height(4.dp))
+            Txt("GitVantage", 18.sp, Tokens.text, FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Txt("Version ${BuildInfo.VERSION}", 13.sp, Tokens.text, FontWeight.SemiBold)
+                CopyPill(Diagnostics.environment)
+            }
+            Txt("${Diagnostics.image} build · ${Diagnostics.platform}", 11.5.sp, Tokens.muted2)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                FlatAction("Release notes", size = 12.sp) { state.openUrl("$REPO_URL/releases/tag/v${BuildInfo.VERSION}") }
+                FlatAction("Source code", size = 12.sp) { state.openUrl(REPO_URL) }
+            }
+            Spacer(Modifier.height(4.dp))
+            Txt("© 2026 Raman Gupta · GPL-3.0-or-later", 11.sp, Tokens.muted2)
+        }
+    }
+}
+
+private const val REPO_URL = "https://github.com/rocketraman/gitvantage"
 
 /** A section's name and what it is for. Ruled off from the one above, except the first. */
 @Composable

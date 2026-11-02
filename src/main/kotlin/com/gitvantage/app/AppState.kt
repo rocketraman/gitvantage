@@ -129,6 +129,15 @@ sealed interface Popup {
     }
 
     /**
+     * Which GitVantage this is: version, build, platform, and where to read about it. Opened from
+     * the version line at the foot of [Settings], so "what version am I on?" has an answer that
+     * doesn't need a terminal or the diagnostics report. App-wide, so it owns no repos.
+     */
+    data object About : Popup {
+        override val ids: Set<String> = emptySet()
+    }
+
+    /**
      * A [Confirm] with one checkbox, for a destructive action with an optional extra reach — the
      * worktree "Remove + branch" that can also delete the remote branch. The box is in the dialog,
      * not a second button on the row, so the choice is stated where the consequences are.

@@ -101,14 +101,14 @@ private fun adoptContextClassLoader() {
 }
 
 /**
- * The app icon, for both the window and the title bar.
+ * The app icon, for the window, the title bar and the About dialog.
  *
  * Decoded straight from the classpath rather than through Compose's `painterResource`, which is
  * deprecated in favour of the Compose resources library — a generated `Res` class and a
  * `composeResources` folder, for one PNG. Read through our own class, so it doesn't depend on the
  * thread's context class loader either (see [adoptContextClassLoader]).
  */
-private val appIcon: Painter by lazy {
+internal val appIcon: Painter by lazy {
     val bytes = checkNotNull(AppState::class.java.getResourceAsStream("/app-icon.png")) { "app-icon.png missing" }
         .use { it.readAllBytes() }
     BitmapPainter(SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap())
