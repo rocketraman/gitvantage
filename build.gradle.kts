@@ -111,9 +111,6 @@ dependencies {
     // as it changes. Already on the classpath via nucleus-application — which installs it over
     // Compose's LocalSystemTheme — but Theme.kt calls it directly, so it is declared directly.
     implementation(libs.nucleus.darkmode.detector)
-    // The macOS menu bar, for the app menu's About and Settings. Also already there via
-    // nucleus-application; declared because Main.kt calls it directly.
-    implementation(libs.nucleus.menu.macos)
     // Registry persistence (repo list + tags/notes) as JSON
     implementation(libs.kotlinx.serialization.json)
     // Cross-platform native directory picker (XDG portal on Linux, native on macOS/Windows).

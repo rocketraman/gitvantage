@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.rememberWindowState
 import com.gitvantage.app.AppState
-import com.gitvantage.app.Popup
 import com.gitvantage.app.Registry
 import com.gitvantage.app.Theme
 import com.gitvantage.app.Tokens
@@ -52,8 +51,6 @@ import com.gitvantage.smoke.runSmokeChecks
 import dev.nucleusframework.application.DecoratedWindow
 import dev.nucleusframework.application.NucleusBackend
 import dev.nucleusframework.application.nucleusApplication
-import dev.nucleusframework.menu.macos.NativeKeyShortcut
-import dev.nucleusframework.menu.macos.NativeMenuBar
 import dev.nucleusframework.window.NucleusDecoratedWindowTheme
 import dev.nucleusframework.window.TitleBar
 import kotlin.system.exitProcess
@@ -139,22 +136,6 @@ private fun runApp() = nucleusApplication(backend = NucleusBackend.Tao) {
     LaunchedEffect(Unit) {
         delay(48.milliseconds)
         windowVisible = true
-    }
-    // macOS's app menu, where a Mac user looks for the version. NativeMenuBar replaces the whole
-    // menu bar, and its first menu is the app menu, so this is the app menu in full: there is no
-    // public way to add one item to the stock one. Hide, Hide Others and Services go with it, as
-    // they are AppKit selectors this API can't name. Does nothing off macOS.
-    NativeMenuBar {
-        Menu("GitVantage") {
-            Item("About GitVantage") { app.popup = Popup.About }
-            Separator()
-            Item("Settings…", shortcut = NativeKeyShortcut(",", command = true)) { app.popup = Popup.Settings() }
-            Separator()
-            Item("Quit GitVantage", shortcut = NativeKeyShortcut("q", command = true)) {
-                app.flushPendingWrites()
-                exitApplication()
-            }
-        }
     }
     // Hands the title bar (which Nucleus draws, and which supplies the native window controls)
     // the same answer the app content uses, so the two halves of the window never disagree.
