@@ -24,7 +24,8 @@ object BranchOps {
 
     private const val SEP = ""
 
-    /** Refs per push in [deleteRemotes] — each carries a lease too, and Windows caps a command line at 32K. */
+    /** Refs per git command in [deleteRemotes] and [deleteMany] — a push carries a lease for each
+     *  too, and Windows caps a command line at 32K. */
     private const val PUSH_CHUNK = 100
 
     suspend fun load(repoPath: String): List<Branch> = withContext(Dispatchers.IO) {
@@ -420,6 +421,34 @@ object BranchOps {
         val res = Git.run(dir, listOf("branch", flag, name))
         if (res.ok) OpResult(repoPath, true, "Deleted $name")
         else OpResult(repoPath, false, res.firstError("delete failed"))
+    }
+
+    /**
+     * Delete many local branches at once — the "Clean up merged" sweep of the branch list. `-D`
+     * for the same reason a single merged delete uses it: "merged" is measured against mainline,
+     * which `-d` doesn't know about. Chunked like [deleteRemotes], for Windows' command line.
+     *
+     * git deletes what it can and refuses the rest (one checked out in a worktree since the list
+     * loaded, say), so what's left is read back from the refs rather than from git's messages,
+     * which are translated.
+     */
+    suspend fun deleteMany(repoPath: String, names: List<String>): OpResult = withContext(Dispatchers.IO) {
+        val dir = File(repoPath)
+        val why = mutableMapOf<String, String>()
+        names.chunked(PUSH_CHUNK).forEach { chunk ->
+            val res = Git.run(dir, listOf("branch", "-D", "--") + chunk)
+            if (!res.ok) chunk.forEach { why[it] = res.firstError("refused") }
+        }
+        val left = Git.read(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+            .lineSequence().toSet()
+        val failed = names.filter { it in left }
+        val noun = if (names.size == 1) "branch" else "branches"
+        when {
+            failed.isEmpty() -> OpResult(repoPath, true, "Deleted ${names.size} merged $noun")
+            else -> OpResult(repoPath, false,
+                "Deleted ${names.size - failed.size} of ${names.size} merged $noun — not " +
+                    failed.joinToString(", ") { "$it (${why[it] ?: "refused"})" })
+        }
     }
 
     /**

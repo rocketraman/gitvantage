@@ -1150,6 +1150,7 @@ private fun BranchesSection(state: AppState, rv: RepoView) {
             Txt("Branches", 12.5.sp, Tokens.text, FontWeight.Bold)
             if (shown.isNotEmpty()) Txt("— ${shown.size}", 11.sp, Tokens.muted2)
             HiddenBranchToggle(state, hidden.size)
+            CleanUpMergedBranchesAction(state, rv.id, shown)
         }
         if (state.branchesLoading && state.branches.isEmpty()) {
             Txt("Loading…", 12.sp, Tokens.muted2, modifier = Modifier.padding(vertical = 4.dp))
@@ -1550,6 +1551,39 @@ private fun CleanUpMergedAction(state: AppState, id: String, remote: String, lis
                     "who uses $remote. Local branches stay. One pushed to since the last fetch is skipped.",
                 "Delete ${merged.size} on $remote", danger = true, details = names,
             ) { state.deleteMergedRemoteBranches(id, merged) }
+        },
+    )
+}
+
+/**
+ * "Clean up N merged" on the Branches heading: the local list's counterpart to the one each remote
+ * gets ([CleanUpMergedAction]) — deletes every merged branch in [list] that a row's own Delete
+ * would, and leaves their remote copies alone. Integration branches stay, as they do on a remote.
+ *
+ * Confirmed although a single merged delete isn't, for the same reason the remote sweep is: it
+ * deletes branches the click never named. A squash-merged one's commits aren't in mainline, only
+ * its changes, so they go with it.
+ */
+@Composable
+private fun CleanUpMergedBranchesAction(state: AppState, id: String, list: List<Branch>) {
+    val merged = list.filter {
+        it.merged && !it.isCurrent && !it.isMainline && !it.inOtherWorktree && !Meta.isIntegrationBranch(it.name)
+    }
+    if (merged.isEmpty()) return
+    val cleaning = state.cleaningBranches
+    Txt(
+        if (cleaning) "Cleaning up…" else "· Clean up ${merged.size} merged",
+        11.sp, if (cleaning) Tokens.muted2 else state.accent, FontWeight.SemiBold,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap {
+            if (cleaning) return@onTap
+            val names = merged.take(CLEANUP_LISTED).map { it.name } +
+                listOfNotNull((merged.size - CLEANUP_LISTED).takeIf { it > 0 }?.let { "…and $it more" })
+            val noun = if (merged.size == 1) "branch" else "branches"
+            state.popup = Popup.Confirm(
+                "Delete ${merged.size} merged local $noun?",
+                "Their work is already in mainline, so nothing is lost. Remote branches stay.",
+                "Delete ${merged.size}", danger = true, details = names,
+            ) { state.deleteMergedBranches(id, merged.map { it.name }) }
         },
     )
 }

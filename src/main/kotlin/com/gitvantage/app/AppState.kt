@@ -317,6 +317,10 @@ class AppState(private val scope: CoroutineScope) {
     var cleaningRemoteBranches by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /** A "Clean up merged" sweep of the local list is running, so its action can't start another. */
+    var cleaningBranches by mutableStateOf(false)
+        private set
+
     // Submodules for the currently-open detail panel (loaded lazily on selection).
     var submodulesRepo by mutableStateOf<String?>(null)
         private set
@@ -2466,6 +2470,19 @@ class AppState(private val scope: CoroutineScope) {
             toast(result.message)
             reloadBranches(id)
             rescanRepos(listOf(id), fetch = false)
+        }
+    }
+
+    /** Delete a set of merged local branches in one go (see [BranchOps.deleteMany]). */
+    fun deleteMergedBranches(id: String, names: List<String>) {
+        if (names.isEmpty() || cleaningBranches) return
+        cleaningBranches = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { BranchOps.deleteMany(id, names) }
+            toast(r.message)
+            reloadBranches(id)
+            rescanRepos(listOf(id), fetch = false)
+            cleaningBranches = false
         }
     }
 
