@@ -86,7 +86,6 @@ fun PopupHost(state: AppState, popup: Popup) {
     when (popup) {
         is Popup.Tag -> TagPopup(state, popup.ids)
         is Popup.Untag -> UntagPopup(state, popup.ids)
-        is Popup.Snooze -> SnoozePopup(state, popup.ids)
         is Popup.SnoozeWorktree -> SnoozeWorktreePopup(state, popup)
         is Popup.Remind -> RemindPopup(state, popup.ids, popup.text)
         is Popup.Note -> NotePopup(state, popup.id)
@@ -158,27 +157,6 @@ private fun UntagPopup(state: AppState, ids: Set<String>) {
                 }
             }
             ModalButtons({ state.popup = null }, "Untag", selected.isNotEmpty(), true, ::commit)
-        }
-    }
-}
-
-@Composable
-private fun SnoozePopup(state: AppState, ids: Set<String>) {
-    Modal({ state.popup = null }) {
-        ModalHeader("Snooze ${ids.size} ${noun(ids.size)}", "Silence attention flags (dirty/unpushed/stale) for a while.")
-        Column(Modifier.padding(vertical = 6.dp)) {
-            Meta.SNOOZE_PRESETS.forEach { (label, ms) ->
-                MenuRow(label) {
-                    val until = ms?.let { System.currentTimeMillis() + it } ?: Meta.SNOOZE_FOREVER
-                    state.setSnoozeUntil(ids, until)
-                    state.popup = null
-                }
-            }
-            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp).height(1.dp).background(Tokens.borderEd))
-            MenuRow("Resume now (clear snooze)", accent = true) {
-                state.setSnoozeUntil(ids, null)
-                state.popup = null
-            }
         }
     }
 }
@@ -451,6 +429,18 @@ private fun ToolsSection(state: AppState, dismiss: () -> Unit) {
         Modifier.padding(horizontal = 18.dp).padding(bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
+        // The same choice as the pin in the "▾" menu, for anyone who never hovers a menu item. Up
+        // here because it decides which of the commands below a click actually runs.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Txt("Main launcher", 12.5.sp, Tokens.text, FontWeight.SemiBold)
+            Segmented(
+                com.gitvantage.app.Launcher.entries.map { it.id to it.label },
+                state.pinnedLauncher.id,
+                { state.pinLauncher(com.gitvantage.app.Launcher.fromId(it)) },
+                fontSize = 12.sp,
+            )
+            Txt("What the launcher button opens, in the toolbar and on each worktree.", 11.sp, Tokens.muted2)
+        }
         ExternalTools.Tool.entries.forEach { tool ->
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(

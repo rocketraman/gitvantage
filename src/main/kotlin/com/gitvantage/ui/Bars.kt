@@ -231,19 +231,19 @@ fun BulkActionBar(state: AppState) {
         Spacer(Modifier.width(4.dp))
         BulkBtn("Tag") { state.popup = Popup.Tag(ids) }
         BulkBtn("Untag") { state.popup = Popup.Untag(ids) }
-        BulkBtn("Push") {
+        BulkBtn("Push", RowActionKind.GIT) {
             state.popup = Popup.Confirm(
                 "Push $n $noun?", "Runs git push in each selected repo that has an upstream.",
                 "Push", danger = false,
             ) { state.push(ids) }
         }
-        BulkBtn("Snooze") { state.popup = Popup.Snooze(ids) }
+        SnoozeControl(state, ids, SplitSize.BAR, snoozedFor = null)
         BulkBtn("Remind") { state.popup = Popup.Remind(ids, "", null) }
         // The one remove button with nothing to read before you press it: a red "Remove" sitting
         // beside Push and Snooze, above a multi-selection. The confirm dialog explains itself, but
         // only once the click has already been a small act of faith.
         HoverTip(REMOVE_KEEPS_FILES) {
-            BulkBtn("Remove", danger = true) {
+            BulkBtn("Remove", RowActionKind.DANGER) {
                 state.popup = Popup.Confirm(
                     "Remove $n $noun?", "Stops tracking them. Does not touch the repos on disk.",
                     "Remove", danger = true,
@@ -254,15 +254,22 @@ fun BulkActionBar(state: AppState) {
     }
 }
 
+/**
+ * A bulk-bar button. [kind] colours it the way the detail pane colours the same action — a blue
+ * Push, a red Remove — so selecting several repos doesn't change what an action looks like.
+ * Tag, Untag and Remind keep the neutral outline: GitVantage's own bookkeeping, but nothing that
+ * needs to stand out from its neighbours the way silencing alerts does.
+ */
 @Composable
-private fun BulkBtn(label: String, danger: Boolean = false, onClick: () -> Unit) {
+private fun BulkBtn(label: String, kind: RowActionKind = RowActionKind.VIEW, onClick: () -> Unit) {
     val shape = RoundedCornerShape(7.dp)
+    val c = kind.colors
     Box(
-        Modifier.clip(shape).background(Tokens.surface, shape)
-            .border(1.dp, if (danger) Tokens.warnBorder else Tokens.borderD8, shape)
+        Modifier.clip(shape).background(c.fill, shape)
+            .border(1.dp, c.border, shape)
             .onTap(onClick).padding(horizontal = 11.dp, vertical = 5.dp),
     ) {
-        Txt(label, 12.sp, if (danger) Tokens.redText else Tokens.text, FontWeight.SemiBold)
+        Txt(label, 12.sp, c.text, FontWeight.SemiBold)
     }
 }
 

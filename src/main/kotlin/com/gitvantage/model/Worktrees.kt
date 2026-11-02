@@ -83,6 +83,19 @@ data class Worktree(
 }
 
 /**
+ * The order worktrees are listed in: those with uncommitted work first, then by most recent commit.
+ *
+ * git's own order is by folder path, which reads as no order at all once the cards are labelled by
+ * branch — an agent's generated folder name decides where its tree lands. Uncommitted work leads
+ * because it's the work nothing else is keeping safe, and the reason to look at the list; recency
+ * after that, because the tree you touched last is the one you're likeliest to go back to.
+ *
+ * Stable, so trees that tie (no commit time, say — a missing folder) keep git's path order.
+ */
+fun List<Worktree>.inDisplayOrder(): List<Worktree> =
+    sortedWith(compareByDescending<Worktree> { it.dirtyCount > 0 }.thenByDescending { it.lastEpoch ?: Long.MIN_VALUE })
+
+/**
  * One changed file inside a worktree, with the diffstat the inline Changes list shows.
  *
  * Separate from [com.gitvantage.model.ChangedFile] because that one is a scan product for a
