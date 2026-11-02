@@ -24,12 +24,22 @@ object Diagnostics {
 
     /** Which build this is and what it is running on — constant for the life of the process. */
     val environment: String by lazy {
-        // "runtime" inside a native image, absent on a JVM. Worth saying: the two have different
-        // collectors and different startup, and "it's slow" means different things on each.
-        val image = if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) "native" else "jvm"
+        "GitVantage ${BuildInfo.VERSION} ($image) · $platform · ${Runtime.getRuntime().availableProcessors()} cpus"
+    }
+
+    /**
+     * "native" inside a native image, "jvm" on a JVM. Worth saying: the two have different
+     * collectors and different startup, and "it's slow" means different things on each.
+     */
+    val image: String by lazy {
+        // The property is "runtime" inside a native image and absent on a JVM.
+        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) "native" else "jvm"
+    }
+
+    /** The OS name, version and architecture, as the JVM reports them. */
+    val platform: String by lazy {
         fun prop(name: String) = System.getProperty(name).orEmpty()
-        "GitVantage ${BuildInfo.VERSION} ($image) · ${prop("os.name")} ${prop("os.version")} ${prop("os.arch")}" +
-            " · ${Runtime.getRuntime().availableProcessors()} cpus"
+        "${prop("os.name")} ${prop("os.version")} ${prop("os.arch")}"
     }
 
     /**
