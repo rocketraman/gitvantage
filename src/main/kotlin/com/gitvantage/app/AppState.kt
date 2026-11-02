@@ -29,6 +29,7 @@ import com.gitvantage.git.model.Submodule
 import com.gitvantage.git.model.WorktreeSource
 import com.gitvantage.model.FetchPolicy
 import com.gitvantage.model.Meta
+import com.gitvantage.model.inDisplayOrder
 import com.gitvantage.model.Perf
 import com.gitvantage.model.RegistryEntry
 import com.gitvantage.model.Repo
@@ -77,7 +78,6 @@ sealed interface Popup {
     val ids: Set<String>
     data class Tag(override val ids: Set<String>) : Popup
     data class Untag(override val ids: Set<String>) : Popup
-    data class Snooze(override val ids: Set<String>) : Popup
     data class Remind(override val ids: Set<String>, val text: String, val due: Long?) : Popup
 
     /**
@@ -1827,6 +1827,42 @@ class AppState(private val scope: CoroutineScope) {
     fun openGitButler(id: String) { if (!Actions.openGitButler(id)) toast("GitButler not found") }
     fun openUrl(url: String) { if (!Actions.openUrl(url)) toast("Couldn't open the browser") }
 
+    /** What the "Open in" control's main half runs. See [Launcher]. */
+    var pinnedLauncher by mutableStateOf(Launcher.fromId(Registry.settings().pinnedLauncher))
+        private set
+
+    fun pinLauncher(l: Launcher) {
+        pinnedLauncher = l
+        Registry.saveSettings(Registry.settings().copy(pinnedLauncher = l.id))
+    }
+
+    /**
+     * The Snooze button's one-click length: a [Meta.SNOOZE_PRESETS] entry. An unknown label —
+     * a preset renamed since, or a hand edit — falls back to a day rather than failing to load.
+     */
+    var pinnedSnooze by mutableStateOf(snoozePreset(Registry.settings().pinnedSnooze))
+        private set
+
+    fun pinSnooze(label: String) {
+        pinnedSnooze = snoozePreset(label)
+        Registry.saveSettings(Registry.settings().copy(pinnedSnooze = pinnedSnooze.first))
+    }
+
+    private fun snoozePreset(label: String): Pair<String, Long?> =
+        Meta.SNOOZE_PRESETS.firstOrNull { it.first == label } ?: Meta.SNOOZE_PRESETS.first { it.first == "1 day" }
+
+    /** Snooze [ids] for [ms] from now, or until resumed when null — a [Meta.SNOOZE_PRESETS] length. */
+    fun snoozeFor(ids: Collection<String>, ms: Long?) =
+        setSnoozeUntil(ids, ms?.let { System.currentTimeMillis() + it } ?: Meta.SNOOZE_FOREVER)
+
+    fun launch(l: Launcher, path: String) = when (l) {
+        Launcher.TERMINAL -> openTerminal(path)
+        Launcher.IDE -> openIde(path)
+        Launcher.FOLDER -> openFolder(path)
+        Launcher.GITBUTLER -> openGitButler(path)
+        Launcher.GIT_GUI -> openGitGui(path)
+    }
+
     // ---- branches (detail panel) ----
 
     /** Load the branch list for [id] (the detail panel calls this when it opens a repo). */
@@ -2922,7 +2958,7 @@ class AppState(private val scope: CoroutineScope) {
     fun worktreeViews(repoId: String, repoSnoozed: Boolean, trees: List<Worktree>): List<WorktreeView> {
         if (trees.isEmpty()) return emptyList()
         val now = System.currentTimeMillis()
-        return trees.filter { !it.isCurrent && !it.bare }.map { wt ->
+        return trees.filter { !it.isCurrent && !it.bare }.inDisplayOrder().map { wt ->
             val alerts = worktreeAlerts(repoId, wt.path)
             val (snoozed, snoozedFor) = Meta.snoozeState(alerts.snoozeUntilEpoch, now)
             WorktreeView(

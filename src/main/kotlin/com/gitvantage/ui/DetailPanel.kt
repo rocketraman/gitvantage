@@ -6,9 +6,6 @@ package com.gitvantage.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -47,7 +43,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -57,18 +52,15 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup as WindowPopup
-import androidx.compose.ui.window.PopupProperties
 import com.gitvantage.app.AppState
 import com.gitvantage.app.GitHub
+import com.gitvantage.app.Launcher
 import com.gitvantage.app.MonoFont
 import com.gitvantage.app.Popup
 import com.gitvantage.app.RepoView
 import com.gitvantage.app.SettingsSection
 import com.gitvantage.app.Tokens
-import com.gitvantage.app.UiFont
 import com.gitvantage.git.model.Branch
 import com.gitvantage.git.model.RemoteBranch
 import com.gitvantage.git.model.groupByRemote
@@ -267,7 +259,8 @@ private fun ActionRow(state: AppState, rv: RepoView) {
         ActionButton("Commit…", Tokens.onAccent, Tokens.accentFill, null, disabled = !repo.isGitRepo) {
             state.popup = Popup.Commit(repo.id)
         }
-        ActionButton("Push", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
+        val git = RowActionKind.GIT.colors
+        ActionButton("Push", git.text, git.fill, git.border, disabled = !repo.hasRemote) {
             state.popup = Popup.Confirm(
                 "Push ${repo.name}?",
                 if (repo.upstream != null) "Runs git push to ${repo.pushTarget ?: repo.upstream}."
@@ -275,12 +268,12 @@ private fun ActionRow(state: AppState, rv: RepoView) {
                 "Push", danger = false,
             ) { state.push(listOf(repo.id)) }
         }
-        ActionButton("Fetch", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !repo.hasRemote) {
+        ActionButton("Fetch", git.text, git.fill, git.border, disabled = !repo.hasRemote) {
             state.fetchRepo(repo.id)
         }
         // Fast-forward is only possible when strictly behind upstream (no local commits).
         val canFf = repo.upstream != null && repo.behind > 0 && repo.ahead == 0
-        ActionButton("Fast Forward", Tokens.text2, Tokens.surface, Tokens.borderD8, disabled = !canFf) {
+        ActionButton("Fast Forward", git.text, git.fill, git.border, disabled = !canFf) {
             state.popup = Popup.Confirm(
                 "Fast-forward ${repo.name}?",
                 "Advances “${repo.branch}” to ${repo.upstream} (${repo.behind} commit${if (repo.behind == 1) "" else "s"}). No local commits are lost.",
@@ -288,23 +281,19 @@ private fun ActionRow(state: AppState, rv: RepoView) {
             ) { state.fastForward(repo.id) }
         }
         // The read-only half travels as one unit, so it wraps to the next line together rather than
-        // leaving a divider stranded at the end of the buttons. Centred against the buttons, which
-        // are twice as tall as a bare text link.
+        // leaving a divider stranded at the end of the buttons. Buttons like the git ones, but grey:
+        // looking costs nothing, so it shouldn't pull the eye the way Push does.
         Row(
             Modifier.height(33.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Box(Modifier.width(1.dp).height(22.dp).background(Tokens.borderDc))
+            val view = RowActionKind.VIEW.colors
             val hasChanges = repo.staged + repo.unstaged + repo.untracked > 0
-            if (hasChanges) FlatAction("Diff") { state.openDiff(repo.id) }
-            if (repo.isGitRepo) FlatAction("Log") { state.openRepoLog(repo.id) }
-            // Out here rather than inside the menu, unlike the other launchers. A terminal in the
-            // repo is the one thing reached often enough to be worth a click of its own — it's how
-            // you do whatever this pane doesn't cover — and burying it behind a menu made the pane's
-            // most-used escape hatch its least visible control.
-            FlatAction("Terminal") { state.openTerminal(repo.id) }
-            OpenInMenu(state, repo)
+            if (hasChanges) ActionButton("Diff", view.text, view.fill, view.border) { state.openDiff(repo.id) }
+            if (repo.isGitRepo) ActionButton("Log", view.text, view.fill, view.border) { state.openRepoLog(repo.id) }
+            LauncherControl(state, repo.id, repo, toolbar = true)
         }
         // Snooze is its own group: it neither changes the repository nor shows you anything about it
         // — it changes what the repo is allowed to tell *you*. That's a third kind of action, so it
@@ -316,93 +305,88 @@ private fun ActionRow(state: AppState, rv: RepoView) {
         ) {
             Box(Modifier.width(1.dp).height(22.dp).background(Tokens.borderDc))
             // Carries how long it's silenced for, the way the list rows' chip does — so the button
-            // reports the state as well as offering to change it. No "Resume now" beside it: the
-            // snooze banner a few pixels below already has one, and two of them one line apart read
-            // as two different actions.
-            ActionButton(
-                if (rv.snoozed) "☾ ${rv.repo.snoozedFor ?: "on"} ▾" else "☾ Snooze ▾",
-                Tokens.snoozeBtnText, Tokens.snoozeBtnBg, Tokens.snoozeBtnBorder,
-            ) { state.popup = Popup.Snooze(setOf(repo.id)) }
+            // reports the state as well as offering to change it. Resume lives in its menu and in the
+            // snooze banner a few pixels below, not as a third button beside it.
+            SnoozeControl(state, setOf(repo.id), SplitSize.TOOLBAR, if (rv.snoozed) rv.repo.snoozedFor ?: "on" else null)
         }
     }
 }
 
 /**
- * "Open in ▾" — the old OPEN IN bar as a menu.
+ * "Terminal ▾" — the launchers, as one split control: the label runs the pinned [Launcher], the ▾
+ * opens all of them.
  *
- * That bar carried up to eight bordered buttons across two lines, permanently, for a set of actions
- * whose entire effect is to start another program. It was the widest thing in the pane and the least
- * consequential. Collapsed, it costs one click and gives the row back to the actions that change
- * something.
+ * It was two things before, a Terminal link beside an "Open in ▾" menu, because a terminal is
+ * reached often enough to deserve a click of its own and burying it made the pane's most-used
+ * escape hatch its least visible control. But "most-used" is only true for people who live in a
+ * terminal, and two controls for one job read as two jobs — a worktree's Folder went unfound for
+ * exactly that reason. Now the menu has every launcher, and whichever one you use most is a pin
+ * away from being the one click.
+ *
+ * The same control in the toolbar and on each worktree card, for the folder at [path]; [repo] adds
+ * the forge links, which only the repo itself has. One bordered [RowActionKind.VIEW] button split
+ * by a hairline, at the toolbar's size when [toolbar] and a lane chip's otherwise.
  */
 @Composable
-private fun OpenInMenu(state: AppState, repo: Repo) {
-    var open by remember(repo.id) { mutableStateOf(false) }
-    val below = with(LocalDensity.current) { 26.dp.roundToPx() }
-    fun pick(act: () -> Unit): () -> Unit = { open = false; act() }
-    Box {
-        FlatAction("Open in ▾") { open = !open }
-        if (open) {
-            WindowPopup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(0, below),
-                onDismissRequest = { open = false },
-                properties = PopupProperties(focusable = true),
-            ) {
-                val shape = RoundedCornerShape(10.dp)
-                Column(
-                    Modifier.width(210.dp).shadow(10.dp, shape).clip(shape)
-                        .background(Tokens.surface, shape).border(1.dp, Tokens.borderDc, shape)
-                        .dismissOnEscape { open = false }
-                        .padding(vertical = 5.dp),
-                ) {
-                    // No Terminal here — it graduated to the action row above.
-                    OpenInItem("GitButler", UiFont, pick { state.openGitButler(repo.id) })
-                    OpenInItem("Git Gui", UiFont, pick { state.openGitGui(repo.id) })
-                    OpenInItem("IDE", UiFont, pick { state.openIde(repo.id) })
-                    OpenInItem("Folder", UiFont, pick { state.openFolder(repo.id) })
-                    if (repo.isGitHub && repo.webBase != null) {
-                        MenuDivider()
-                        OpenInItem("Issues", UiFont, pick { state.openUrl("${repo.webBase}/issues") })
-                        OpenInItem("Pull Requests", UiFont, pick { state.openUrl("${repo.webBase}/pulls") })
-                        if (repo.hasWorkflows) {
-                            OpenInItem("Actions", UiFont, pick { state.openUrl("${repo.webBase}/actions") })
-                        }
-                    }
-                    // Where the need arises. Which terminal or editor these entries open is exactly
-                    // the question this menu provokes, and a settings dialog reachable only from a
-                    // toolbar button on the other side of the window is one nobody thinks to try.
-                    MenuDivider()
-                    OpenInItem("Configure…", UiFont, pick {
-                        state.popup = Popup.Settings(SettingsSection.TOOLS)
-                    })
-                }
+internal fun LauncherControl(state: AppState, path: String, repo: Repo?, toolbar: Boolean = false) {
+    val pinned = state.pinnedLauncher
+    SplitMenuButton(
+        pinned.label, RowActionKind.VIEW, if (toolbar) SplitSize.TOOLBAR else SplitSize.LANE,
+        "Open in… — and choose which one “${pinned.label}” opens",
+        onMain = { state.launch(pinned, path) },
+    ) { close ->
+        fun pick(act: () -> Unit): () -> Unit = { close(); act() }
+        Launcher.entries.forEach { l ->
+            MenuItem(l.label, pick { state.launch(l, path) }, pinned = l == pinned) { state.pinLauncher(l) }
+        }
+        if (repo != null && repo.isGitHub && repo.webBase != null) {
+            MenuDivider()
+            MenuItem("Issues", pick { state.openUrl("${repo.webBase}/issues") })
+            MenuItem("Pull Requests", pick { state.openUrl("${repo.webBase}/pulls") })
+            if (repo.hasWorkflows) {
+                MenuItem("Actions", pick { state.openUrl("${repo.webBase}/actions") })
             }
         }
+        // Where the need arises. Which terminal or editor these entries open is exactly the question
+        // this menu provokes, and a settings dialog reachable only from a toolbar button on the other
+        // side of the window is one nobody thinks to try.
+        MenuDivider()
+        MenuItem("Configure…", pick { state.popup = Popup.Settings(SettingsSection.TOOLS) })
     }
 }
 
-/** A hairline between groups of menu items. */
+/**
+ * "☾ Snooze 1 day ▾" — one click silences [ids] for the pinned duration, the ▾ offers the others.
+ *
+ * It was a dialog, which is a lot of ceremony for a list of presets that each apply on one click
+ * with nothing to confirm. Snoozing is something you do in passing, on the way to something else,
+ * so it should cost what it costs to pass.
+ *
+ * Already snoozed, the label reports how long is left and opens the menu rather than acting: the
+ * likely next move is to resume or change the length, and a one-click re-snooze from a label that
+ * says "3h" would be a surprise. Several [ids] (the bulk bar) always act, since they needn't agree.
+ */
 @Composable
-private fun MenuDivider() {
-    Box(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .height(1.dp).background(Tokens.borderEd),
-    )
+internal fun SnoozeControl(state: AppState, ids: Set<String>, size: SplitSize, snoozedFor: String?) {
+    val pinned = state.pinnedSnooze
+    SplitMenuButton(
+        if (snoozedFor != null) "☾ $snoozedFor" else "☾ Snooze ${snoozeShort(pinned.first)}",
+        RowActionKind.APP, size,
+        "Snooze for another length — and choose the one-click default",
+        onMain = if (snoozedFor != null) null else ({ state.snoozeFor(ids, pinned.second) }),
+    ) { close ->
+        Meta.SNOOZE_PRESETS.forEach { p ->
+            MenuItem(p.first, { close(); state.snoozeFor(ids, p.second) }, pinned = p == pinned) {
+                state.pinSnooze(p.first)
+            }
+        }
+        MenuDivider()
+        MenuItem("Resume now", { close(); state.setSnoozeUntil(ids, null) }, color = Tokens.accent)
+    }
 }
 
-@Composable
-private fun OpenInItem(label: String, font: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    Box(
-        Modifier.fillMaxWidth()
-            .background(if (hovered) Tokens.rowHoverBg else Color.Transparent)
-            .hoverable(source)
-            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
-    ) { Txt(label, 12.sp, Tokens.text2, FontWeight.Medium, font = font) }
-}
+/** A preset as the button's label says it: "Snooze 1 day", but "Snooze until resumed". */
+private fun snoozeShort(preset: String) = if (preset == "Until I resume") "until resumed" else preset
 
 /**
  * Zone 5: what's changed in this checkout.
@@ -1017,14 +1001,14 @@ private fun StashSection(state: AppState, id: String, stashes: List<Stash>) {
                     }
                     RowActions(hovered) {
                         RowAction("Diff") { state.openStashDiff(id, st.label) }
-                        RowAction("Apply") {
+                        RowAction("Apply", RowActionKind.GIT) {
                             state.popup = Popup.Confirm(
                                 "Apply ${st.label}?",
                                 "Restores this stash's changes into the working tree (the stash is kept).",
                                 "Apply", danger = false,
                             ) { state.stashApply(id, st.label) }
                         }
-                        RowAction("Drop", danger = true) {
+                        RowAction("Drop", RowActionKind.DANGER) {
                             state.popup = Popup.Confirm(
                                 "Drop ${st.label}?", "Permanently deletes this stash.", "Drop", danger = true,
                             ) { state.stashDrop(id, st.label) }
@@ -1096,24 +1080,30 @@ private fun SubmoduleRow(state: AppState, id: String, s: Submodule) {
                 11.sp, Tokens.amber, FontWeight.SemiBold, modifier = Modifier.padding(top = 3.dp),
             )
         }
-        // Actions (wrap as the pane narrows)
+        // Actions (wrap as the pane narrows), in [RowActionKind] order: look, change, track, destroy.
         RowActions(hovered, Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            // Diff against whatever branch this submodule tracks (main, or a configured
+            // submodule.<name>.branch like develop) — not necessarily mainline.
+            if (s.initialized && s.behind > 0 && s.remoteRef != null) {
+                val shortRef = s.remoteRef.substringAfterLast('/')
+                RowAction("Diff $shortRef") { state.openSubmoduleDiff(id, s) }
+                RowAction("Log $shortRef") { state.openSubmoduleLog(id, s) }
+            }
+            if (tracked) RowAction("Goto Repo") {
+                state.trackedRepoAt(subFullPath)?.let { state.selectedId = it }
+            }
             if (!s.initialized) {
-                if (!busy) RowAction("Init") { state.initSubmodule(id, s.path) }
-            } else {
-                if (!busy) RowAction("Fetch") { state.fetchSubmodule(id, s.path) }
+                if (!busy) RowAction("Init", RowActionKind.GIT) { state.initSubmodule(id, s.path) }
+            } else if (!busy) {
+                RowAction("Fetch", RowActionKind.GIT) { state.fetchSubmodule(id, s.path) }
                 // The checkout wandered off the recorded commit — put it back. Safe without a
                 // confirmation: git refuses rather than overwriting uncommitted work inside.
-                if (s.moved && !busy) RowAction("Move to parent hash") { state.moveSubmoduleToParentPointer(id, s.path) }
-                if (s.behind > 0 && !busy) RowAction("Update") { state.updateSubmodulePointer(id, s.path) }
-                // Diff against whatever branch this submodule tracks (main, or a configured
-                // submodule.<name>.branch like develop) — not necessarily mainline.
-                if (s.behind > 0 && s.remoteRef != null) {
-                    val shortRef = s.remoteRef.substringAfterLast('/')
-                    RowAction("Diff $shortRef") { state.openSubmoduleDiff(id, s) }
-                    RowAction("Log $shortRef") { state.openSubmoduleLog(id, s) }
-                }
-                if (!busy) RowAction("Deinit", danger = true) {
+                if (s.moved) RowAction("Move to parent hash", RowActionKind.GIT) { state.moveSubmoduleToParentPointer(id, s.path) }
+                if (s.behind > 0) RowAction("Update", RowActionKind.GIT) { state.updateSubmodulePointer(id, s.path) }
+            }
+            if (!tracked && s.initialized && !busy) RowAction("Add Repo", RowActionKind.APP) { state.trackSubmodule(id, s) }
+            if (s.initialized && !busy) DangerActions {
+                RowAction("Deinit", RowActionKind.DANGER) {
                     state.popup = Popup.Confirm(
                         "Deinitialize ${s.path}?",
                         "Removes the submodule's working tree (its files). You can re-init later; the pointer in the parent is untouched.",
@@ -1121,10 +1111,6 @@ private fun SubmoduleRow(state: AppState, id: String, s: Submodule) {
                     ) { state.deinitSubmodule(id, s.path) }
                 }
             }
-            if (tracked) RowAction("Goto Repo") {
-                state.trackedRepoAt(subFullPath)?.let { state.selectedId = it }
-            }
-            else if (s.initialized && !busy) RowAction("Add Repo") { state.trackSubmodule(id, s) }
         }
     }
 }
@@ -1336,6 +1322,15 @@ private fun BranchRow(
                     RowAction("Diff") { state.openBranchDiff(id, b.name, b.name) }
                     RowAction("Log") { state.openBranchLog(id, b.name, b.name) }
                 }
+                // The branch is already checked out somewhere, so the useful move is to go there —
+                // the stand-in for Switch, but a link, so it sits with the links. Only when that
+                // worktree is tracked: offering to open an untracked one is the "+ Add Repo" flow,
+                // and it belongs on the worktree list, not here.
+                if (b.inOtherWorktree) {
+                    b.worktreePath?.let { p ->
+                        state.trackedRepoAt(p)?.let { t -> RowAction("Goto Repo") { state.selectedId = t } }
+                    }
+                }
                 // Between the read-only actions and the ones that move you: this changes the
                 // remote, not where you're standing or what's on disk.
                 if (canSync) {
@@ -1347,7 +1342,7 @@ private fun BranchRow(
                             if (b.isCurrent) "It's checked out here, so your working tree moves with it."
                             else "It isn't checked out, so your working tree isn't touched.",
                     ) {
-                        RowAction(if (pushing) "Syncing…" else "Sync") {
+                        RowAction(if (pushing) "Syncing…" else "Sync", RowActionKind.GIT) {
                             if (!pushing) state.syncBranch(id, b)
                         }
                     }
@@ -1367,7 +1362,7 @@ private fun BranchRow(
                                 "to ${b.upstream}. Your working tree isn't touched."
                         },
                     ) {
-                        RowAction(if (pushing) "Pushing…" else pushLabel) {
+                        RowAction(if (pushing) "Pushing…" else pushLabel, RowActionKind.GIT) {
                             if (!pushing) state.pushBranch(id, b)
                         }
                     }
@@ -1380,7 +1375,7 @@ private fun BranchRow(
                         val remote = c.substringBefore('/')
                         val pushesTo = (b.pushRef ?: b.upstream)?.substringBefore('/')
                         // "Track", not "Pull": it only sets the upstream; nothing is fetched or merged.
-                        RowAction("Track remote $remote") {
+                        RowAction("Track remote $remote", RowActionKind.GIT) {
                             state.popup = Popup.Confirm(
                                 "Track “${b.name}” on $remote?",
                                 // Short enough for the dialog's three lines; the config it writes is
@@ -1392,7 +1387,7 @@ private fun BranchRow(
                         }
                     }
                 }
-                if (canSwitch) RowAction("Switch") {
+                if (canSwitch) RowAction("Switch", RowActionKind.GIT) {
                     if (clean) state.switchBranch(id, b.name)
                     else state.popup = Popup.Confirm(
                         "Switch to ${b.name}?",
@@ -1403,21 +1398,13 @@ private fun BranchRow(
                 // Beside Switch because it's the other way to get onto the branch — one that leaves
                 // this checkout, and anything uncommitted in it, exactly where it is. Off for the same
                 // branches Switch is: git holds a branch in one tree at a time.
-                if (!b.isCurrent && !b.inOtherWorktree) RowAction("Worktree") {
+                if (!b.isCurrent && !b.inOtherWorktree) RowAction("Worktree", RowActionKind.GIT) {
                     state.openNewWorktree(id, WorktreeSource.LocalBranch(b.name))
-                }
-                // Where "Switch" would have been: the branch is already checked out somewhere, so the
-                // useful move is to go there. Only when that worktree is tracked — offering to open an
-                // untracked one is the "+ Add Repo" flow, and it belongs on the worktree list, not here.
-                if (b.inOtherWorktree) {
-                    b.worktreePath?.let { p ->
-                        state.trackedRepoAt(p)?.let { t -> RowAction("Goto Repo") { state.selectedId = t } }
-                    }
                 }
                 // Joined the other actions rather than keeping its own ✕ up on line 1: a delete
                 // glyph standing permanently beside every branch name is both the loudest thing in
                 // the list and the one thing you least want a stray click to find.
-                if (canDelete) RowAction("Delete", danger = true) {
+                if (canDelete) RowAction("Delete", RowActionKind.DANGER) {
                     // Mirror `git branch -d/-D`: a merged branch deletes with no prompt (nothing is
                     // lost). We use -D because "merged" is measured against mainline — `git branch -d`
                     // would refuse when you're on a different branch, even though the commits are safely
@@ -1440,7 +1427,7 @@ private fun BranchRow(
                             "already in mainline, so nothing is lost — and if someone has pushed to " +
                             "it since your last fetch, the remote refuses and both stay.",
                     ) {
-                        RowAction(if (deletingUpstream) "Deleting…" else "Delete both", danger = true) {
+                        RowAction(if (deletingUpstream) "Deleting…" else "Delete both", RowActionKind.DANGER) {
                             if (!deletingUpstream) state.deleteBranchWithUpstream(id, b.name, deletableUpstream)
                         }
                     }
@@ -1638,7 +1625,7 @@ private fun RemoteBranchRow(
                     RowAction("Diff") { state.openBranchDiff(id, rb.name, rb.name) }
                     RowAction("Log") { state.openBranchLog(id, rb.name, rb.name) }
                 }
-                if (canSwitch) RowAction(if (rb.hasLocal) "Switch" else "Checkout") {
+                if (canSwitch) RowAction(if (rb.hasLocal) "Switch" else "Checkout", RowActionKind.GIT) {
                     if (clean) state.checkoutRemoteBranch(id, rb)
                     else state.popup = Popup.Confirm(
                         if (rb.hasLocal) "Switch to ${rb.shortName}?" else "Check out ${rb.shortName}?",
@@ -1650,7 +1637,7 @@ private fun RemoteBranchRow(
                 // track the same remote would be a surprise. Off when that local branch is already
                 // checked out somewhere, which git would refuse.
                 val local = if (rb.hasLocal) state.branches.find { it.name == rb.shortName } else null
-                if (local == null || (!local.isCurrent && !local.inOtherWorktree)) RowAction("Worktree") {
+                if (local == null || (!local.isCurrent && !local.inOtherWorktree)) RowAction("Worktree", RowActionKind.GIT) {
                     state.openNewWorktree(
                         id,
                         if (rb.hasLocal) WorktreeSource.LocalBranch(rb.shortName) else WorktreeSource.RemoteBranch(rb.name),
@@ -1671,7 +1658,7 @@ private fun RemoteBranchRow(
                                 "mainline, so its commits survive only where they're still checked out."
                         },
                     ) {
-                        RowAction(if (deleting) "Deleting…" else "Delete", danger = true) {
+                        RowAction(if (deleting) "Deleting…" else "Delete", RowActionKind.DANGER) {
                             if (deleting) return@RowAction
                             // Same rule as the local list one section up: merged means the commits
                             // are safe in mainline, so the delete just goes. Unmerged is the case
@@ -1976,7 +1963,7 @@ private fun IssueRow(state: AppState, id: String, item: GitHub.Item, clean: Bool
                         "Fetches this PR's branch and checks it out here (`gh pr checkout " +
                             "${item.number}`) — from a fork too, no remote setup needed.",
                     ) {
-                        RowAction("Checkout") {
+                        RowAction("Checkout", RowActionKind.GIT) {
                             if (clean) state.checkoutPr(id, item.number)
                             else state.popup = Popup.Confirm(
                                 "Check out PR #${item.number}?",
@@ -1986,7 +1973,7 @@ private fun IssueRow(state: AppState, id: String, item: GitHub.Item, clean: Bool
                         }
                     }
                     HoverTip("Checks this PR out into a new folder of its own, leaving this checkout as it is.") {
-                        RowAction("Worktree") {
+                        RowAction("Worktree", RowActionKind.GIT) {
                             state.openNewWorktree(id, WorktreeSource.PullRequest(item.number, item.title))
                         }
                     }

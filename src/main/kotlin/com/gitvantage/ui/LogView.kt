@@ -44,8 +44,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -188,15 +186,15 @@ private fun CommitRow(state: AppState, c: Commit) {
                 Modifier.alpha(if (hovered) 1f else 0f),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                LogPill("Diff", accent) { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
+                RowAction("Diff") { state.openCommitDiff(state.logRepoId, c.fullHash, c.shortHash) }
                 // Only for a log of a tracked repo: a submodule's or a worktree's log has no parent
                 // entry here for the new tree to appear under. Named after the tag when the commit
                 // carries one, since "v1.4.0" is what you'd call that folder.
-                if (worktreeable) LogPill("Worktree", accent) {
+                if (worktreeable) RowAction("Worktree", RowActionKind.GIT) {
                     val tag = c.refs.firstOrNull { it.kind == RefKind.TAG }?.label
                     state.openNewWorktree(state.logRepoId, WorktreeSource.Commit(c.fullHash, tag ?: c.shortHash))
                 }
-                if (webBase != null) LogPill("↗ GitHub", accent) { state.openUrl("$webBase/commit/${c.fullHash}") }
+                if (webBase != null) RowAction("↗ GitHub") { state.openUrl("$webBase/commit/${c.fullHash}") }
             }
         }
         // Merge commits are where history actually branches, and a flat list hides that entirely.
@@ -222,7 +220,7 @@ private fun CommitRow(state: AppState, c: Commit) {
                         "What ${c.shortHash} changed relative to parent ${i + 1} (${parent.shortHash}) — " +
                             "for a merge, that's the work the other side brought in.",
                     ) {
-                        LogPill("p${i + 1} ${parent.shortHash}", accent) {
+                        RowAction("p${i + 1} ${parent.shortHash}") {
                             state.openRangeDiff(
                                 state.logRepoId, parent.fullHash, c.fullHash,
                                 "Merge ${c.shortHash} vs parent ${i + 1} (${parent.shortHash})",
@@ -284,16 +282,6 @@ private fun RefChipBody(label: String, fg: Color, bg: Color, shape: Shape) {
     Box(Modifier.clip(shape).background(bg, shape).padding(horizontal = 5.dp, vertical = 1.dp)) {
         Txt(label, 10.sp, fg, FontWeight.Bold, font = MonoFont, maxLines = 1)
     }
-}
-
-@Composable
-private fun LogPill(label: String, accent: Color, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(6.dp)).background(Tokens.tintBlue)
-            .border(1.dp, Tokens.accentBorder, RoundedCornerShape(6.dp))
-            .pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    ) { Txt(label, 10.5.sp, accent, FontWeight.SemiBold) }
 }
 
 @Composable

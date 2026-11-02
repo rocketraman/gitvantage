@@ -136,6 +136,11 @@ data class Settings(
     val fileManagerCommand: String = "",
     val ideCommand: String = "",
     val browserCommand: String = "",
+    // Which "Open in" launcher the control's main half runs — a Launcher id. Not a command, just a
+    // choice among the built-in launchers, so it carries none of the trust concerns above.
+    val pinnedLauncher: String = "terminal",
+    // The Snooze button's one-click length — a Meta.SNOOZE_PRESETS label.
+    val pinnedSnooze: String = "1 day",
     // Whether the detail pane's Settings disclosure is open. App-wide rather than per repo: it's a
     // statement about how you use the pane, not about any one project, and having it remember per
     // repo would mean the pane's length changed as you arrowed down the list.

@@ -479,31 +479,99 @@ fun RowActions(
     modifier: Modifier = Modifier,
     content: @Composable androidx.compose.foundation.layout.FlowRowScope.() -> Unit,
 ) {
+    // The reserved height is a [RowActionKind.GIT] chip's, not a bare link's — otherwise a lane with
+    // a chip in it would grow by its border the moment it filled.
     androidx.compose.foundation.layout.FlowRow(
-        modifier.heightIn(min = 17.dp),
+        modifier.heightIn(min = 19.dp),
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(11.dp),
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(3.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) { if (visible) content() }
 }
 
 /**
- * One action inside a [RowActions] lane: a plain text label in the accent, the same shape the
- * stash rows have always used. Bordered pills were doing the work of standing out from a row they
- * were permanently part of; once a row only shows its actions when asked, the border is just
- * weight. [danger] keeps anything destructive out of the blue reserved for navigation.
+ * What an action does, which decides how it looks — everywhere: the detail pane's toolbar, the hover
+ * lanes under it, the log's commit rows, the bulk bar.
+ *
+ * The colour goes where the consequence is. Blue — the colour the eye finds first — marks what
+ * changes git state; showing you something, which costs nothing to click, is neutral grey. A lane of
+ * identical blue words threw that away and left "Folder", "Alerts ▾" and "Remove" reading as one
+ * list; the earlier toolbar had it backwards, a blue Log beside a grey Push.
+ */
+enum class RowActionKind {
+    /** Shows something or opens something elsewhere; changes nothing. Grey outline. */
+    VIEW,
+
+    /** Changes git state — a branch, a checkout, a remote. Blue outline, like Push. */
+    GIT,
+
+    /** GitVantage's own settings for this row, not git's. Amber, like Snooze. */
+    APP,
+
+    /** Destroys something. Red outline, and last in its lane — at its far end where the lane has room. */
+    DANGER,
+}
+
+/** Where a [SplitMenuButton] sits, which sets its size to match its neighbours. */
+enum class SplitSize(val height: Dp, val radius: Dp, val padH: Dp, val font: TextUnit, val weight: FontWeight) {
+    /** The detail pane's action row, beside Commit and Push. */
+    TOOLBAR(33.dp, 8.dp, 12.dp, 12.5.sp, FontWeight.Bold),
+
+    /** The bulk-selection bar. */
+    BAR(27.dp, 7.dp, 11.dp, 12.sp, FontWeight.SemiBold),
+
+    /** A [RowActions] hover lane. */
+    LANE(19.dp, 5.dp, 7.dp, 11.5.sp, FontWeight.Medium),
+}
+
+/** A kind's text, fill and border. */
+data class ActionColors(val text: Color, val fill: Color, val border: Color)
+
+val RowActionKind.colors: ActionColors
+    get() = when (this) {
+        RowActionKind.VIEW -> ActionColors(Tokens.text2, Tokens.surface, Tokens.borderD8)
+        RowActionKind.GIT -> ActionColors(Tokens.accent, Tokens.tintBlue, Tokens.accentBorder)
+        RowActionKind.APP -> ActionColors(Tokens.snoozeBtnText, Tokens.snoozeBtnBg, Tokens.snoozeBtnBorder)
+        RowActionKind.DANGER -> ActionColors(Tokens.redText, Tokens.tintRed, Tokens.warnBorder)
+    }
+
+/**
+ * One action inside a [RowActions] lane: a small outlined chip in its [kind]'s colours — the
+ * toolbar's buttons at a size a hover lane has room for. Callers order a lane by kind, in the enum's
+ * order, and put the [RowActionKind.DANGER] ones in a [DangerActions] group.
  */
 @Composable
-fun RowAction(label: String, danger: Boolean = false, onClick: () -> Unit) {
-    Txt(
-        label, 11.5.sp, if (danger) Tokens.redText else Tokens.accent, FontWeight.Medium,
-        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap(onClick),
-    )
+fun RowAction(label: String, kind: RowActionKind = RowActionKind.VIEW, onClick: () -> Unit) {
+    val click = Modifier.pointerHoverIcon(PointerIcon.Hand).onTap(onClick)
+    val c = kind.colors
+    val shape = RoundedCornerShape(5.dp)
+    Box(
+        click.clip(shape).background(c.fill, shape).border(1.dp, c.border, shape)
+            .padding(horizontal = 7.dp, vertical = 1.dp),
+    ) { Txt(label, 11.5.sp, c.text, FontWeight.Medium) }
 }
 
 /**
- * [CopyPill]'s behaviour — clipboard, then "✓ Copied" in place for a moment — as a [RowAction],
- * for the lists where a bordered pill on every row was the problem. The pill form stays for the
- * places it appears alone, like the diff header.
+ * A lane's destructive actions, kept together and pushed to the lane's far end — out of the path a
+ * pointer takes along the everyday ones, the way a dialog keeps Delete away from OK. Only in a lane
+ * laid out full width: in one sized to its content there is no far end to push to, and the lane
+ * would grow to claim it. When the group doesn't fit, it wraps to a line of its own as one unit.
+ */
+@Composable
+fun androidx.compose.foundation.layout.FlowRowScope.DangerActions(content: @Composable () -> Unit) {
+    // The group itself takes the weight, rather than a spacer before it: a spacer stays behind on
+    // the line the group wrapped away from, and the group lands at the start of the next.
+    androidx.compose.foundation.layout.Row(
+        Modifier.weight(1f),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(11.dp, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) { content() }
+}
+
+/**
+ * [CopyPill]'s behaviour — clipboard, then "✓ Copied" in place for a moment — as a
+ * [RowActionKind.VIEW] [RowAction], for the hover lanes. The pill form stays for the places it
+ * appears alone, like the diff header.
  */
 @Composable
 fun CopyAction(value: String, label: String = "Copy") {
@@ -511,12 +579,14 @@ fun CopyAction(value: String, label: String = "Copy") {
     val scope = rememberCoroutineScope()
     var copied by remember(value) { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1200.milliseconds); copied = false } }
-    Txt(
-        if (copied) "✓ Copied" else label, 11.5.sp,
-        if (copied) Tokens.addFg else Tokens.accent, FontWeight.Medium,
-        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
-            .onTap { scope.launch { clipboard.setText(value); copied = true } },
-    )
+    val c = RowActionKind.VIEW.colors
+    val shape = RoundedCornerShape(5.dp)
+    Box(
+        Modifier.pointerHoverIcon(PointerIcon.Hand)
+            .onTap { scope.launch { clipboard.setText(value); copied = true } }
+            .clip(shape).background(c.fill, shape).border(1.dp, c.border, shape)
+            .padding(horizontal = 7.dp, vertical = 1.dp),
+    ) { Txt(if (copied) "✓ Copied" else label, 11.5.sp, if (copied) Tokens.addFg else c.text, FontWeight.Medium) }
 }
 
 /**
@@ -674,6 +744,25 @@ fun GearIcon(color: Color, size: Dp = 13.dp, modifier: Modifier = Modifier) {
             )
         }
         drawCircle(color, radius = r * 0.52f, style = Stroke(width = r * 0.34f))
+    }
+}
+
+/**
+ * A pushpin: round head, needle below. Drawn for the reason [GearIcon] is — U+1F4CC and U+1F4CD are
+ * emoji, and come out in the emoji font's colours rather than [color].
+ */
+@Composable
+fun PinIcon(color: Color, filled: Boolean, size: Dp = 12.dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val w = this.size.minDimension
+        val head = w * 0.27f
+        val headCenter = Offset(center.x, head + w * 0.06f)
+        drawLine(color, Offset(center.x, headCenter.y), Offset(center.x, w), strokeWidth = w * 0.12f)
+        if (filled) drawCircle(color, radius = head, center = headCenter)
+        else {
+            drawCircle(Tokens.surface, radius = head, center = headCenter)
+            drawCircle(color, radius = head, center = headCenter, style = Stroke(width = w * 0.12f))
+        }
     }
 }
 

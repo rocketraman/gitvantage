@@ -292,9 +292,12 @@ private fun WorktreeCard(state: AppState, rv: RepoView, wtv: WorktreeView) {
     // whether the expand came from the table, a card strip, or a click on the card itself.
     val bring = remember { BringIntoViewRequester() }
     LaunchedEffect(expanded) { if (expanded) runCatching { bring.bringIntoView() } }
+    // Outlined in amber while it holds uncommitted work, the colour of its "N uncommitted" badge. The
+    // badge says it, but a badge is something you read; the frame is something you see from the
+    // other end of the list, which is where you are when you're deciding which tree to go back to.
     Column(
         Modifier.fillMaxWidth().bringIntoViewRequester(bring)
-            .clip(shape).border(1.dp, Tokens.borderE6, shape),
+            .clip(shape).border(1.dp, if (wt.dirtyCount > 0) Tokens.amber else Tokens.borderE6, shape),
     ) {
         // Header — the whole strip toggles, so the chevron is an indicator rather than the target.
         Column(
@@ -356,19 +359,22 @@ private fun WorktreeCard(state: AppState, rv: RepoView, wtv: WorktreeView) {
             Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(11.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
+            // The pane's action row in miniature, in [RowActionKind] order — Log and the launcher
+            // control are the same two it ends with, so a worktree's folder is found where the
+            // repo's is.
             if (!wt.missing) {
-                if (wt.dirtyCount > 0) {
-                    RowAction("Open Diff") { state.openWorktreeDiff(wt.path) }
-                    RowAction("Commit…") { state.popup = AppPopup.CommitWorktree(rv.id, wt.path, wtv.label) }
-                }
+                if (wt.dirtyCount > 0) RowAction("Open Diff") { state.openWorktreeDiff(wt.path) }
                 RowAction("Log") { state.openWorktreeLog(wt.path) }
-                RowAction("Terminal") { state.openTerminal(wt.path) }
-                RowAction("Folder") { state.openFolder(wt.path) }
+                LauncherControl(state, wt.path, repo = null)
+                if (wt.dirtyCount > 0) {
+                    RowAction("Commit…", RowActionKind.GIT) { state.popup = AppPopup.CommitWorktree(rv.id, wt.path, wtv.label) }
+                }
             }
             AlertsAnchor(state, rv, wtv)
-            if (!state.worktreesBusy && !wt.missing) {
-                RowAction("Remove", danger = true) { confirmRemove(state, rv, wt, alsoBranch = false) }
+            if (!state.worktreesBusy && !wt.missing) DangerActions {
+                RowAction("Remove", RowActionKind.DANGER) { confirmRemove(state, rv, wt, alsoBranch = false) }
                 if (canRemoveWithBranch(wt)) {
                     RemoveWithBranchAction(state, rv, wt)
                 }
@@ -495,7 +501,7 @@ private fun AlertsAnchor(state: AppState, rv: RepoView, wtv: WorktreeView) {
     var open by remember(wtv.path) { mutableStateOf(false) }
     val below = with(LocalDensity.current) { 20.dp.roundToPx() }
     Box {
-        RowAction(if (wtv.overridden) "Alerts ▾ ⚙" else "Alerts ▾") { open = !open }
+        RowAction(if (wtv.overridden) "☾ Alerts ▾ ⚙" else "☾ Alerts ▾", RowActionKind.APP) { open = !open }
         if (open) {
             Popup(
                 alignment = Alignment.TopStart,
@@ -654,7 +660,7 @@ private fun RemoveWithBranchAction(state: AppState, rv: RepoView, wt: Worktree) 
             "Deletes this folder and the branch “${wt.ownBranch}”."
         },
     ) {
-        RowAction(if (upstream != null) "Remove + branch + ${upstream.substringBefore('/')}" else "Remove + branch", danger = true) {
+        RowAction(if (upstream != null) "Remove + branch + ${upstream.substringBefore('/')}" else "Remove + branch", RowActionKind.DANGER) {
             confirmRemove(state, rv, wt, alsoBranch = true)
         }
     }
