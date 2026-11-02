@@ -198,6 +198,36 @@ val BranchOperations by testSuite {
             assert("feature" !in branches(work))
         }
 
+        // --- deleteMany ---------------------------------------------------------------------
+
+        test("deleteMany removes every named branch and leaves the rest") {
+            val work = repo()
+            git(work, "branch", "a")
+            git(work, "branch", "b")
+            git(work, "branch", "c")
+
+            val result = BranchOps.deleteMany(work.path, listOf("a", "b"))
+
+            assert(result.ok) { result.message }
+            assert(result.message == "Deleted 2 merged branches")
+            assert("a" !in branches(work) && "b" !in branches(work))
+            assert("c" in branches(work))
+        }
+
+        test("deleteMany deletes what it can and names the branch git refused") {
+            val work = repo()
+            git(work, "branch", "a")
+            git(work, "branch", "b")
+            git(work, "worktree", "add", "-q", java.io.File(work.parentFile, "tree-b").path, "b")
+
+            val result = BranchOps.deleteMany(work.path, listOf("a", "b"))
+
+            assert(!result.ok)
+            assert(result.message.startsWith("Deleted 1 of 2 merged branches — not b (")) { result.message }
+            assert("a" !in branches(work))
+            assert("b" in branches(work))
+        }
+
         // --- deleteRemote -------------------------------------------------------------------
 
         test("deleteRemote removes the branch from the remote") {
