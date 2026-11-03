@@ -5,6 +5,7 @@ package com.gitvantage.git
 
 import com.gitvantage.git.model.BranchStatus
 import com.gitvantage.git.model.StatusResult
+import com.gitvantage.model.Activity
 import com.gitvantage.model.ChangedFile
 import com.gitvantage.model.DETACHED_BRANCH
 import com.gitvantage.model.Meta
@@ -40,7 +41,7 @@ object RepoScanner {
      * a couple of idle hours.
      */
     suspend fun scan(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean = true): Repo =
-        withContext(Dispatchers.IO) { Perf.timed("scan.repo") { scanNow(entry, fetch, userInitiated) } }
+        withContext(Dispatchers.IO) { Activity.scan { Perf.timed("scan.repo") { scanNow(entry, fetch, userInitiated) } } }
 
     private fun scanNow(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean): Repo {
         val dir = File(entry.path)

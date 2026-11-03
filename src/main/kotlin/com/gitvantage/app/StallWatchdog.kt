@@ -3,7 +3,9 @@
 
 package com.gitvantage.app
 
+import com.gitvantage.model.Activity
 import com.gitvantage.model.Perf
+import java.lang.management.ManagementFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -65,6 +67,35 @@ object StallWatchdog {
     @Volatile
     private var uiThread: Thread? = null
 
+    /** The UI thread's id once it is known — [AllocationMeter] files its allocations separately. */
+    internal val uiThreadId: Long? get() = uiThread?.threadId()
+
+    /**
+     * What the rest of the app was up to at one moment, from [Activity] and the collectors, so two of
+     * these subtract to "during the stall". Each figure is a suspect: `git` starts (a `fork()` apiece, which on macOS holds
+     * locks the UI thread needs), scans, and collections, which pause every thread.
+     */
+    private data class Moment(
+        val gitStarted: Long,
+        val gitRunning: Int,
+        val scans: Int,
+        val gcCount: Long,
+        val gcMillis: Long,
+    ) {
+        companion object {
+            fun now(): Moment {
+                val gc = runCatching { ManagementFactory.getGarbageCollectorMXBeans() }.getOrDefault(emptyList())
+                return Moment(
+                    gitStarted = Activity.gitStartedTotal,
+                    gitRunning = Activity.gitRunningNow,
+                    scans = Activity.scansRunningNow,
+                    gcCount = gc.sumOf { it.collectionCount.coerceAtLeast(0) },
+                    gcMillis = gc.sumOf { it.collectionTime.coerceAtLeast(0) },
+                )
+            }
+        }
+    }
+
     @Volatile
     private var started = false
 
@@ -125,6 +156,7 @@ object StallWatchdog {
         while (true) {
             Thread.sleep(INTERVAL_MS)
             val sent = System.nanoTime()
+            val before = Moment.now()
             val arrived = CountDownLatch(1)
             // A cancelled scope silently never runs this, which is why the wait below is bounded.
             runCatching {
@@ -142,18 +174,38 @@ object StallWatchdog {
                 if (took >= SLUGGISH_NANOS) Perf.count("ui.dispatch.sluggish")
                 continue
             }
-            // Still waiting, so the thread is stuck *now* — take the stack before it recovers.
-            val stack = uiThread?.stackTrace
+            // Still waiting, so the thread is stuck *now* — take the stacks before it recovers: its
+            // own, and everyone else's, since the UI thread is often only waiting on one of them.
+            val ui = uiThread
+            val stack = ui?.stackTrace
+            val others = runCatching { otherThreads(ui) }.getOrDefault(emptyList())
+            val caught = Moment.now()
             val recovered = arrived.await(ABANDON_MS, TimeUnit.MILLISECONDS)
             val blockedMs = (System.nanoTime() - sent) / 1_000_000
             Perf.count("ui.stalls")
             Perf.time("ui.dispatch", System.nanoTime() - sent)
-            report(blockedMs, recovered, stack)
+            report(blockedMs, recovered, stack, others, before, caught, Moment.now())
             if (!recovered) return // the scope is gone; nothing left to watch
         }
     }
 
-    private fun report(blockedMs: Long, recovered: Boolean, stack: Array<StackTraceElement>?) {
+    /** Every thread but the UI thread and this one, as [ThreadSummary] reads them. */
+    private fun otherThreads(ui: Thread?): List<ThreadSummary.Snap> {
+        val self = Thread.currentThread()
+        return Thread.getAllStackTraces()
+            .filterKeys { it !== ui && it !== self }
+            .map { (t, frames) -> ThreadSummary.Snap(t.name, t.state, frames.toList()) }
+    }
+
+    private fun report(
+        blockedMs: Long,
+        recovered: Boolean,
+        stack: Array<StackTraceElement>?,
+        others: List<ThreadSummary.Snap>,
+        before: Moment,
+        caught: Moment,
+        after: Moment,
+    ) {
         stalls++
         val err = StringBuilder()
         err.append("GitVantage: UI thread blocked for ${blockedMs}ms")
@@ -165,6 +217,13 @@ object StallWatchdog {
             stack.take(STACK_FRAMES).forEach { err.append("    at ").append(it).append('\n') }
             if (stack.size > STACK_FRAMES) err.append("    … ${stack.size - STACK_FRAMES} more frames\n")
         }
+        err.append(
+            "  while blocked: ${after.gitStarted - before.gitStarted} git started " +
+                "(${caught.gitRunning} running when caught) · ${caught.scans} scans running · " +
+                "${after.gcCount - before.gcCount} collections, ${after.gcMillis - before.gcMillis}ms in GC\n",
+        )
+        err.append("  other threads when caught:\n")
+        ThreadSummary.lines(others).forEach { err.append(it).append('\n') }
         DiagLog.write(err.toString())
     }
 }

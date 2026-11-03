@@ -36,6 +36,7 @@ import com.gitvantage.model.Repo
 import com.gitvantage.model.RepoCandidate
 import com.gitvantage.model.WatchAction
 import com.gitvantage.model.WatchPolicy
+import com.gitvantage.model.WatchStats
 import com.gitvantage.model.Worktree
 import com.gitvantage.model.WorktreeAlert
 import com.gitvantage.model.WorktreeAlerts
@@ -558,6 +559,7 @@ class AppState(private val scope: CoroutineScope) {
             runCatching {
                 w.events.collect { ev ->
                     Perf.count("watch.events")
+                    if (Perf.enabled) recordWatchEvent(ev)
                     when (val action = actionFor(ev)) {
                         is WatchAction.Rescan -> noteWatchEvent(action.id)
                         WatchAction.RescanAll -> { Perf.count("watch.overflow"); scheduleFullRescan() }
@@ -646,6 +648,7 @@ class AppState(private val scope: CoroutineScope) {
                 want.forEach { id -> if (id !in watchRegs) register(w, id) }
                 (watchRegs.keys - want).forEach { id ->
                     runCatching { watchRegs.remove(id)?.forEach { it.close() } }
+                    watchRootById.remove(id)
                     watchBursts.remove(id)
                 }
             }
@@ -656,9 +659,36 @@ class AppState(private val scope: CoroutineScope) {
     private fun register(w: FsWatcher, id: String) {
         // A list of one, today. Every registration carries the repo id as its name, which is what
         // event routing reads, so the shape survives if [WatchRoots] ever returns several again.
+        watchRootById[id] = watchRootFor(id)
         watchRegs[id] = WatchRoots.forRepo(id).mapNotNull { root ->
             runCatching { w.watch(watchRootFor(root.path), root.recursive, id) }.getOrNull()
         }
+    }
+
+    /**
+     * Each watched repo's root as the watcher was handed it, which is the spelling event paths come
+     * back under — what [recordWatchEvent] needs to say which folder an event was in. Resolved once
+     * at registration rather than per event, since resolving touches the filesystem.
+     */
+    private val watchRootById = ConcurrentHashMap<String, Path>()
+
+    /** File [ev] under its repo and folder for [WatchStats]. Only while collecting; runs per event. */
+    private fun recordWatchEvent(ev: FsWatchEvent) {
+        val id = ev.source?.name ?: return
+        val root = watchRootById[id] ?: return
+        val folder = eventPaths(ev).firstOrNull()?.let { WatchStats.folderOf(root, it) } ?: "(overflow)"
+        WatchStats.event(id, folder)
+    }
+
+    /**
+     * How a repo appears in a diagnostics report: its position in the list and how many worktrees it
+     * has, never its path or name — the report is meant to be pasted into a public issue. The
+     * position is enough for the person who sent it to say which repo it is, if asked.
+     */
+    private fun diagLabel(id: String): String {
+        val n = order.indexOf(id) + 1
+        val trees = repos.firstOrNull { it.id == id }?.worktrees?.size ?: 0
+        return if (n > 0) "repo #$n ($trees ${if (trees == 1) "worktree" else "worktrees"})" else "(untracked repo)"
     }
 
     /**
@@ -740,6 +770,7 @@ class AppState(private val scope: CoroutineScope) {
                         else due.filter { entries[it] != null }
                     if (ids.isNotEmpty()) {
                         Perf.count("watch.rescans", ids.size.toLong())
+                        ids.forEach(WatchStats::rescan)
                         Perf.timed("watch.rescan.batch") { rescanRepos(ids, fetch = false) }
                     }
                 }
@@ -1400,6 +1431,8 @@ class AppState(private val scope: CoroutineScope) {
         // Started whether or not collection is on, since it can be switched on at any point; an
         // idle timer once a minute is cheaper than starting and stopping one correctly.
         watchScope.launch {
+            // Only when collecting: switching on later takes its own baseline (see setPerfCollection).
+            if (Perf.enabled) AllocationMeter.start()
             while (currentCoroutineContext().isActive) {
                 delay(PERF_REPORT_MS.milliseconds)
                 if (Perf.enabled) dumpPerf("every ${PERF_REPORT_MS / 1000}s")
@@ -1411,8 +1444,10 @@ class AppState(private val scope: CoroutineScope) {
     private fun dumpPerf(label: String) {
         val lines = Perf.report(markInterval = true)
         if (lines.isEmpty()) return
+        val vitals = Diagnostics.vitals() + AllocationMeter.interval()
         DiagLog.write(
-            "GitVantage perf [$label] · ${Diagnostics.vitals().joinToString(" · ")}\n" + lines.joinToString("\n"),
+            "GitVantage perf [$label] · ${vitals.joinToString(" · ")}\n" +
+                (lines + WatchStats.report(label = ::diagLabel)).joinToString("\n"),
         )
     }
 
@@ -1427,7 +1462,12 @@ class AppState(private val scope: CoroutineScope) {
      */
     fun setPerfCollection(on: Boolean) {
         if (on == perfCollecting) return
+        // `GITVANTAGE_PERF=1` can't be undone from here, which is why Settings dims Off. Ignore the
+        // click outright: going on would log "collection switched off" for collection that carries
+        // on, and save "off" as a choice the user can't see took effect.
+        if (!on && Perf.forcedOn) return
         if (!on) watchScope.launch { dumpPerf("collection switched off") }
+        if (on) watchScope.launch { AllocationMeter.start() }
         Perf.enable(on)
         perfCollecting = Perf.enabled
         Registry.saveSettings(Registry.settings().copy(collectPerf = on))
@@ -1442,7 +1482,8 @@ class AppState(private val scope: CoroutineScope) {
     suspend fun diagnosticsReport(): String {
         val inventory = "${repos.size} repos · ${repos.sumOf { it.worktrees.size }} worktrees · " +
             "GitHub polling ${if (githubEnabled) "on" else "off"}"
-        return withContext(Dispatchers.IO) { Diagnostics.report(inventory) }
+        val watched = WatchStats.report(label = ::diagLabel)
+        return withContext(Dispatchers.IO) { Diagnostics.report(inventory, watched) }
     }
 
     /** Show the folder holding the log, for attaching the file itself rather than an excerpt. */

@@ -235,7 +235,7 @@ val Architecture by testSuite {
     }
 
     /**
-     * Starting a process is allowed in four places, and only one of them is about git:
+     * Starting a process is allowed in five places, and only one of them is about git:
      *
      *  - `git/Git` runs the git binary — the subject of this file;
      *  - `Actions` launches what the user picked from "Open in …" (a terminal, an IDE, `xdg-open`,
@@ -245,6 +245,8 @@ val Architecture by testSuite {
      *    `gsettings` and `kreadconfig`, because Skiko cannot: it dlopens an unversioned
      *    `libdbus-1.so` that only a machine with the -devel package installed has, and reports
      *    UNKNOWN otherwise (SKIKO-1177). Shells out only on that UNKNOWN, and only on Linux.
+     *  - `app/Diagnostics` asks `ps` for the process's resident memory on macOS, which has no
+     *    `/proc` and no Java API for it. Once a minute, and only while performance collection is on.
      *
      * Each entry has a reason, which is what makes a new name appearing in a failure worth stopping
      * on rather than adding to the list.
@@ -262,10 +264,10 @@ val Architecture by testSuite {
      * file: Konture attributes a dependency to the file it appears in, so an allowlist over classes
      * would have to name every class each allowed file declares.
      */
-    test("process spawning is confined to Git and the three non-git callers") {
+    test("process spawning is confined to Git and the four non-git callers") {
         architecture {
             files {
-                that().notNamed { it in setOf("Git.kt", "Actions.kt", "GitHub.kt", "Theme.kt") }
+                that().notNamed { it in setOf("Git.kt", "Actions.kt", "GitHub.kt", "Theme.kt", "Diagnostics.kt") }
                 should().notReferenceClass("java.lang.ProcessBuilder")
             }
         }

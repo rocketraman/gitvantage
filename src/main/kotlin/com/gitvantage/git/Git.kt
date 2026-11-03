@@ -3,6 +3,7 @@
 
 package com.gitvantage.git
 
+import com.gitvantage.model.Activity
 import com.gitvantage.model.Perf
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -148,7 +149,11 @@ object Git {
         return "?"
     }
 
+    // Counted always, not only while collecting — see [Activity] for who reads it and why.
     private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean = false): Result =
+        Activity.git { spawnMeasured(dir, args, timeoutSeconds, captureErr, readOnly) }
+
+    private fun spawnMeasured(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean): Result =
         // Keyed on the subcommand, not the full argument list: "status" is the useful grouping, and
         // the arguments would make a cardinality explosion out of a handful of real commands.
         //
