@@ -51,8 +51,10 @@ import com.gitvantage.smoke.runSmokeChecks
 import dev.nucleusframework.application.DecoratedWindow
 import dev.nucleusframework.application.NucleusBackend
 import dev.nucleusframework.application.nucleusApplication
+import dev.nucleusframework.core.runtime.SingleInstanceManager
 import dev.nucleusframework.window.NucleusDecoratedWindowTheme
 import dev.nucleusframework.window.TitleBar
+import java.io.File
 import kotlin.system.exitProcess
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
@@ -74,7 +76,25 @@ fun main(args: Array<String>) {
     if (args.contains("--smoke-test")) {
         exitProcess(runSmokeChecks())
     }
+    isolateSingleInstanceLock()
     runApp()
+}
+
+/**
+ * Keep Nucleus's single-instance lock in a directory of its own.
+ *
+ * The lock and the restore-request file default to `java.io.tmpdir`, and Nucleus watches that whole
+ * directory for the request with the JDK `WatchService`. On macOS the JDK has no native one: it
+ * polls, `lstat`-ing every entry every couple of seconds, and a Mac's `$TMPDIR` is shared with every
+ * other app the user runs. A 15-second sample of a long-running 1.4.0 showed that poll as one of the
+ * busiest threads in the process. A directory holding only our two files makes the poll free.
+ *
+ * Must run before `nucleusApplication`, which locks the configuration on first use. Nucleus creates
+ * the directory itself.
+ */
+private fun isolateSingleInstanceLock() {
+    val dir = File(Registry.file.absoluteFile.parentFile, "instance").toPath()
+    SingleInstanceManager.configuration = SingleInstanceManager.configuration.copy(lockFilesDir = dir)
 }
 
 /**

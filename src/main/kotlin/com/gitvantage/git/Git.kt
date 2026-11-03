@@ -100,16 +100,16 @@ object Git {
 
     /** Stdout of a read-only `git [args]`, or "" on any failure. The common query shape. */
     fun read(dir: File, vararg args: String, timeoutSeconds: Long = READ_TIMEOUT): String =
-        spawn(dir, args.toList(), timeoutSeconds, captureErr = false).let { if (it.ok) it.out else "" }
+        spawn(dir, args.toList(), timeoutSeconds, captureErr = false, readOnly = true).let { if (it.ok) it.out else "" }
 
     /** Stdout of a read-only `git [args]`, or null on any failure — for callers that need to tell
      *  "the command failed" from "the command succeeded and said nothing". */
     fun readOrNull(dir: File, vararg args: String, timeoutSeconds: Long = READ_TIMEOUT): String? =
-        spawn(dir, args.toList(), timeoutSeconds, captureErr = false).let { if (it.ok) it.out else null }
+        spawn(dir, args.toList(), timeoutSeconds, captureErr = false, readOnly = true).let { if (it.ok) it.out else null }
 
     /** Exit code only, for git's yes/no questions (`merge-base --is-ancestor`). -1 if it never ran. */
     fun exitCode(dir: File, vararg args: String, timeoutSeconds: Long = READ_TIMEOUT): Int =
-        spawn(dir, args.toList(), timeoutSeconds, captureErr = false).code
+        spawn(dir, args.toList(), timeoutSeconds, captureErr = false, readOnly = true).code
 
     /**
      * Whether [dir] is a git working tree or repository.
@@ -148,13 +148,21 @@ object Git {
         return "?"
     }
 
-    private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result =
+    private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean = false): Result =
         // Keyed on the subcommand, not the full argument list: "status" is the useful grouping, and
         // the arguments would make a cardinality explosion out of a handful of real commands.
+        //
+        // `.chars` is how much each subcommand hands back, because a count and a time can't say
+        // whether git output is what the garbage collector is busy with. A field report showed ~2.5
+        // young collections a second against a ~410MB young generation — about 1GB/s allocated —
+        // which a fixture of 44 small repos at the same scan rate came nowhere near (~1-2MB/s, on
+        // the JVM and in the native image alike). What real repos return, a squash check's full
+        // branch diff above all, is the difference that leaves, and this measures it.
         Perf.concurrent("proc.git") {
-            Perf.timed("git." + subcommandOf(args)) {
-                spawnNow(dir, args, timeoutSeconds, captureErr)
-            }
+            val name = "git." + subcommandOf(args)
+            Perf.timed(name) {
+                spawnNow(dir, args, timeoutSeconds, captureErr, readOnly)
+            }.also { if (Perf.enabled) Perf.count("$name.chars", (it.out.length + it.err.length).toLong()) }
         }
 
     /**
@@ -167,10 +175,20 @@ object Git {
      * deadlock. When stderr isn't wanted it's discarded by the OS, which can't fill and so needs
      * no thread — that keeps the read path, which runs many times per repo per scan, as cheap as
      * the per-file helpers it replaces.
+     *
+     * [readOnly] queries run with `GIT_OPTIONAL_LOCKS=0`. Without it `git status` refreshes the
+     * index's stat cache and writes `.git/index` back — even with nothing to commit — and the
+     * repo's watch is recursive, `.git` included. So a scan's own status call was a filesystem
+     * event that scheduled the next scan, and in a repo whose files keep changing that loop never
+     * settled: git spawned around the clock, and on macOS every spawn is a `fork()` that holds the
+     * malloc and Objective-C locks the UI thread needs, so the app grew laggier the longer it ran
+     * (and the bigger the process got). Mutations through [run] keep the default; a commit or a
+     * switch is expected to write the index, and the app is the one asking.
      */
-    private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean): Result = runCatching {
+    private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean): Result = runCatching {
         val pb = ProcessBuilder(listOf("git") + args).directory(dir)
         if (!captureErr) pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+        if (readOnly) pb.environment()["GIT_OPTIONAL_LOCKS"] = "0"
         val proc = pb.start()
 
         var err = ""
