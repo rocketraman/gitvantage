@@ -19,7 +19,7 @@ val DiagnosticsFigures by testSuite {
     }
 
     test("the interval rate reports what this thread allocated, and attributes it") {
-        AllocationMeter.interval() // set the baseline
+        AllocationMeter.start()
         val sink = ArrayList<ByteArray>()
         repeat(64) { sink += ByteArray(1024 * 1024) } // 64MB, held so it can't be optimised away
         val line = AllocationMeter.interval()
@@ -29,7 +29,7 @@ val DiagnosticsFigures by testSuite {
     }
 
     test("the running total does not move the interval's baseline") {
-        AllocationMeter.interval()
+        AllocationMeter.start()
         val held = ByteArray(32 * 1024 * 1024)
         assert(AllocationMeter.total().startsWith("allocated "))
         val line = AllocationMeter.interval()

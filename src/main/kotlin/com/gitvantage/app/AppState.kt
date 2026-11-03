@@ -1431,7 +1431,8 @@ class AppState(private val scope: CoroutineScope) {
         // Started whether or not collection is on, since it can be switched on at any point; an
         // idle timer once a minute is cheaper than starting and stopping one correctly.
         watchScope.launch {
-            AllocationMeter.start()
+            // Only when collecting: switching on later takes its own baseline (see setPerfCollection).
+            if (Perf.enabled) AllocationMeter.start()
             while (currentCoroutineContext().isActive) {
                 delay(PERF_REPORT_MS.milliseconds)
                 if (Perf.enabled) dumpPerf("every ${PERF_REPORT_MS / 1000}s")
@@ -1461,7 +1462,12 @@ class AppState(private val scope: CoroutineScope) {
      */
     fun setPerfCollection(on: Boolean) {
         if (on == perfCollecting) return
+        // `GITVANTAGE_PERF=1` can't be undone from here, which is why Settings dims Off. Ignore the
+        // click outright: going on would log "collection switched off" for collection that carries
+        // on, and save "off" as a choice the user can't see took effect.
+        if (!on && Perf.forcedOn) return
         if (!on) watchScope.launch { dumpPerf("collection switched off") }
+        if (on) watchScope.launch { AllocationMeter.start() }
         Perf.enable(on)
         perfCollecting = Perf.enabled
         Registry.saveSettings(Registry.settings().copy(collectPerf = on))

@@ -42,6 +42,9 @@ object AllocationMeter {
     private val recent = LongArray(Group.entries.size)
     private var recentSince = System.nanoTime()
 
+    /** Whether [start] has taken the baseline [recent] is measured from. */
+    private var baselined = false
+
     /**
      * Which group a thread belongs to, by its name — and by identity for the UI thread, whose name
      * is the platform's ("main" or an AppKit thread) and says nothing.
@@ -82,6 +85,10 @@ object AllocationMeter {
     @Synchronized
     fun interval(): String {
         val b = bean ?: return "alloc unavailable (this runtime has no per-thread allocation counters)"
+        if (!baselined) {
+            start()
+            return "alloc measuring from now"
+        }
         runCatching { sample(b) }.onFailure { return "alloc unavailable (${it.javaClass.simpleName})" }
         val now = System.nanoTime()
         val seconds = ((now - recentSince) / 1_000_000_000.0).coerceAtLeast(0.001)
@@ -93,8 +100,11 @@ object AllocationMeter {
     }
 
     /**
-     * Take the baseline the first [interval] is measured from. Without it the first reading files
-     * everything each thread allocated since it started under an interval of no length at all.
+     * Take the baseline the next [interval] is measured from — whenever collection switches on, so
+     * the first reading covers the time it has been on rather than the whole session.
+     *
+     * Without one the first reading would file everything each thread allocated since it started
+     * under an interval of no length at all; [interval] takes it itself if nobody did.
      */
     @Synchronized
     fun start() {
@@ -102,6 +112,7 @@ object AllocationMeter {
         runCatching { sample(b) }
         recent.fill(0)
         recentSince = System.nanoTime()
+        baselined = true
     }
 
     /** Everything attributed since the process started, for the clipboard report. Doesn't move [interval]'s baseline. */
