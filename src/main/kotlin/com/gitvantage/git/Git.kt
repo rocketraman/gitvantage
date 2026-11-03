@@ -151,10 +151,18 @@ object Git {
     private fun spawn(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean = false): Result =
         // Keyed on the subcommand, not the full argument list: "status" is the useful grouping, and
         // the arguments would make a cardinality explosion out of a handful of real commands.
+        //
+        // `.chars` is how much each subcommand hands back, because a count and a time can't say
+        // whether git output is what the garbage collector is busy with. A field report showed ~2.5
+        // young collections a second against a ~410MB young generation — about 1GB/s allocated —
+        // which a fixture of 44 small repos at the same scan rate came nowhere near (~1-2MB/s, on
+        // the JVM and in the native image alike). What real repos return, a squash check's full
+        // branch diff above all, is the difference that leaves, and this measures it.
         Perf.concurrent("proc.git") {
-            Perf.timed("git." + subcommandOf(args)) {
+            val name = "git." + subcommandOf(args)
+            Perf.timed(name) {
                 spawnNow(dir, args, timeoutSeconds, captureErr, readOnly)
-            }
+            }.also { if (Perf.enabled) Perf.count("$name.chars", (it.out.length + it.err.length).toLong()) }
         }
 
     /**
