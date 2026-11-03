@@ -145,7 +145,8 @@ object WorktreeOps {
     private fun enrich(trees: List<Worktree>, repoPath: String, includeCurrent: Boolean): List<Worktree> {
         fun wanted(wt: Worktree) = !wt.bare && (includeCurrent || !wt.isCurrent)
         if (trees.none { wanted(it) }) return trees
-        val mainline = mainlineRef(File(repoPath))
+        val resolved = resolveMainline(File(repoPath))
+        val mainline = resolved?.first
         val held = trees.mapNotNull { it.branch }.toSet()
         return trees.map { wt ->
             if (!wanted(wt)) return@map wt
@@ -156,32 +157,70 @@ object WorktreeOps {
             // is trivially its own ancestor, and calling the main checkout's branch merged would
             // offer to delete it.
             val own = (wt.branch ?: tipBranch)?.takeIf { mainline != null && it != mainline.substringAfter('/') }
-            val contained = own != null && mainline != null &&
-                Git.exitCode(dir, "merge-base", "--is-ancestor", own, mainline) == 0
-            // Commits here mainline lacks by history — unless their changes are in it anyway, squash-
-            // or rebase-merged, which then holds nothing to lose, detached or not.
-            val ahead = mainline?.let { count(dir, "$it..HEAD") } ?: 0
-            val squashed = ahead > 0 && mainline != null && BranchOps.landedByContent(dir, "HEAD", mainline)
-            // The tree's own branch is the one at HEAD (checked out, or the tip it detached from),
-            // so whether that landed by content is the same question about HEAD.
-            val merged = own != null && mainline != null &&
-                if (contained) BranchOps.hasOwnWork(dir, own, mainline) else squashed
+            val landing = landing(dir, wt.head, own, resolved)
             val log = Git.read(dir, "log", "-1", "--format=%cr%x1f%an%x1f%ct").trim().split(LOG_SEP)
             wt.copy(
                 dirtyCount = Git.read(dir, "status", "--porcelain").lineSequence().count { it.isNotBlank() },
-                unmerged = if (squashed) 0 else ahead,
-                squashed = squashed,
+                unmerged = if (landing.squashed) 0 else landing.ahead,
+                squashed = landing.squashed,
                 mainline = mainline,
                 lastRelative = log.getOrNull(0)?.trim().orEmpty(),
                 lastAuthor = log.getOrNull(1)?.trim().orEmpty(),
                 lastEpoch = log.getOrNull(2)?.trim()?.toLongOrNull(),
-                branchMerged = merged,
-                branchEmpty = contained && !merged,
+                branchMerged = landing.merged,
+                branchEmpty = landing.contained && !landing.merged,
                 tipBranch = tipBranch,
-                deletableUpstream = if (merged) BranchOps.deletableUpstream(dir, own) else null,
+                deletableUpstream = own?.takeIf { landing.merged }?.let { BranchOps.deletableUpstream(dir, it) },
             )
         }
     }
+
+    /** Where a tree's commits stand against mainline — the part of [enrich] that only commits decide. */
+    private data class Landing(val contained: Boolean, val ahead: Int, val squashed: Boolean, val merged: Boolean)
+
+    /**
+     * [Landing] for the tree at [dir], whose HEAD is [head] and whose own branch is [own], measured
+     * against [mainline] (its ref and the commit it resolved to).
+     *
+     * Remembered by those commits, because recomputing it was most of what the app spent its time on.
+     * Every scan of a repo with linked worktrees enters each sibling tree, and each linked worktree
+     * is usually tracked as a repo of its own — so a scan of any one of them re-asked these questions
+     * about all of the others. Uncached that was six to ten `git` processes per sibling: a field
+     * report with 44 repos and 20 worktrees averaged about 115 per scan and 65 a second, and on
+     * macOS every one is a `fork()` that stalls the UI thread on the allocator's locks.
+     *
+     * Nothing here can change while both commits stand still. Ancestry, the commit count and
+     * landed-by-content are functions of the two ids; [BranchOps.hasOwnWork] also reads the branch's
+     * reflog, which only gains an entry when the branch moves — and [own] points at [head], so a
+     * move is a new key. What does change without a commit stays out of the cache and is read every
+     * time: the dirty count, the relative date of the last commit, and the remote state behind
+     * [BranchOps.deletableUpstream].
+     */
+    private fun landing(dir: File, head: String, own: String?, mainline: Pair<String, String>?): Landing {
+        val key = mainline?.takeIf { head.isNotEmpty() }
+            ?.let { (ref, sha) -> "${dir.path}\u0000$head\u0000${own.orEmpty()}\u0000$ref\u0000$sha" }
+        key?.let { k -> synchronized(landingCache) { landingCache[k] } }?.let { return it }
+        val ref = mainline?.first
+        val contained = own != null && ref != null &&
+            Git.exitCode(dir, "merge-base", "--is-ancestor", own, ref) == 0
+        // Commits here mainline lacks by history — unless their changes are in it anyway, squash-
+        // or rebase-merged, which then holds nothing to lose, detached or not.
+        val ahead = ref?.let { count(dir, "$it..HEAD") } ?: 0
+        val squashed = ahead > 0 && ref != null && BranchOps.landedByContent(dir, "HEAD", ref)
+        // The tree's own branch is the one at HEAD (checked out, or the tip it detached from),
+        // so whether that landed by content is the same question about HEAD.
+        val merged = own != null && ref != null &&
+            if (contained) BranchOps.hasOwnWork(dir, own, ref) else squashed
+        val landing = Landing(contained, ahead, squashed, merged)
+        if (key != null) synchronized(landingCache) { landingCache[key] = landing }
+        return landing
+    }
+
+    /** [landing]'s answers by (tree, HEAD, own branch, mainline and its tip); least recently used goes first. */
+    private val landingCache = object : LinkedHashMap<String, Landing>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Landing>) = size > LANDING_CACHE_SIZE
+    }
+    private const val LANDING_CACHE_SIZE = 1024
 
     /**
      * The branch a detached tree is still on the tip of — see [Worktree.tipBranch].
@@ -206,9 +245,13 @@ object WorktreeOps {
             branch.replace('/', '-') == folder || branch == "worktree-$folder"
 
     /** The ref to measure "landed" against: a local main/master if there is one, else the remote's. */
-    private fun mainlineRef(dir: File): String? =
-        listOf("main", "master", "origin/main", "origin/master")
-            .firstOrNull { Git.read(dir, "rev-parse", "--verify", "-q", it).isNotBlank() }
+    private fun mainlineRef(dir: File): String? = resolveMainline(dir)?.first
+
+    /** [mainlineRef] with the commit it points at, which `rev-parse` hands back anyway. */
+    private fun resolveMainline(dir: File): Pair<String, String>? =
+        listOf("main", "master", "origin/main", "origin/master").firstNotNullOfOrNull { ref ->
+            Git.read(dir, "rev-parse", "--verify", "-q", ref).trim().takeIf { it.isNotEmpty() }?.let { ref to it }
+        }
 
     private fun count(dir: File, range: String): Int =
         Git.read(dir, "rev-list", "--count", range).trim().toIntOrNull() ?: 0

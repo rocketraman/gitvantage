@@ -247,6 +247,47 @@ val WorktreeOperations by testSuite {
             assert(!side.branchMerged && !side.branchEmpty)
         }
 
+        // ---- the landing cache: remembered by commit, so it must move when a commit does ----
+
+        test("a remembered answer follows the tree's own new commits") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "one\n", "first on side")
+            assert(WorktreeOps.listWithWork(work.path).single { !it.isCurrent }.unmerged == 1)
+
+            commit(tree, "g.txt", "two\n", "second on side")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+            assert(side.unmerged == 2) { "got ${side.unmerged}" }
+        }
+
+        test("a remembered answer follows mainline landing the branch") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            commit(tree, "f.txt", "landed\n", "work on side")
+            assert(!WorktreeOps.listWithWork(work.path).single { !it.isCurrent }.branchMerged)
+
+            git(work, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+            assert(side.branchMerged)
+            assert(side.unmerged == 0) { "got ${side.unmerged}" }
+        }
+
+        test("uncommitted work is read fresh while the commits stand still") {
+            val work = repo()
+            val tree = File(root, "wt")
+            git(work, "worktree", "add", "-q", "-b", "side", tree.path)
+            assert(WorktreeOps.listWithWork(work.path).single { !it.isCurrent }.dirtyCount == 0)
+
+            File(tree, "a.txt").appendText("uncommitted\n")
+
+            val side = WorktreeOps.listWithWork(work.path).single { !it.isCurrent }
+            assert(side.dirtyCount == 1) { "got ${side.dirtyCount}" }
+        }
+
         test("changes lists modified and untracked files, with a diffstat for the tracked ones") {
             val work = repo()
             val tree = File(root, "wt")
