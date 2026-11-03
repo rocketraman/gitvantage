@@ -78,9 +78,16 @@ object WatchStats {
      * The busiest [top] repos by events, one line each, labelled by [label] — which is how the caller
      * keeps paths out of the report. Each lists its rescans and where its events came from, the
      * biggest share first.
+     *
+     * Only repos that had events of their own. A watcher overflow rescans every repo, and those
+     * rescans would otherwise fill the list with repos nothing happened in, pushing out the one that
+     * is churning — the overflow is already its own counter, `watch.overflow`.
      */
     fun report(top: Int = 5, label: (String) -> String): List<String> {
-        val busiest = byRepo.entries.sortedByDescending { it.value.events.get() }.take(top)
+        val busiest = byRepo.entries
+            .filter { it.value.events.get() > 0 }
+            .sortedByDescending { it.value.events.get() }
+            .take(top)
         if (busiest.isEmpty()) return emptyList()
         return listOf("  busiest watched repos (events · rescans · where the events were)") +
             busiest.map { (repo, s) ->
@@ -88,9 +95,15 @@ object WatchStats {
                 val folders = s.folders.entries
                     .sortedByDescending { it.value.get() }
                     .take(5)
-                    .joinToString(" · ") { (f, n) -> "$f ${n.get() * 100 / events.coerceAtLeast(1)}%" }
-                "    %-26s events=%-7d rescans=%-5d %s".format(label(repo), events, s.rescans.get(), folders)
+                    .joinToString(" · ") { (f, n) -> "$f ${share(n.get(), events)}" }
+                "    %-26s events=%-7d rescans=%-5d %s".format(label(repo), events, s.rescans.get(), folders).trimEnd()
             }
+    }
+
+    /** [n] of [total] as a whole percentage, "<1%" for a share too small to round to one. */
+    internal fun share(n: Long, total: Long): String {
+        val pct = n * 100 / total.coerceAtLeast(1)
+        return if (pct == 0L && n > 0) "<1%" else "$pct%"
     }
 
     fun reset() = byRepo.clear()

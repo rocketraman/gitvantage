@@ -75,7 +75,13 @@ object StallWatchdog {
      * these subtract to "during the stall". Each figure is a suspect: `git` starts (a `fork()` apiece, which on macOS holds
      * locks the UI thread needs), scans, and collections, which pause every thread.
      */
-    private data class Moment(val gitStarted: Long, val gitRunning: Int, val scans: Int, val gcCount: Long, val gcMillis: Long) {
+    private data class Moment(
+        val gitStarted: Long,
+        val gitRunning: Int,
+        val scans: Int,
+        val gcCount: Long,
+        val gcMillis: Long,
+    ) {
         companion object {
             fun now(): Moment {
                 val gc = runCatching { ManagementFactory.getGarbageCollectorMXBeans() }.getOrDefault(emptyList())

@@ -688,7 +688,7 @@ class AppState(private val scope: CoroutineScope) {
     private fun diagLabel(id: String): String {
         val n = order.indexOf(id) + 1
         val trees = repos.firstOrNull { it.id == id }?.worktrees?.size ?: 0
-        return if (n > 0) "repo #$n ($trees worktrees)" else "(untracked repo)"
+        return if (n > 0) "repo #$n ($trees ${if (trees == 1) "worktree" else "worktrees"})" else "(untracked repo)"
     }
 
     /**

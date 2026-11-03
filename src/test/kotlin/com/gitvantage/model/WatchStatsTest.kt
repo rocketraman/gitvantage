@@ -50,6 +50,27 @@ val WatchStatistics by testSuite {
         }
     }
 
+    test("repos rescanned without events of their own stay out of the list") {
+        WatchStats.reset()
+        Perf.enable(true)
+        try {
+            // What a watcher overflow leaves: every repo rescanned, one with real events.
+            (1..6).forEach { WatchStats.rescan("/r$it") }
+            WatchStats.event("/r6", "build/")
+            val lines = WatchStats.report { it.removePrefix("/") }
+            assert(lines.size == 2 && lines[1].trim().startsWith("r6")) { "got $lines" }
+        } finally {
+            Perf.enable(false)
+            WatchStats.reset()
+        }
+    }
+
+    test("a share too small to round to a percent reads as under one") {
+        assert(WatchStats.share(1, 994) == "<1%")
+        assert(WatchStats.share(0, 994) == "0%")
+        assert(WatchStats.share(990, 994) == "99%")
+    }
+
     test("nothing is recorded while collection is off") {
         WatchStats.reset()
         Perf.enable(false)

@@ -60,7 +60,8 @@ val DiagnosticsFigures by testSuite {
         frame("java.lang.ProcessImpl", "forkAndExec"),
         frame("com.gitvantage.git.Git", "spawnNow"),
     )
-    val parked = listOf(frame("jdk.internal.misc.Unsafe", "park"), frame("java.util.concurrent.locks.LockSupport", "park"))
+    val parked =
+        listOf(frame("jdk.internal.misc.Unsafe", "park"), frame("java.util.concurrent.locks.LockSupport", "park"))
 
     test("identical stacks are folded into one entry with a count, the most common first") {
         val threads = (1..5).map { ThreadSummary.Snap("DefaultDispatcher-worker-$it", Thread.State.RUNNABLE, forking) } +
@@ -74,7 +75,8 @@ val DiagnosticsFigures by testSuite {
     }
 
     test("idle pool threads are counted, not printed, but app threads waiting on git are kept") {
-        val waitingOnGit = listOf(frame("java.lang.ProcessImpl", "waitFor"), frame("com.gitvantage.git.Git", "spawnNow"))
+        val waitingOnGit =
+            listOf(frame("java.lang.ProcessImpl", "waitFor"), frame("com.gitvantage.git.Git", "spawnNow"))
         val threads = listOf(
             ThreadSummary.Snap("DefaultDispatcher-worker-1", Thread.State.TIMED_WAITING, parked),
             ThreadSummary.Snap("DefaultDispatcher-worker-2", Thread.State.WAITING, waitingOnGit),
