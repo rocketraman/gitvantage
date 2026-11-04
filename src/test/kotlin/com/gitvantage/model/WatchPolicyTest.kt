@@ -205,3 +205,74 @@ val WatchActionRouting by testSuite {
         assert(!called) { "the common path allocated an event's path list to reach a known answer" }
     }
 }
+
+/**
+ * Dropping events from directories git ignores.
+ *
+ * What matters is the edge: a build's writes inside `build/` are dropped, while the directory itself
+ * appearing, anything at the top, `.git`, and an event naming nothing all still rescan.
+ */
+val WatchIgnoredDirs by testSuite {
+
+    val id = "/src/app"
+    val root = Path.of(id)
+    val ignored = setOf("build", ".gradle")
+    fun p(rel: String) = root.resolve(rel)
+
+    test("a write inside an ignored directory is dropped") {
+        val action = WatchPolicy.actionFor(id, needsRescan = false, nested = emptyList(), root, ignored) {
+            listOf(p("build/classes/App.class"))
+        }
+        assert(action == WatchAction.Ignore) { "a build write rescanned the repo: $action" }
+    }
+
+    test("a write anywhere else still rescans") {
+        val action = WatchPolicy.actionFor(id, needsRescan = false, nested = emptyList(), root, ignored) {
+            listOf(p("src/main/App.kt"))
+        }
+        assert(action == WatchAction.Rescan(id))
+    }
+
+    test("a move out of an ignored directory into the code still rescans") {
+        val action = WatchPolicy.actionFor(id, needsRescan = false, nested = emptyList(), root, ignored) {
+            listOf(p("build/gen/App.kt"), p("src/main/App.kt"))
+        }
+        assert(action == WatchAction.Rescan(id))
+    }
+
+    test("the ignored directory itself, a top-level file and an event naming nothing are not inside") {
+        assert(!WatchPolicy.inIgnoredDirs(root, ignored, listOf(p("build"))))
+        assert(!WatchPolicy.inIgnoredDirs(root, ignored, listOf(p("build.gradle.kts"))))
+        assert(!WatchPolicy.inIgnoredDirs(root, ignored, emptyList()))
+    }
+
+    test("a lost-events signal is never dropped, whatever paths it carries") {
+        val action = WatchPolicy.actionFor(id, needsRescan = true, nested = emptyList(), root, ignored) {
+            listOf(p("build/x"))
+        }
+        assert(action == WatchAction.Rescan(id))
+    }
+
+    test("events in nested worktrees are still dropped alongside ignored ones") {
+        val nested = listOf("/src/app/.claude/worktrees/feat")
+        val action = WatchPolicy.actionFor(id, needsRescan = false, nested = nested, root, ignored) {
+            listOf(p(".claude/worktrees/feat/App.kt"))
+        }
+        assert(action == WatchAction.Ignore)
+    }
+
+    test("the answer is stale after a new top-level directory or a change to the ignore rules") {
+        val checked = setOf("build", "src")
+        assert(WatchPolicy.ignoresStale(root, checked, listOf(p("dist/app.js"))))
+        assert(WatchPolicy.ignoresStale(root, checked, listOf(p(".gitignore"))))
+        assert(WatchPolicy.ignoresStale(root, checked, listOf(p(".git/info/exclude"))))
+    }
+
+    test("and not after ordinary writes, git's own files, or a nested .gitignore") {
+        val checked = setOf("build", "src")
+        assert(!WatchPolicy.ignoresStale(root, checked, listOf(p("src/main/App.kt"))))
+        assert(!WatchPolicy.ignoresStale(root, checked, listOf(p(".git/index"))))
+        assert(!WatchPolicy.ignoresStale(root, checked, listOf(p("src/.gitignore"))))
+        assert(!WatchPolicy.ignoresStale(root, checked, listOf(p("README.md"))))
+    }
+}

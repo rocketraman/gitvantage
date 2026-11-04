@@ -53,3 +53,49 @@ val RepoWatchRoots by testSuite {
         }
     }
 }
+
+/**
+ * Which top-level directories a repo's events can be dropped for.
+ *
+ * The failure worth guarding against is dropping too much: a directory listed here stops refreshing
+ * the repo, so one the user edits tracked files in must never appear, however git's ignore rules
+ * read. Dropping too little only costs a rescan.
+ */
+val RepoIgnoredDirs by testSuite {
+    testFixture { Sandbox() } asContextForEach {
+
+        test("an ignored build directory is listed, and source directories are not") {
+            val work = repo()
+            commit(work, ".gitignore", "build/\nnode_modules\n", "ignore output")
+            listOf("build/classes", "node_modules/x", "src/main").forEach { java.io.File(work, it).mkdirs() }
+
+            val dirs = WatchRoots.ignoredDirs(work.path)
+
+            assert(dirs.ignored == setOf("build", "node_modules")) { "ignored: ${dirs.ignored}" }
+            assert(dirs.checked == setOf("build", "node_modules", "src")) { "checked: ${dirs.checked}" }
+        }
+
+        test("an ignored directory with tracked files in it is not listed — their edits still count") {
+            val work = repo()
+            commit(work, ".gitignore", ".idea/\n", "ignore the IDE")
+            java.io.File(work, ".idea").mkdirs()
+            java.io.File(work, ".idea/runConfig.xml").writeText("<shared/>")
+            git(work, "add", "-f", ".idea/runConfig.xml")
+            git(work, "commit", "-q", "-m", "share a run configuration")
+
+            assert(WatchRoots.ignoredDirs(work.path).ignored.isEmpty())
+        }
+
+        test(".git is never asked about, so its events always count") {
+            val work = repo()
+            commit(work, ".gitignore", ".git\n", "a rule that names .git")
+
+            assert(".git" !in WatchRoots.ignoredDirs(work.path).checked)
+        }
+
+        test("a folder that isn't a repo ignores nothing") {
+            val plain = java.io.File(root, "plain").apply { java.io.File(this, "build").mkdirs() }
+            assert(WatchRoots.ignoredDirs(plain.path).ignored.isEmpty())
+        }
+    }
+}

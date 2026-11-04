@@ -32,10 +32,10 @@ sealed interface WatchAction {
  * it was when the churn started: changes made since missing, and with the counts stuck at zero so
  * was the Diff button.
  *
- * `WatchRoots` has since stopped the ignored directories being watched at all, which removes most
- * of that churn at the source. The ceiling stays, for the churn it does not remove: a worktree in a
- * directory git isn't ignoring, a generated file that is tracked, or a build configured to write
- * somewhere committed.
+ * Events in a nested checkout and in top-level directories git ignores are now dropped before they
+ * reach the debounce (see [actionFor]), which removes most of that churn. The ceiling stays, for the
+ * churn they don't remove: an ignored directory deeper down, a generated file that is tracked, or a
+ * build configured to write somewhere committed.
  *
  * [MAX_WAIT_MS] is the ceiling that makes starvation impossible — the scan runs that long after the
  * *first* event of a burst however busy the tree stays. Pure and clock-injected, so both halves can
@@ -138,19 +138,65 @@ object WatchPolicy {
      * precisely the failure [concernsRepo]'s empty-paths case was written to prevent and could not,
      * because it was never reached.
      *
-     * [paths] is a lambda so an ordinary event on a repo with no nested checkouts — nearly every
-     * event — costs no allocation at all. This runs once per filesystem event.
+     * An event wholly inside directories git ignores — [ignored], the top-level names under [root]
+     * — is dropped too: see [inIgnoredDirs].
+     *
+     * [paths] is a lambda so an ordinary event on a repo with neither nested checkouts nor ignored
+     * directories costs no allocation at all. This runs once per filesystem event.
      */
     fun actionFor(
         id: String?,
         needsRescan: Boolean,
         nested: List<String>,
+        root: Path? = null,
+        ignored: Set<String> = emptySet(),
         paths: () -> List<Path>,
-    ): WatchAction = when {
-        id == null -> if (needsRescan) WatchAction.RescanAll else WatchAction.Ignore
-        needsRescan -> WatchAction.Rescan(id)
-        nested.isEmpty() -> WatchAction.Rescan(id)
-        concernsRepo(nested.map(Path::of), paths()) -> WatchAction.Rescan(id)
-        else -> WatchAction.Ignore
+    ): WatchAction {
+        if (id == null) return if (needsRescan) WatchAction.RescanAll else WatchAction.Ignore
+        if (needsRescan) return WatchAction.Rescan(id)
+        val filtersIgnored = root != null && ignored.isNotEmpty()
+        if (nested.isEmpty() && !filtersIgnored) return WatchAction.Rescan(id)
+        val ps = paths()
+        if (filtersIgnored && inIgnoredDirs(root, ignored, ps)) return WatchAction.Ignore
+        return if (concernsRepo(nested.map(Path::of), ps)) WatchAction.Rescan(id) else WatchAction.Ignore
+    }
+
+    /**
+     * Whether every one of [paths] is inside one of the top-level directories [ignored] under
+     * [root] — a write git doesn't see, so a rescan would find nothing new.
+     *
+     * A build writes thousands of files into `build/`, and while it runs the debounce's ceiling
+     * rescans the repo every [MAX_WAIT_MS]: one field report had a single repo's `build/` behind 97%
+     * of its events and half of every rescan the app made. Not watching the directory at all would
+     * be better still and is blocked upstream — see `WatchRoots`.
+     *
+     * Inside, not at: an event *for* `build` itself, its creation or removal, still counts, as does
+     * anything at the top of the repo. Empty [paths] — an event naming nothing — is never inside.
+     */
+    fun inIgnoredDirs(root: Path, ignored: Set<String>, paths: List<Path>): Boolean =
+        paths.isNotEmpty() && paths.all { p -> topLevelDirOf(root, p)?.let { it in ignored } == true }
+
+    /**
+     * Whether what is known of [root]'s ignored directories may be out of date, given that its
+     * top-level directories were [checked] when last asked: an event in a directory that wasn't
+     * there then, or to `.gitignore` or `.git/info/exclude`, which decide what is ignored.
+     *
+     * Neither means anything is wrong now — the event is not dropped, so the worst case is a rescan
+     * that wasn't needed — only that the next answer should be asked of git again.
+     */
+    fun ignoresStale(root: Path, checked: Set<String>, paths: List<Path>): Boolean = paths.any { p ->
+        if (!p.startsWith(root)) return@any false
+        val rel = root.relativize(p)
+        val spelled = rel.joinToString("/")
+        spelled == ".gitignore" || spelled == ".git/info/exclude" ||
+            topLevelDirOf(root, p)?.let { it !in checked } == true
+    }
+
+    /** The top-level directory under [root] that [path] is inside, or null for anything at the top, outside, or in `.git`. */
+    private fun topLevelDirOf(root: Path, path: Path): String? {
+        if (!path.startsWith(root)) return null
+        val rel = root.relativize(path)
+        if (rel.nameCount < 2) return null
+        return rel.getName(0).toString().takeIf { it != ".git" }
     }
 }

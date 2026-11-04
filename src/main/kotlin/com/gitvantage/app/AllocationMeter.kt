@@ -20,7 +20,9 @@ import java.lang.management.ManagementFactory
  * cause exactly where it was.
  *
  * Measured from the per-thread allocation counters, which a native image may not support; when it
- * doesn't, the line says so rather than reporting zero. A thread that ends between two samples takes
+ * doesn't, the line says so rather than reporting zero. That includes the native image's way of not
+ * supporting them, which is to say it does and then read 0 for every thread: a field report showed
+ * "allocated 0MB since start" beside 218 young collections. A thread that ends between two samples takes
  * whatever it allocated since the last one with it, so the figures are a slight undercount.
  */
 object AllocationMeter {
@@ -44,6 +46,12 @@ object AllocationMeter {
 
     /** Whether [start] has taken the baseline [recent] is measured from. */
     private var baselined = false
+
+    /** Whether any thread's counter has ever read above zero — which a working one does at once. */
+    private var counted = false
+
+    private const val UNSUPPORTED = "alloc unavailable (this runtime has no per-thread allocation counters)"
+    private const val ALL_ZERO = "alloc unavailable (this runtime's per-thread counters all read 0)"
 
     /**
      * Which group a thread belongs to, by its name — and by identity for the UI thread, whose name
@@ -69,6 +77,7 @@ object AllocationMeter {
             val name = infos[i]?.threadName
             if (now < 0 || name == null) return@forEachIndexed // ended since it was listed
             live += id
+            if (now > 0) counted = true
             val delta = now - (lastSeen.put(id, now) ?: 0L)
             if (delta <= 0) return@forEachIndexed
             val g = groupOf(name, id == ui).ordinal
@@ -84,12 +93,13 @@ object AllocationMeter {
      */
     @Synchronized
     fun interval(): String {
-        val b = bean ?: return "alloc unavailable (this runtime has no per-thread allocation counters)"
+        val b = bean ?: return UNSUPPORTED
         if (!baselined) {
             start()
             return "alloc measuring from now"
         }
         runCatching { sample(b) }.onFailure { return "alloc unavailable (${it.javaClass.simpleName})" }
+        if (!counted) return ALL_ZERO
         val now = System.nanoTime()
         val seconds = ((now - recentSince) / 1_000_000_000.0).coerceAtLeast(0.001)
         val line = "alloc %.1fMB/s over %ds".format(recent.sum() / seconds / (1024 * 1024), seconds.toLong()) +
@@ -118,8 +128,9 @@ object AllocationMeter {
     /** Everything attributed since the process started, for the clipboard report. Doesn't move [interval]'s baseline. */
     @Synchronized
     fun total(): String {
-        val b = bean ?: return "alloc unavailable (this runtime has no per-thread allocation counters)"
+        val b = bean ?: return UNSUPPORTED
         runCatching { sample(b) }.onFailure { return "alloc unavailable (${it.javaClass.simpleName})" }
+        if (!counted) return ALL_ZERO
         return "allocated ${mb(total.sum().toDouble())}MB since start" + breakdown(total)
     }
 
