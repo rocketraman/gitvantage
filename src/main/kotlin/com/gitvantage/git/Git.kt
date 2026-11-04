@@ -5,8 +5,13 @@ package com.gitvantage.git
 
 import com.gitvantage.model.Activity
 import com.gitvantage.model.Perf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The one place the app spawns `git`.
@@ -189,6 +194,12 @@ object Git {
      * malloc and Objective-C locks the UI thread needs, so the app grew laggier the longer it ran
      * (and the bigger the process got). Mutations through [run] keep the default; a commit or a
      * switch is expected to write the index, and the app is the one asking.
+     *
+     * [timeoutSeconds] is a second coroutine beside the read, which kills git *and everything it
+     * started* when time runs out and is cancelled when the read finishes first. It used to be a `waitFor(timeout)` after reading stdout to EOF — which a hung
+     * git never reaches, so no timeout ever fired: a field report had a `fetch` running for 2h 11m
+     * against its 90s. The children matter as much as git: a fetch's `ssh`, or the shell behind an
+     * alias, holds the same stdout, and the read only ends when the last of them lets go.
      */
     private fun spawnNow(dir: File, args: List<String>, timeoutSeconds: Long, captureErr: Boolean, readOnly: Boolean): Result = runCatching {
         val pb = ProcessBuilder(listOf("git") + args).directory(dir)
@@ -202,14 +213,38 @@ object Git {
                 .apply { isDaemon = true; start() }
         } else null
 
-        val out = proc.inputStream.bufferedReader().readText()
-        val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-        if (!finished) proc.destroyForcibly()
+        var timedOut = false
+        // runBlocking returns only once the timeout coroutine has finished, cancelled or not, which
+        // also makes its write to `timedOut` visible here.
+        val out = runBlocking {
+            // Not on runBlocking's own thread: that thread is about to block in the read, and a
+            // timeout waiting for it to be free would never fire.
+            val timeout = launch(Dispatchers.Default) {
+                delay(timeoutSeconds.seconds)
+                timedOut = true
+                killTree(proc)
+            }
+            try {
+                proc.inputStream.bufferedReader().readText().also { proc.waitFor() }
+            } finally {
+                timeout.cancel()
+            }
+        }
         // join() also publishes the pump thread's write to `err` to this thread.
         pump?.join(TimeUnit.SECONDS.toMillis(2))
 
-        if (finished) Result(proc.exitValue(), out, err) else Result(-1, out, "timed out")
+        if (timedOut) Result(-1, out, "timed out") else Result(proc.exitValue(), out, err)
     }.getOrElse { e ->
         Result(-1, "", e.message ?: "failed to run git")
+    }
+
+    /**
+     * Kill [proc] and its descendants. Children first, listed while git is still alive: once git
+     * dies they are reparented, stop being its descendants, and keep the pipe open with nobody
+     * left to find them.
+     */
+    private fun killTree(proc: Process) {
+        runCatching { proc.descendants().forEach { it.destroyForcibly() } }
+        proc.destroyForcibly()
     }
 }

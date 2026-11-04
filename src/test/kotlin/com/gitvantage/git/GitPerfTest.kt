@@ -32,3 +32,30 @@ val GitPerfCounters by testSuite {
         }
     }
 }
+
+/**
+ * A git that never finishes is killed when its time is up, with whatever it started.
+ *
+ * The timeout used to be checked only after stdout reached EOF, which a hung git never gets to, so
+ * a stalled `fetch` ran for hours. The alias runs `sleep` under a shell: a grandchild holding git's
+ * stdout, the way a fetch's `ssh` does, so killing git alone would still leave the read waiting.
+ */
+val GitTimeout by testSuite {
+    testFixture { Sandbox() } asContextForEach {
+
+        test("a hung git and its children are killed at the timeout") {
+            val work = repo()
+            val started = System.nanoTime()
+            val out = Git.readOrNull(work, "-c", "alias.hang=!sleep 60", "hang", timeoutSeconds = 1)
+            val tookMs = (System.nanoTime() - started) / 1_000_000
+
+            assert(out == null) { "a timed-out git read as success: '$out'" }
+            assert(tookMs < 10_000) { "the 1s timeout took ${tookMs}ms to fire" }
+        }
+
+        test("a git that finishes in time is unaffected") {
+            val work = repo()
+            assert(Git.readOrNull(work, "rev-parse", "--is-inside-work-tree", timeoutSeconds = 5)?.trim() == "true")
+        }
+    }
+}
