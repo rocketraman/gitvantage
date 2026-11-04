@@ -18,6 +18,7 @@ import com.gitvantage.git.LogOps
 import com.gitvantage.git.RepoOps
 import com.gitvantage.git.RepoScanner
 import com.gitvantage.git.SubmoduleOps
+import com.gitvantage.git.IgnoredDirs
 import com.gitvantage.git.WatchRoots
 import com.gitvantage.git.WorktreeOps
 import com.gitvantage.git.model.Branch
@@ -649,6 +650,7 @@ class AppState(private val scope: CoroutineScope) {
                 (watchRegs.keys - want).forEach { id ->
                     runCatching { watchRegs.remove(id)?.forEach { it.close() } }
                     watchRootById.remove(id)
+                    ignoredDirsById.remove(id)
                     watchBursts.remove(id)
                 }
             }
@@ -662,6 +664,34 @@ class AppState(private val scope: CoroutineScope) {
         watchRootById[id] = watchRootFor(id)
         watchRegs[id] = WatchRoots.forRepo(id).mapNotNull { root ->
             runCatching { w.watch(watchRootFor(root.path), root.recursive, id) }.getOrNull()
+        }
+        refreshIgnoredDirs(id)
+    }
+
+    /**
+     * Repo id -> its top-level directories git ignores, whose events [actionFor] drops. Absent until
+     * the first answer arrives, and nothing is dropped meanwhile.
+     */
+    private val ignoredDirsById = ConcurrentHashMap<String, IgnoredDirs>()
+
+    /** Repos with an [IgnoredDirs] query in flight, so a burst of stale events asks git once. */
+    private val ignoredDirsPending: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Ask git again which of [id]'s top-level directories it ignores — at registration, and when an
+     * event says the answer may be out of date ([WatchPolicy.ignoresStale]). Off the watcher's
+     * thread: it is two `git` runs, and the thread delivering events must not wait on a process.
+     */
+    private fun refreshIgnoredDirs(id: String) {
+        if (!ignoredDirsPending.add(id)) return
+        watchScope.launch {
+            try {
+                val dirs = WatchRoots.ignoredDirs(id)
+                // Still watched: a repo untracked while git was answering must not be put back.
+                if (watchRootById.containsKey(id)) ignoredDirsById[id] = dirs
+            } finally {
+                ignoredDirsPending.remove(id)
+            }
         }
     }
 
@@ -702,14 +732,27 @@ class AppState(private val scope: CoroutineScope) {
      * scheduled at all.
      *
      * Only worktrees a scan has already found are filtered, so one that has just appeared still gets
-     * through and triggers the scan that discovers it.
+     * through and triggers the scan that discovers it. Ignored directories work the same way: a new
+     * one gets through until the git query its first event sets off has answered.
      */
-    private fun actionFor(ev: FsWatchEvent): WatchAction = WatchPolicy.actionFor(
-        id = ev.source?.name,
-        needsRescan = ev.needsRescan,
-        nested = ev.source?.name?.let(nestedByRepo::get).orEmpty(),
-        paths = { eventPaths(ev) },
-    )
+    private fun actionFor(ev: FsWatchEvent): WatchAction {
+        val id = ev.source?.name
+        val root = id?.let(watchRootById::get)
+        val known = id?.let(ignoredDirsById::get)
+        if (id != null && root != null && known != null && !ev.needsRescan &&
+            WatchPolicy.ignoresStale(root, known.checked, eventPaths(ev))
+        ) {
+            refreshIgnoredDirs(id)
+        }
+        return WatchPolicy.actionFor(
+            id = id,
+            needsRescan = ev.needsRescan,
+            nested = id?.let(nestedByRepo::get).orEmpty(),
+            root = root,
+            ignored = known?.ignored.orEmpty(),
+            paths = { eventPaths(ev) },
+        )
+    }
 
     /** The paths an [FsWatchEvent] concerns; empty for an Overflow, which names none. */
     private fun eventPaths(ev: FsWatchEvent): List<Path> = when (ev) {
