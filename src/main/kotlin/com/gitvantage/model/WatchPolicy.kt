@@ -101,6 +101,27 @@ object WatchPolicy {
     fun dueAt(lastEventAt: Long, deadline: Long): Long = lastEventAt + delayMs(lastEventAt, deadline)
 
     /**
+     * The shortest gap between the end of one overflow sweep and the start of the next.
+     *
+     * An overflow can't be traced to a repo, so it rescans all of them, and one sweep is several
+     * hundred git launches. A field report (42 repos, 1.6.1) had 4 overflows a minute while a coding
+     * session worked in a repo with 22 nested worktrees. Each one swept every repo, and each git
+     * launch blocked the UI thread for about 13ms, so the app stalled for seconds at a time.
+     *
+     * A sweep finds every change made before it starts, however many overflows asked for it. Holding
+     * the next one off doesn't lose events; it only delays when a repo whose own event was dropped
+     * catches up. A repo that changes again in the meantime still gets its own scan right away.
+     */
+    const val FULL_RESCAN_MIN_INTERVAL_MS = 120_000L
+
+    /**
+     * When an overflow sweep normally due at [dueAt] may run, given that the previous one ended at
+     * [lastSweepEnd] (null if there hasn't been one yet).
+     */
+    fun fullRescanDueAt(dueAt: Long, lastSweepEnd: Long?): Long =
+        if (lastSweepEnd == null) dueAt else maxOf(dueAt, lastSweepEnd + FULL_RESCAN_MIN_INTERVAL_MS)
+
+    /**
      * Whether a change to [paths] is a change to the repo itself, rather than to one of the
      * checkouts [nested] inside its folder.
      *

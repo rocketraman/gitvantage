@@ -276,3 +276,36 @@ val WatchIgnoredDirs by testSuite {
         assert(!WatchPolicy.ignoresStale(root, checked, listOf(p("README.md"))))
     }
 }
+
+/**
+ * Spacing between overflow sweeps. Each sweep rescans every repo, so overflows that keep coming
+ * must not turn into sweeps that keep coming.
+ */
+val WatchFullRescanSpacing by testSuite {
+    val now = 1_800_000_000_000L
+
+    test("the first sweep runs on the ordinary debounce") {
+        val due = WatchPolicy.dueAt(now, WatchPolicy.deadlineFor(now))
+        assert(WatchPolicy.fullRescanDueAt(due, lastSweepEnd = null) == due)
+    }
+
+    test("a sweep soon after the last one waits until the interval is up") {
+        val lastEnd = now - 10_000
+        val due = WatchPolicy.dueAt(now, WatchPolicy.deadlineFor(now))
+        assert(WatchPolicy.fullRescanDueAt(due, lastEnd) == lastEnd + WatchPolicy.FULL_RESCAN_MIN_INTERVAL_MS)
+    }
+
+    test("one long after the last runs on the ordinary debounce") {
+        val lastEnd = now - WatchPolicy.FULL_RESCAN_MIN_INTERVAL_MS - 1
+        val due = WatchPolicy.dueAt(now, WatchPolicy.deadlineFor(now))
+        assert(WatchPolicy.fullRescanDueAt(due, lastEnd) == due)
+    }
+
+    test("further overflows while one is held off don't push it any later") {
+        val lastEnd = now - 10_000
+        val first = WatchPolicy.fullRescanDueAt(WatchPolicy.dueAt(now, WatchPolicy.deadlineFor(now)), lastEnd)
+        val later = now + 30_000
+        val again = WatchPolicy.fullRescanDueAt(WatchPolicy.dueAt(later, WatchPolicy.deadlineFor(now)), lastEnd)
+        assert(again == first)
+    }
+}

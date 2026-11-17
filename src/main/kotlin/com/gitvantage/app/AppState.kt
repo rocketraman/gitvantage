@@ -397,6 +397,17 @@ class AppState(private val scope: CoroutineScope) {
         private set
 
     private val scanLimiter = Semaphore(8) // cap concurrent git subprocesses
+
+    /**
+     * The cap for scans nobody is waiting on. See [rescanRepos].
+     *
+     * Every git launch is a `fork()` of this process, and while the kernel copies it the UI thread
+     * stalls too: a field report measured 11–15ms per launch after 13 days of uptime. Eight scans in
+     * parallel launch git back to back, which leaves the UI no gap to draw in. Two scans still launch
+     * git many times a second, but now there is time between launches, so the UI can draw between
+     * them and a sweep is spread out instead of one long stall.
+     */
+    private val backgroundScanLimiter = Semaphore(2)
     private var toastJob: Job? = null
 
     // Open GitHub issues/PRs, keyed by repo id. Deliberately NOT folded into [repos]: those are
@@ -507,6 +518,12 @@ class AppState(private val scope: CoroutineScope) {
 
     /** One repo's in-progress burst: the ceiling it must scan by, and when it is currently due. */
     private class WatchBurst(val deadline: Long, @Volatile var dueAt: Long)
+
+    /**
+     * When the last overflow sweep finished, so [WatchPolicy.fullRescanDueAt] can space them out.
+     * Written by [watchDrainLoop] and read on the watcher's thread.
+     */
+    @Volatile private var lastFullSweepEnd: Long? = null
 
     /**
      * Each repo's nested worktrees, as [actionFor] needs them — kept beside [repos] rather than read
@@ -780,7 +797,8 @@ class AppState(private val scope: CoroutineScope) {
     private fun noteWatchEvent(id: String) {
         val now = System.currentTimeMillis()
         val burst = watchBursts.computeIfAbsent(id) { WatchBurst(WatchPolicy.deadlineFor(now), now) }
-        burst.dueAt = WatchPolicy.dueAt(now, burst.deadline)
+        val due = WatchPolicy.dueAt(now, burst.deadline)
+        burst.dueAt = if (id == ALL_REPOS) WatchPolicy.fullRescanDueAt(due, lastFullSweepEnd) else due
         watchWake.trySend(Unit)
     }
 
@@ -814,8 +832,9 @@ class AppState(private val scope: CoroutineScope) {
                     if (ids.isNotEmpty()) {
                         Perf.count("watch.rescans", ids.size.toLong())
                         ids.forEach(WatchStats::rescan)
-                        Perf.timed("watch.rescan.batch") { rescanRepos(ids, fetch = false) }
+                        Perf.timed("watch.rescan.batch") { rescanRepos(ids, fetch = false, background = true) }
                     }
+                    if (ALL_REPOS in due) lastFullSweepEnd = System.currentTimeMillis()
                 }
             }
             when (val next = watchBursts.values.minOfOrNull { it.dueAt }) {
@@ -834,6 +853,9 @@ class AppState(private val scope: CoroutineScope) {
      * up, and answering each one with an immediate sweep of every repo is how a dropped event turns
      * into a scan storm that guarantees the next one. The ceiling still applies, so a tree churning
      * hard enough to overflow repeatedly cannot postpone the sweep it is the whole reason for.
+     * Sweeps are also spaced [WatchPolicy.FULL_RESCAN_MIN_INTERVAL_MS] apart, because a debounce
+     * only merges overflows that arrive close together. A tree that overflows every few seconds
+     * would otherwise get a sweep each time.
      *
      * Not a fetch: the watcher is reporting local filesystem churn, and a sweep that opened a
      * network connection per repo would make an overload worse in a way the user pays for twice.
@@ -2835,12 +2857,24 @@ class AppState(private val scope: CoroutineScope) {
         }
     }
 
-    /** Re-scan the given repos in place (git state may have changed after push/fetch). */
-    private suspend fun rescanRepos(ids: Collection<String>, fetch: Boolean, userInitiated: Boolean = true) {
+    /**
+     * Re-scan the given repos in place (git state may have changed after push/fetch).
+     *
+     * [background] is for scans nobody is waiting on: the file watcher's and the periodic
+     * auto-refresh. They go through [backgroundScanLimiter] instead of [scanLimiter], so a sweep of
+     * every repo can't hold the UI up and doesn't queue ahead of something the user just clicked.
+     */
+    private suspend fun rescanRepos(
+        ids: Collection<String>,
+        fetch: Boolean,
+        userInitiated: Boolean = true,
+        background: Boolean = false,
+    ) {
         val es = ids.mapNotNull { entries[it] }
+        val limiter = if (background) backgroundScanLimiter else scanLimiter
         val scanned = withContext(Dispatchers.Default) {
             es.map { e ->
-                async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull() } }
+                async { limiter.withPermit { runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull() } }
             }.awaitAll()
         }.filterNotNull()
         // Before the prevBehind baseline moves below — the advance stamp needs the previous value.
@@ -2959,7 +2993,7 @@ class AppState(private val scope: CoroutineScope) {
                 try {
                     val now = System.currentTimeMillis()
                     val due = order.filter { id -> id == selectedId || isFetchDue(id, now) }
-                    if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false)
+                    if (due.isNotEmpty()) rescanRepos(due, fetch = true, userInitiated = false, background = true)
                 } finally {
                     running = false
                 }
