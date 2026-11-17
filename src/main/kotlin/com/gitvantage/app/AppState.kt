@@ -399,15 +399,18 @@ class AppState(private val scope: CoroutineScope) {
     private val scanLimiter = Semaphore(8) // cap concurrent git subprocesses
 
     /**
-     * The cap for scans nobody is waiting on. See [rescanRepos].
+     * Where scans nobody is waiting on run, at most two at a time. See [rescanRepos].
      *
      * Every git launch is a `fork()` of this process, and while the kernel copies it the UI thread
      * stalls too: a field report measured 11–15ms per launch after 13 days of uptime. Eight scans in
      * parallel launch git back to back, which leaves the UI no gap to draw in. Two scans still launch
      * git many times a second, but now there is time between launches, so the UI can draw between
      * them and a sweep is spread out instead of one long stall.
+     *
+     * Handed to [RepoScanner.scan] rather than wrapped around it: the scan switches to its own
+     * dispatcher, which would escape the limit.
      */
-    private val backgroundScanLimiter = Semaphore(2)
+    private val backgroundScans = Dispatchers.IO.limitedParallelism(2)
     private var toastJob: Job? = null
 
     // Open GitHub issues/PRs, keyed by repo id. Deliberately NOT folded into [repos]: those are
@@ -2861,8 +2864,8 @@ class AppState(private val scope: CoroutineScope) {
      * Re-scan the given repos in place (git state may have changed after push/fetch).
      *
      * [background] is for scans nobody is waiting on: the file watcher's and the periodic
-     * auto-refresh. They go through [backgroundScanLimiter] instead of [scanLimiter], so a sweep of
-     * every repo can't hold the UI up and doesn't queue ahead of something the user just clicked.
+     * auto-refresh. They run on [backgroundScans] instead of taking [scanLimiter] permits, so a sweep
+     * of every repo can't hold the UI up and doesn't queue ahead of something the user just clicked.
      */
     private suspend fun rescanRepos(
         ids: Collection<String>,
@@ -2871,10 +2874,14 @@ class AppState(private val scope: CoroutineScope) {
         background: Boolean = false,
     ) {
         val es = ids.mapNotNull { entries[it] }
-        val limiter = if (background) backgroundScanLimiter else scanLimiter
         val scanned = withContext(Dispatchers.Default) {
             es.map { e ->
-                async { limiter.withPermit { runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull() } }
+                async {
+                    runCatching {
+                        if (background) RepoScanner.scan(e, fetch, userInitiated, backgroundScans)
+                        else scanLimiter.withPermit { RepoScanner.scan(e, fetch, userInitiated) }
+                    }.getOrNull()
+                }
             }.awaitAll()
         }.filterNotNull()
         // Before the prevBehind baseline moves below — the advance stamp needs the previous value.

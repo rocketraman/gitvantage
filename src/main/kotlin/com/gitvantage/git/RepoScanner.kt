@@ -14,6 +14,7 @@ import com.gitvantage.model.RegistryEntry
 import com.gitvantage.model.Repo
 import com.gitvantage.model.Stash
 import java.io.File
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -39,9 +40,20 @@ object RepoScanner {
      * Refresh button, and is pure noise when it came from the 5-minute timer — which fires per
      * repo, forever, and would otherwise evict every real entry from a 500-deep console within
      * a couple of idle hours.
+     *
+     * [dispatcher] is where the scan's blocking git calls run. A caller that wants to limit how
+     * many scans run at once passes a `limitedParallelism` view. Wrapping the call in its own
+     * `withContext` won't do it, because this function would switch away to [Dispatchers.IO] and
+     * the limit would no longer apply. The whole scan blocks without suspending, so it holds its
+     * slot from start to finish.
      */
-    suspend fun scan(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean = true): Repo =
-        withContext(Dispatchers.IO) { Activity.scan { Perf.timed("scan.repo") { scanNow(entry, fetch, userInitiated) } } }
+    suspend fun scan(
+        entry: RegistryEntry,
+        fetch: Boolean,
+        userInitiated: Boolean = true,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): Repo =
+        withContext(dispatcher) { Activity.scan { Perf.timed("scan.repo") { scanNow(entry, fetch, userInitiated) } } }
 
     private fun scanNow(entry: RegistryEntry, fetch: Boolean, userInitiated: Boolean): Repo {
         val dir = File(entry.path)
