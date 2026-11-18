@@ -6,6 +6,7 @@ package com.gitvantage.git
 import com.gitvantage.git.model.OpResult
 import com.gitvantage.model.RegistryEntry
 import java.io.File
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -23,8 +24,11 @@ object RepoOps {
     /** `git push` in the repo. If the current branch has no tracking upstream, publishes it
      *  with `push -u <remote> HEAD` (sets the upstream too), to `remote.pushDefault` or else
      *  `origin` — see [BranchOps.publishRemote]. Fails (not throws) on rejection, auth, offline,
-     *  or detached HEAD. */
-    suspend fun push(entry: RegistryEntry): OpResult = withContext(Dispatchers.IO) {
+     *  or detached HEAD.
+     *
+     *  [dispatcher] is where the push's blocking git calls run, so a caller pushing many repos can
+     *  limit how many go at once, the same way as [RepoScanner.scan]. */
+    suspend fun push(entry: RegistryEntry, dispatcher: CoroutineDispatcher = Dispatchers.IO): OpResult = withContext(dispatcher) {
         val dir = File(entry.path)
         if (!Git.isRepo(dir)) return@withContext OpResult(entry.path, false, "Not a git repo")
         val name = dir.name
