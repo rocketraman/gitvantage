@@ -67,9 +67,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
@@ -396,7 +394,16 @@ class AppState(private val scope: CoroutineScope) {
     var logCommits by mutableStateOf<List<Commit>>(emptyList())
         private set
 
-    private val scanLimiter = Semaphore(8) // cap concurrent git subprocesses
+    /**
+     * Where scans and batch pushes that someone is waiting on run, at most eight at a time: the
+     * startup scan, Refresh, adding repos, Push all. Scans nobody is waiting on use
+     * [backgroundScans] instead.
+     *
+     * Passed to [RepoScanner.scan] and [RepoOps.push] rather than wrapped around them, for the same
+     * reason as [backgroundScans]. Single-repo actions (commit, stash, fast-forward) don't use it:
+     * each is one repo's git calls in a row, and waiting behind a batch for a slot only delayed them.
+     */
+    private val foregroundGit = Dispatchers.IO.limitedParallelism(8)
 
     /**
      * Where scans nobody is waiting on run, at most two at a time. See [rescanRepos].
@@ -814,7 +821,7 @@ class AppState(private val scope: CoroutineScope) {
      * awake to be taken into account, because the map already holds the answer.
      *
      * Due repos are scanned as one batch, so a checkout that touches ten repos is one pass through
-     * [scanLimiter] rather than ten queued behind it. The hop to [scope] is deliberate and is the
+     * [backgroundScans] rather than ten queued behind it. The hop to [scope] is deliberate and is the
      * only one: [rescanRepos] writes the repo list, the registry and the open detail panel, all of
      * which the UI renders.
      */
@@ -1638,9 +1645,7 @@ class AppState(private val scope: CoroutineScope) {
                 val results = withContext(Dispatchers.Default) {
                     snapshot.map { e ->
                         async {
-                            scanLimiter.withPermit {
-                                runCatching { RepoScanner.scan(e, fetch, userInitiated) }.getOrNull()
-                            }
+                            runCatching { RepoScanner.scan(e, fetch, userInitiated, foregroundGit) }.getOrNull()
                         }
                     }.awaitAll()
                 }.filterNotNull().associateBy { it.id }
@@ -1772,7 +1777,7 @@ class AppState(private val scope: CoroutineScope) {
         persist()
         syncWatches()
         val scanned = withContext(Dispatchers.Default) {
-            added.map { e -> async { scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() } } }.awaitAll()
+            added.map { e -> async { runCatching { RepoScanner.scan(e, false, dispatcher = foregroundGit) }.getOrNull() } }.awaitAll()
         }.filterNotNull()
         repos.addAll(scanned)
         rememberNested(scanned)
@@ -1923,7 +1928,7 @@ class AppState(private val scope: CoroutineScope) {
         scope.launch {
             toast("Pushing ${es.size} ${plural(es.size)}…")
             val results = withContext(Dispatchers.Default) {
-                es.map { e -> async { scanLimiter.withPermit { RepoOps.push(e) } } }.awaitAll()
+                es.map { e -> async { RepoOps.push(e, foregroundGit) } }.awaitAll()
             }
             rescanRepos(results.map { it.id }, fetch = false)
             val ok = results.count { it.ok }
@@ -2490,9 +2495,7 @@ class AppState(private val scope: CoroutineScope) {
         if (title.isBlank()) return
         scope.launch {
             toast("Committing ${File(path).name}…")
-            val result = withContext(Dispatchers.Default) {
-                scanLimiter.withPermit { RepoOps.commit(RegistryEntry(path), title, body, stageAll) }
-            }
+            val result = RepoOps.commit(RegistryEntry(path), title, body, stageAll)
             rescanRepos(listOf(repoId), fetch = false)
             wtExpanded?.let { if (it == path) loadWorktreeBody(path) }
             toast(result.message)
@@ -2588,9 +2591,7 @@ class AppState(private val scope: CoroutineScope) {
             val e = RegistryEntry(path, tags = tags, addedAt = java.time.Instant.now())
             entries[path] = e; order.add(path)
             persist(); syncWatches()
-            val scanned = withContext(Dispatchers.Default) {
-                scanLimiter.withPermit { runCatching { RepoScanner.scan(e, false) }.getOrNull() }
-            }
+            val scanned = runCatching { RepoScanner.scan(e, false, dispatcher = foregroundGit) }.getOrNull()
             scanned?.let { repos.add(it) }
             // The scan's name, not the folder's: a worktree is listed under its main checkout's
             // name, and the confirmation should say what the list is about to show.
@@ -2796,7 +2797,7 @@ class AppState(private val scope: CoroutineScope) {
     fun stashApply(id: String, ref: String) {
         val e = entries[id] ?: return
         scope.launch {
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.stashApply(e, ref) } }
+            val r = RepoOps.stashApply(e, ref)
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }
@@ -2805,7 +2806,7 @@ class AppState(private val scope: CoroutineScope) {
     fun stashDrop(id: String, ref: String) {
         val e = entries[id] ?: return
         scope.launch {
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.stashDrop(e, ref) } }
+            val r = RepoOps.stashDrop(e, ref)
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }
@@ -2817,8 +2818,7 @@ class AppState(private val scope: CoroutineScope) {
         if (title.isBlank()) return
         scope.launch {
             toast("Committing ${File(id).name}…")
-            val result =
-                withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.commit(e, title, body, stageAll) } }
+            val result = RepoOps.commit(e, title, body, stageAll)
             rescanRepos(listOf(id), fetch = false)
             toast(result.message)
         }
@@ -2829,7 +2829,7 @@ class AppState(private val scope: CoroutineScope) {
         val e = entries[id] ?: return
         scope.launch {
             toast("Fast-forwarding ${File(id).name}…")
-            val r = withContext(Dispatchers.Default) { scanLimiter.withPermit { RepoOps.fastForward(e) } }
+            val r = RepoOps.fastForward(e)
             rescanRepos(listOf(id), fetch = false)
             toast(r.message)
         }
@@ -2864,8 +2864,8 @@ class AppState(private val scope: CoroutineScope) {
      * Re-scan the given repos in place (git state may have changed after push/fetch).
      *
      * [background] is for scans nobody is waiting on: the file watcher's and the periodic
-     * auto-refresh. They run on [backgroundScans] instead of taking [scanLimiter] permits, so a sweep
-     * of every repo can't hold the UI up and doesn't queue ahead of something the user just clicked.
+     * auto-refresh. They run on [backgroundScans] instead of [foregroundGit], so a sweep of every
+     * repo can't hold the UI up and doesn't queue ahead of something the user just clicked.
      */
     private suspend fun rescanRepos(
         ids: Collection<String>,
@@ -2878,8 +2878,7 @@ class AppState(private val scope: CoroutineScope) {
             es.map { e ->
                 async {
                     runCatching {
-                        if (background) RepoScanner.scan(e, fetch, userInitiated, backgroundScans)
-                        else scanLimiter.withPermit { RepoScanner.scan(e, fetch, userInitiated) }
+                        RepoScanner.scan(e, fetch, userInitiated, if (background) backgroundScans else foregroundGit)
                     }.getOrNull()
                 }
             }.awaitAll()
